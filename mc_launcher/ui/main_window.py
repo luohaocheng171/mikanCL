@@ -1,0 +1,431 @@
+"""主窗口：自绘标题栏、侧边栏导航、页面容器、拖拽导入、托盘与 Java 扫描。"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import QEvent, QPoint, QSize, QThread, Qt, Signal
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import (
+    QApplication,
+    QButtonGroup,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMenu,
+    QPushButton,
+    QStackedWidget,
+    QSystemTrayIcon,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .. import APP_NAME, APP_NAME_CN, APP_VERSION
+from ..context import AppContext, wait_thread
+from ..java import detect_java_installed
+from .dropinstall import handle_dropped_paths
+from .page_accounts import AccountsPage
+from .page_browser import BrowserPage
+from .page_content import ContentPage
+from .page_control import ControlPage
+from .page_download import DownloadPage
+from .page_download_center import DownloadCenterPage
+from .page_home import HomePage
+from .page_settings import SettingsPage
+from .theme import make_avatar, make_block_icon, make_nav_icon
+
+
+class TitleBar(QFrame):
+    """无边框窗口的自绘标题栏：拖动、双击最大化、最小化/最大化/关闭。"""
+
+    def __init__(self, window: "MainWindow"):
+        super().__init__(window)
+        self.setObjectName("TitleBar")
+        self.setFixedHeight(44)
+        self._drag_offset: QPoint | None = None
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 0, 8, 0)
+        layout.setSpacing(10)
+
+        icon = QLabel()
+        icon.setPixmap(make_block_icon(20).pixmap(20, 20))
+        layout.addWidget(icon)
+        title = QLabel(f"{APP_NAME} · Minecraft 启动器")
+        title.setObjectName("TitleBarText")
+        layout.addWidget(title)
+        layout.addStretch(1)
+
+        self.min_button = self._make_button("−", "最小化")
+        self.min_button.clicked.connect(window.showMinimized)
+        layout.addWidget(self.min_button)
+        self.max_button = self._make_button("□", "最大化 / 还原")
+        self.max_button.clicked.connect(window.toggle_maximized)
+        layout.addWidget(self.max_button)
+        close_button = self._make_button("✕", "关闭", danger=True)
+        close_button.clicked.connect(window.close)
+        layout.addWidget(close_button)
+
+    def _make_button(self, text: str, tip: str, danger: bool = False) -> QPushButton:
+        button = QPushButton(text)
+        button.setObjectName("WinClose" if danger else "WinButton")
+        button.setToolTip(tip)
+        button.setFixedSize(40, 30)
+        button.setCursor(Qt.PointingHandCursor)
+        return button
+
+    # ---------- 拖动窗口 ----------
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self._drag_offset = (
+                event.globalPosition().toPoint() - self.window().frameGeometry().topLeft()
+            )
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._drag_offset is None or not (event.buttons() & Qt.LeftButton):
+            return
+        window = self.window()
+        if window.isMaximized():
+            window.showNormal()
+            self._drag_offset = QPoint(int(window.width() / 2), int(self.height() / 2))
+        window.move(event.globalPosition().toPoint() - self._drag_offset)
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        self._drag_offset = None
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.window().toggle_maximized()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+
+class JavaScanWorker(QThread):
+    done = Signal(list)
+
+    def run(self) -> None:
+        self.done.emit(detect_java_installed())
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, ctx: AppContext):
+        super().__init__()
+        self.ctx = ctx
+        self._java_worker: JavaScanWorker | None = None
+        self.setWindowTitle(f"{APP_NAME} · Minecraft 启动器")
+        self.setWindowIcon(make_block_icon(64))
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        self.setAcceptDrops(True)
+        self.resize(1320, 840)
+        self.setMinimumSize(1120, 720)
+
+        self._build()
+        self._connect_bus()
+        self._start_java_scan()
+        self._setup_tray()
+
+    # ------------------------------------------------------------------
+    def toggle_maximized(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+        self._sync_window_buttons()
+
+    def _sync_window_buttons(self) -> None:
+        if not hasattr(self, "title_bar"):
+            return
+        self.title_bar.max_button.setText("❐" if self.isMaximized() else "□")
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._sync_window_buttons()
+
+    # ---------- 拖拽导入 ----------
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        paths: list[Path] = []
+        for url in event.mimeData().urls():
+            if url.isLocalFile():
+                local = url.toLocalFile()
+                if local:
+                    paths.append(Path(local))
+        if not paths:
+            return
+        event.acceptProposedAction()
+        handle_dropped_paths(self, self.ctx, paths)
+
+    # ------------------------------------------------------------------
+    def _build(self) -> None:
+        root = QWidget()
+        root.setObjectName("Root")
+        self.setCentralWidget(root)
+        outer = QVBoxLayout(root)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self.title_bar = TitleBar(self)
+        outer.addWidget(self.title_bar)
+
+        body = QWidget()
+        outer.addWidget(body, 1)
+        layout = QHBoxLayout(body)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        sidebar = QFrame()
+        sidebar.setObjectName("Sidebar")
+        sidebar.setFixedWidth(210)
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(16, 22, 16, 16)
+        side.setSpacing(10)
+
+        logo_row = QHBoxLayout()
+        logo_row.setSpacing(10)
+        logo = QLabel()
+        logo.setPixmap(make_block_icon(44).pixmap(44, 44))
+        logo_row.addWidget(logo)
+        logo_text = QVBoxLayout()
+        logo_text.setSpacing(0)
+        title = QLabel(APP_NAME)
+        title.setObjectName("LogoTitle")
+        sub = QLabel("MINECRAFT LAUNCHER")
+        sub.setObjectName("LogoSub")
+        logo_text.addWidget(title)
+        logo_text.addWidget(sub)
+        logo_row.addLayout(logo_text)
+        logo_row.addStretch(1)
+        side.addLayout(logo_row)
+        side.addSpacing(18)
+
+        self.nav_group = QButtonGroup(self)
+        self.nav_group.setExclusive(True)
+        self.nav_buttons: list[QPushButton] = []
+        nav_items = [
+            ("home", "启动游戏"),
+            ("download", "下载安装"),
+            ("downloads", "下载中心"),
+            ("content", "内容中心"),
+            ("account", "账号管理"),
+            ("control", "版本设置"),
+            ("browser", "内置浏览器"),
+            ("settings", "设置"),
+        ]
+        for index, (key, text) in enumerate(nav_items):
+            button = QPushButton(text)
+            button.setObjectName("NavButton")
+            button.setCheckable(True)
+            button.setIcon(make_nav_icon(key, 18, "#9fb6a7"))
+            button.setIconSize(QSize(18, 18))
+            button.clicked.connect(lambda checked=False, i=index: self.switch_page(i))
+            self.nav_group.addButton(button, index)
+            side.addWidget(button)
+            self.nav_buttons.append(button)
+        self.nav_buttons[0].setChecked(True)
+        side.addSpacing(8)
+        side.addStretch(1)
+
+        divider = QFrame()
+        divider.setFixedHeight(1)
+        divider.setStyleSheet("background-color: #1b2920; border: none;")
+        side.addWidget(divider)
+
+        mini = QHBoxLayout()
+        mini.setSpacing(8)
+        self.sidebar_avatar = QLabel()
+        self.sidebar_avatar.setPixmap(make_avatar("Steve", 34))
+        mini.addWidget(self.sidebar_avatar)
+        texts = QVBoxLayout()
+        texts.setSpacing(1)
+        self.sidebar_account = QLabel("离线模式")
+        self.sidebar_account.setStyleSheet("font-size: 12px; font-weight: 600; color: #cfe3d5;")
+        texts.addWidget(self.sidebar_account)
+        self.sidebar_mode = QLabel(f"v{APP_VERSION} · 正版 / 外置登录")
+        self.sidebar_mode.setObjectName("Tiny")
+        texts.addWidget(self.sidebar_mode)
+        mini.addLayout(texts)
+        mini.addStretch(1)
+        side.addLayout(mini)
+        layout.addWidget(sidebar)
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        layout.addWidget(content, 1)
+
+        self.pages = QStackedWidget()
+        content_layout.addWidget(self.pages)
+
+        self.home_page = HomePage(self.ctx, self)
+        self.download_page = DownloadPage(self.ctx, self)
+        self.download_center_page = DownloadCenterPage(self.ctx, self)
+        self.content_page = ContentPage(self.ctx, self)
+        self.accounts_page = AccountsPage(self.ctx, self)
+        self.control_page = ControlPage(self.ctx, self)
+        self.browser_page = BrowserPage(self.ctx, self)
+        self.settings_page = SettingsPage(self.ctx, self)
+        for page in (
+            self.home_page,
+            self.download_page,
+            self.download_center_page,
+            self.content_page,
+            self.accounts_page,
+            self.control_page,
+            self.browser_page,
+            self.settings_page,
+        ):
+            self.pages.addWidget(page)
+
+        bar = self.statusBar()
+        bar.setSizeGripEnabled(True)
+        bar.showMessage(f"{APP_NAME} {APP_VERSION} 已就绪 · 正版 / 外置登录 / 内容中心")
+        self._refresh_sidebar_account()
+
+    def _connect_bus(self) -> None:
+        bus = self.ctx.bus
+        bus.navigate.connect(self._navigate_by_name)
+        bus.open_browser.connect(self._open_browser)
+        bus.toast.connect(lambda message: self.statusBar().showMessage(message, 6000))
+        bus.log.connect(self.home_page._write_console)
+        bus.hide_window.connect(self._hide_to_tray)
+        bus.javas_changed.connect(self.settings_page._rebuild_java_table)
+        bus.accounts_changed.connect(self._refresh_sidebar_account)
+        bus.config_changed.connect(self._refresh_sidebar_account)
+
+    def _navigate_by_name(self, name: str) -> None:
+        mapping = {
+            "home": 0,
+            "download": 1,
+            "downloads": 2,
+            "download_center": 2,
+            "content": 3,
+            "account": 4,
+            "accounts": 4,
+            "control": 5,
+            "loader": 1,
+            "browser": 6,
+            "settings": 7,
+        }
+        self.switch_page(mapping.get(name, 0))
+
+    def _refresh_sidebar_account(self) -> None:
+        account = self.ctx.current_account()
+        if account is None:
+            return
+        self.sidebar_avatar.setPixmap(make_avatar(account.name or "Steve", 34))
+        self.sidebar_account.setText(f"{account.name} · {account.type_label}")
+        self.sidebar_account.setToolTip(account.note or account.type_label)
+
+    def switch_page(self, index: int) -> None:
+        if not (0 <= index < self.pages.count()):
+            return
+        self.pages.setCurrentIndex(index)
+        self.nav_buttons[index].setChecked(True)
+        if index == 1:
+            self.download_page.ensure_loaded()
+        elif index == 0:
+            self.home_page.refresh_versions()
+        elif index == 2:
+            self.download_center_page.refresh()
+        elif index == 3:
+            self.content_page.refresh()
+        elif index == 4:
+            self.accounts_page.refresh()
+        elif index == 5:
+            self.control_page.refresh()
+
+    def _open_browser(self, url: str) -> None:
+        self.switch_page(6)
+        self.browser_page.navigate_to(url)
+
+    def _hide_to_tray(self) -> None:
+        if self.tray.isVisible() and QSystemTrayIcon.isSystemTrayAvailable():
+            self.hide()
+            self.tray.showMessage(
+                APP_NAME, "启动器已隐藏，点击托盘图标可恢复。", QSystemTrayIcon.Information, 2500
+            )
+        else:
+            self.showMinimized()
+
+    # ------------------------------------------------------------------
+    def _start_java_scan(self) -> None:
+        self._java_worker = JavaScanWorker(self)
+        self._java_worker.done.connect(self._on_java_scanned)
+        self._java_worker.start()
+
+    def _on_java_scanned(self, javas: list) -> None:
+        self.ctx.javas = javas
+        self.ctx.bus.javas_changed.emit()
+        self._java_worker = None
+        if not javas:
+            self.statusBar().showMessage("未检测到 Java，请到设置页手动指定 Java 路径。", 8000)
+        else:
+            self.statusBar().showMessage(f"已检测到 {len(javas)} 个 Java 运行时。", 5000)
+
+    def _setup_tray(self) -> None:
+        self.tray = QSystemTrayIcon(make_block_icon(32), self)
+        self.tray.setToolTip(f"{APP_NAME} · Minecraft 启动器")
+        menu = QMenu(self)
+        show_action = QAction("显示主界面", self)
+        show_action.triggered.connect(self._restore_window)
+        menu.addAction(show_action)
+        menu.addSeparator()
+        quit_action = QAction("退出启动器", self)
+        quit_action.triggered.connect(self._quit_app)
+        menu.addAction(quit_action)
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(self._on_tray_activated)
+        self.tray.show()
+
+    def _on_tray_activated(self, reason) -> None:
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            self._restore_window()
+
+    def _restore_window(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _quit_app(self) -> None:
+        self._force_quit = True
+        self.close()
+
+    # ------------------------------------------------------------------
+    def closeEvent(self, event) -> None:
+        if (
+            self.ctx.config.close_to_tray
+            and not getattr(self, "_force_quit", False)
+            and self.tray.isVisible()
+        ):
+            event.ignore()
+            self._hide_to_tray()
+            return
+        self.ctx.config.save()
+        self.home_page.shutdown()
+        self.download_page.shutdown()
+        self.content_page.shutdown()
+        self.accounts_page.shutdown()
+        self.settings_page.shutdown()
+        self.browser_page.shutdown()
+        wait_thread(self._java_worker, 1500)
+        self.tray.hide()
+        event.accept()
