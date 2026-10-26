@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import json
+import re
 import threading
+import time
+from pathlib import Path
 
-from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtCore import QStandardPaths, QThread, Qt, Signal
 from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -28,6 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import APP_NAME
 from ..content import ContentError, pick_best_version
 from ..context import AppContext, wait_thread
 from ..installer import GameInstaller, Progress
@@ -39,7 +45,7 @@ from ..modloader import (
     java_for_mc,
     list_loader_versions,
 )
-from ..net import Cancelled, DownloadError
+from ..net import Cancelled, DownloadError, Http
 from ..version import (
     CATEGORY_LABELS,
     VersionError,
@@ -68,6 +74,21 @@ _LOADER_DESCRIPTIONS = {
 }
 
 _ORIGINAL = ""
+
+
+def _safe_filename(text: str, fallback: str = "file") -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|\s]+', "-", str(text or "")).strip(".-")
+    return cleaned or fallback
+
+
+def _download_dir() -> Path:
+    try:
+        locations = QStandardPaths.standardLocations(QStandardPaths.DownloadLocation)
+        if locations:
+            return Path(locations[0])
+    except Exception:  # noqa: BLE001 - 取不到标准目录时退回用户目录
+        pass
+    return Path.home() / "Downloads"
 
 
 def _repolish(widget: QWidget) -> None:
@@ -100,6 +121,116 @@ class ManifestWorker(QThread):
             self.failed.emit(str(exc))
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
+
+
+class ClientJarSaveWorker(QThread):
+    """仅下载某个版本的客户端 Jar，不写入游戏目录。"""
+
+    progress = Signal(float, float, str)
+    log = Signal(str)
+    done = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, ctx: AppContext, entry: dict, dest: Path, parent=None):
+        super().__init__(parent)
+        self.ctx = ctx
+        self.entry = dict(entry)
+        self.dest = Path(dest)
+        self.cancel_event = threading.Event()
+        self.pause_event = threading.Event()
+
+    @staticmethod
+    def _client_of(raw) -> dict | None:
+        downloads = raw.get("downloads") if isinstance(raw, dict) else None
+        client = downloads.get("client") if isinstance(downloads, dict) else None
+        return client if isinstance(client, dict) else None
+
+    def _client_info(self, version_id: str) -> dict:
+        """优先读本地版本 JSON，其次按清单地址在线获取。"""
+        local = self.ctx.config.game_path / "versions" / version_id / f"{version_id}.json"
+        if local.is_file():
+            try:
+                raw = json.loads(local.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise VersionError(f"本地版本 JSON 无法解析：{local}\n{exc}") from exc
+            client = self._client_of(raw)
+            if client is not None and str(client.get("url") or ""):
+                self.log.emit(f"[下载] 使用本地版本信息：{local.name}")
+                return client
+        url = str(self.entry.get("url") or "")
+        if not url:
+            raise VersionError(f"版本 {version_id} 缺少版本 JSON 地址，无法获取客户端信息。")
+        errors: list[str] = []
+        fetched = False
+        for candidate in self.ctx.sources.resource_candidates(url):
+            try:
+                raw = Http(timeout=30).get_json(candidate)
+            except DownloadError as exc:
+                errors.append(f"{candidate.source_name}: {exc}")
+                continue
+            fetched = True
+            client = self._client_of(raw)
+            if client is not None and str(client.get("url") or ""):
+                return client
+        if fetched:
+            raise VersionError(
+                f"版本 {version_id} 的版本 JSON 中没有 downloads.client"
+                "（可能是旧版本或自定义版本），无法仅下载客户端 Jar。"
+            )
+        raise DownloadError(
+            f"无法获取版本 {version_id} 的版本 JSON：\n" + "\n".join(errors[-3:])
+        )
+
+    def run(self) -> None:
+        try:
+            version_id = str(self.entry.get("id") or "")
+            client = self._client_info(version_id)
+            url = str(client.get("url") or "")
+            if not url:
+                raise VersionError(
+                    f"版本 {version_id} 缺少 downloads.client，无法仅下载客户端 Jar。"
+                )
+            total = int(client.get("size") or 0)
+            self.dest.parent.mkdir(parents=True, exist_ok=True)
+            self.log.emit(f"[下载] {version_id} 客户端 → {self.dest}")
+            state = {"bytes": 0, "time": time.monotonic(), "sent": 0}
+
+            def report(count: int) -> None:
+                state["bytes"] += count
+                now = time.monotonic()
+                elapsed = now - state["time"]
+                if elapsed < 0.3:
+                    return
+                speed = (state["bytes"] - state["sent"]) / elapsed
+                state["time"] = now
+                state["sent"] = state["bytes"]
+                percent = state["bytes"] / total if total > 0 else 0.0
+                detail = f"{state['bytes'] / 1048576:.1f} MB"
+                if total > 0:
+                    detail += f" / {total / 1048576:.1f} MB"
+                self.progress.emit(min(0.99, percent), speed, detail)
+
+            Http(timeout=60).download_to_path(
+                self.ctx.sources.resource_candidates(url),
+                self.dest,
+                size=total,
+                sha1=str(client.get("sha1") or ""),
+                cancel=self.cancel_event,
+                pause=self.pause_event,
+                log=self.log.emit,
+                on_bytes=report,
+            )
+            self.progress.emit(1.0, 0.0, "下载完成")
+            self.done.emit(str(self.dest))
+        except Cancelled:
+            self.failed.emit("下载已取消。")
+        except (DownloadError, VersionError, OSError) as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001 - 统一回传可读原因
+            self.failed.emit(f"保存失败：{exc}")
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
 
 
 class LoaderScanWorker(QThread):
@@ -363,6 +494,10 @@ class DownloadPage(QWidget):
         self._install_task_id = ""
         self._install_pause = threading.Event()
         self._pending_install: tuple[dict, str, str] | None = None
+        self._client_worker: ClientJarSaveWorker | None = None
+        self._client_task_id = ""
+        self._client_pause = threading.Event()
+        self._pending_client_save: tuple[dict, Path] | None = None
         self._installing_mc = ""
         self._installing_kind = ""
         self._updating_table = False
@@ -571,6 +706,13 @@ class DownloadPage(QWidget):
         self.install_button.setObjectName("Primary")
         self.install_button.clicked.connect(self._start_install)
         side.body.addWidget(self.install_button)
+
+        self.client_jar_button = QPushButton("仅下载客户端 Jar")
+        self.client_jar_button.setObjectName("Ghost")
+        self.client_jar_button.setToolTip("只把原版客户端 jar 保存到指定位置，不安装到游戏目录")
+        self.client_jar_button.setEnabled(False)
+        self.client_jar_button.clicked.connect(self._save_client_jar)
+        side.body.addWidget(self.client_jar_button)
 
         self.progress_box = QWidget()
         progress_layout = QVBoxLayout(self.progress_box)
@@ -946,6 +1088,10 @@ class DownloadPage(QWidget):
     def _update_install_button(self) -> None:
         running = self._install_worker is not None and self._install_worker.isRunning()
         self.install_button.setEnabled(not running and self._detail_entry is not None)
+        saving = self._client_worker is not None and self._client_worker.isRunning()
+        self.client_jar_button.setEnabled(
+            self._detail_entry is not None and not saving
+        )
 
     # ------------------------------------------------------------------
     # 串行安装
@@ -1081,6 +1227,101 @@ class DownloadPage(QWidget):
             worker.deleteLater()
         self._update_install_button()
 
+    # ------------------------------------------------------------------
+    # 仅下载客户端 Jar
+    # ------------------------------------------------------------------
+    def _save_client_jar(self) -> None:
+        entry = self._detail_entry
+        if entry is None:
+            return
+        if self._client_worker is not None and self._client_worker.isRunning():
+            QMessageBox.information(self, APP_NAME, "已有客户端 Jar 下载任务正在进行，请稍候。")
+            return
+        version_id = str(entry.get("id") or "")
+        default_name = f"Minecraft-{_safe_filename(version_id, 'version')}-client.jar"
+        path, _filter = QFileDialog.getSaveFileName(
+            self,
+            "仅下载客户端 Jar",
+            str(_download_dir() / default_name),
+            "Jar 文件 (*.jar);;所有文件 (*)",
+        )
+        if not path:
+            return
+        dest = Path(path)
+        if not dest.suffix:
+            dest = dest.with_suffix(".jar")
+        self._pending_client_save = (dict(entry), dest)
+        self._client_pause.clear()
+        task = self.ctx.downloads.submit(
+            "纯下载",
+            dest.name,
+            lambda item: self._spawn_client_save(item.id),
+            cancel=lambda: self._client_worker.cancel() if self._client_worker else None,
+            pause=self._client_pause,
+            rebuild=lambda item: self._spawn_client_save(item.id),
+            target_dir=str(dest.parent),
+            detail=f"另存为：{dest.name}",
+        )
+        self._client_task_id = task.id
+        self._append_log(f"[下载] 另存为 {dest}")
+        self._update_install_button()
+
+    def _spawn_client_save(self, task_id: str = "") -> ClientJarSaveWorker:
+        """创建（或重试时重建）客户端 Jar 下载线程。"""
+        if self._pending_client_save is None:
+            raise RuntimeError("没有待保存的客户端 Jar")
+        entry, dest = self._pending_client_save
+        worker = ClientJarSaveWorker(self.ctx, entry, dest, self)
+        worker.pause_event = self._client_pause
+        worker.log.connect(self._append_log)
+        worker.log.connect(self.ctx.bus.log.emit)
+        worker.progress.connect(
+            lambda value, speed, detail, tid=task_id: self.ctx.downloads.update(
+                tid, percent=value, status="下载中", detail=detail, speed=speed
+            )
+            if tid
+            else None
+        )
+        worker.done.connect(
+            lambda path, tid=task_id: self._on_client_done(tid, path)
+        )
+        worker.failed.connect(
+            lambda message, tid=task_id, w=worker: self._on_client_failed(tid, message, w)
+        )
+        worker.finished.connect(lambda w=worker: self._on_client_finished(w))
+        self._client_worker = worker
+        if task_id:
+            self._client_task_id = task_id
+        self._update_install_button()
+        return worker
+
+    def _on_client_done(self, task_id: str, path: str) -> None:
+        self._append_log(f"[下载] 文件已保存至：{path}")
+        self.ctx.bus.log.emit(f"[下载] 文件已保存至：{path}")
+        self.ctx.bus.toast.emit(f"文件已保存至：{path}")
+        if task_id:
+            self.ctx.downloads.finish(task_id, True, f"已保存至：{path}")
+
+    def _on_client_failed(
+        self, task_id: str, message: str, worker: ClientJarSaveWorker
+    ) -> None:
+        self._append_log(f"[下载] 失败：{message}")
+        if task_id:
+            self.ctx.downloads.finish(task_id, False, message)
+        if worker.cancel_event.is_set():
+            self.ctx.bus.toast.emit("下载已取消。")
+            return
+        self.ctx.bus.log.emit(f"[错误] {message}")
+        QMessageBox.warning(self, "仅下载失败", message)
+
+    def _on_client_finished(self, worker: ClientJarSaveWorker) -> None:
+        if worker is not self._client_worker:
+            worker.deleteLater()
+            return
+        self._client_worker = None
+        worker.deleteLater()
+        self._update_install_button()
+
     def _append_log(self, line: str) -> None:
         self.log_view.appendPlainText(line)
         bar = self.log_view.verticalScrollBar()
@@ -1108,6 +1349,11 @@ class DownloadPage(QWidget):
         if install_worker is not None:
             install_worker.cancel()
             workers.append(install_worker)
+        client_worker = self._client_worker
+        self._client_worker = None
+        if client_worker is not None:
+            client_worker.cancel()
+            workers.append(client_worker)
         for worker in workers:
             wait_thread(worker, 2000)
             if not worker.isRunning():

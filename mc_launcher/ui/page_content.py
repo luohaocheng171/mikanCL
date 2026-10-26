@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import threading
+import time
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, QSize, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QRectF, QSize, QStandardPaths, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -26,22 +29,25 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import APP_NAME
+from .. import APP_NAME, USER_AGENT
 from ..config import INSTANCES_DIR, write_instance_manifest
 from ..content import (
     PROJECT_TYPES,
     SOURCE_LABELS,
     ContentClient,
     ContentError,
+    ContentFile,
     ContentProject,
     ContentVersion,
     is_version_compatible,
     pick_best_version,
+    rewrite_download_url,
 )
 from ..context import AppContext, wait_thread
 from ..installer import GameInstaller
 from ..java import pick_java
 from ..modloader import install_loader, java_for_mc
+from ..net import Cancelled, Candidate, Http
 from ..version import scan_installed_versions
 from .covers import CoverLoader, make_placeholder
 from .widgets import Badge, Card, page_header
@@ -112,6 +118,39 @@ def _fmt_size(value: int) -> str:
             return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
         size /= 1024
     return "-"
+
+
+def _safe_filename(text: str, fallback: str = "file") -> str:
+    """把标题/版本号清洗成不含空格与非法字符的文件名主干。"""
+    cleaned = re.sub(r'[\\/:*?"<>|\s]+', "-", str(text or "")).strip(".-")
+    return cleaned or fallback
+
+
+def _download_dir() -> Path:
+    try:
+        locations = QStandardPaths.standardLocations(QStandardPaths.DownloadLocation)
+        if locations:
+            return Path(locations[0])
+    except Exception:  # noqa: BLE001 - 取不到标准目录时退回用户目录
+        pass
+    return Path.home() / "Downloads"
+
+
+def _save_default_name(project: ContentProject, version: ContentVersion) -> str:
+    file = version.primary_file
+    suffix = Path(file.filename).suffix if file else ".jar"
+    base = f"{project.title}-{version.version_number or version.name or version.id}"
+    return f"{_safe_filename(base, 'content')}{suffix or '.jar'}"
+
+
+def _content_candidates(ctx: AppContext, source: str, file: ContentFile) -> list[Candidate]:
+    """复用内容下载的镜像改写规则，生成候选地址。"""
+    mirrored = rewrite_download_url(file.url, source, ctx.config)
+    items: list[Candidate] = []
+    if mirrored and mirrored != file.url:
+        items.append(Candidate(mirrored, {"User-Agent": USER_AGENT}, source, "镜像"))
+    items.append(Candidate(file.url, {"User-Agent": USER_AGENT}, source, source))
+    return items
 
 
 def _natural_key(text: str) -> tuple:
@@ -363,6 +402,141 @@ class TargetScanWorker(QThread):
             self.ok.emit([])
 
 
+class SaveFileWorker(QThread):
+    """把内容源文件另存到用户指定路径，只下载不安装。"""
+
+    progress = Signal(float, float, str)
+    log = Signal(str)
+    done = Signal(str)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        ctx: AppContext,
+        project: ContentProject,
+        version: ContentVersion,
+        dest: Path,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.ctx = ctx
+        self.project = project
+        self.version = version
+        self.dest = Path(dest)
+        self.cancel_event = threading.Event()
+        self.pause_event = threading.Event()
+
+    def run(self) -> None:
+        try:
+            file = self.version.primary_file
+            if file is None:
+                raise ContentError("该版本没有可下载的文件。")
+            self.dest.parent.mkdir(parents=True, exist_ok=True)
+            self.log.emit(f"[下载] 另存为 {self.dest}")
+            total = int(file.size or 0)
+            state = {"bytes": 0, "time": time.monotonic(), "sent": 0}
+
+            def report(count: int) -> None:
+                state["bytes"] += count
+                now = time.monotonic()
+                elapsed = now - state["time"]
+                if elapsed < 0.3:
+                    return
+                speed = (state["bytes"] - state["sent"]) / elapsed
+                state["time"] = now
+                state["sent"] = state["bytes"]
+                percent = state["bytes"] / total if total > 0 else 0.0
+                detail = f"{state['bytes'] / 1048576:.1f} MB"
+                if total > 0:
+                    detail += f" / {total / 1048576:.1f} MB"
+                self.progress.emit(min(0.99, percent), speed, detail)
+
+            Http(timeout=60).download_to_path(
+                _content_candidates(self.ctx, self.project.source, file),
+                self.dest,
+                size=total,
+                sha1=file.sha1 or "",
+                cancel=self.cancel_event,
+                pause=self.pause_event,
+                log=self.log.emit,
+                on_bytes=report,
+            )
+            self.progress.emit(1.0, 0.0, "下载完成")
+            self.done.emit(str(self.dest))
+        except Cancelled:
+            self.failed.emit("下载已取消。")
+        except ContentError as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001 - 统一回传可读原因
+            self.failed.emit(f"保存失败：{exc}")
+
+
+class CopyFileWorker(QThread):
+    """后台复制整合包源文件，分块写入以支持取消/暂停。"""
+
+    progress = Signal(float, float, str)
+    done = Signal(str)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        source_path: Path,
+        dest_path: Path,
+        pause: threading.Event | None = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.source_path = Path(source_path)
+        self.dest_path = Path(dest_path)
+        self.cancel_event = threading.Event()
+        self.pause_event = pause or threading.Event()
+
+    def run(self) -> None:
+        tmp = self.dest_path.with_name(self.dest_path.name + ".part")
+        try:
+            total = self.source_path.stat().st_size
+            self.dest_path.parent.mkdir(parents=True, exist_ok=True)
+            copied = 0
+            sent = 0
+            last = time.monotonic()
+            with open(self.source_path, "rb") as src, open(tmp, "wb") as dst:
+                while True:
+                    while self.pause_event.is_set():
+                        if self.cancel_event.is_set():
+                            raise Cancelled()
+                        time.sleep(0.2)
+                    if self.cancel_event.is_set():
+                        raise Cancelled()
+                    chunk = src.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    dst.write(chunk)
+                    copied += len(chunk)
+                    now = time.monotonic()
+                    if now - last >= 0.3:
+                        speed = (copied - sent) / max(0.001, now - last)
+                        sent, last = copied, now
+                        percent = copied / total if total > 0 else 1.0
+                        self.progress.emit(
+                            min(1.0, percent),
+                            speed,
+                            f"{copied / 1048576:.1f} / {total / 1048576:.1f} MB",
+                        )
+            os.replace(tmp, self.dest_path)
+            try:
+                shutil.copystat(self.source_path, self.dest_path)
+            except OSError:
+                pass  # 跨文件系统时时间戳复制失败不影响文件本身
+            self.progress.emit(1.0, 0.0, "复制完成")
+            self.done.emit(str(self.dest_path))
+        except Cancelled:
+            tmp.unlink(missing_ok=True)
+            self.failed.emit("已取消导出。")
+        except Exception as exc:  # noqa: BLE001
+            tmp.unlink(missing_ok=True)
+            self.failed.emit(f"导出失败：{exc}")
+
+
 class ContentInstallWorker(QThread):
     progress = Signal(float, str)
     log = Signal(str)
@@ -382,6 +556,7 @@ class ContentInstallWorker(QThread):
         self.project = project
         self.version = version
         self.instance_dir = instance_dir
+        self.modpack_path: Path | None = None
         self.cancel_event = threading.Event()
         self.pause_event = threading.Event()
 
@@ -423,6 +598,7 @@ class ContentInstallWorker(QThread):
             cancel=self.cancel_event,
             pause=self.pause_event,
         )
+        self.modpack_path = zip_path
         self.log.emit(f"[整合包] {meta.name} · MC {meta.mc_version} · {meta.loader or '原版'}")
         if not meta.mc_version:
             raise ContentError("整合包缺少 Minecraft 版本信息。")
@@ -485,6 +661,17 @@ class ContentInstallWorker(QThread):
             progress=lambda value, detail: self._emit(0.6 + value * 0.35, detail),
             pause=self.pause_event,
         )
+        # 加载器安装完成后必须真的生成了版本 JSON，否则启动必然失败
+        expected = target / "versions" / version_id / f"{version_id}.json"
+        if not expected.is_file() and version_id != mc_version:
+            fallback = target / "versions" / mc_version / f"{mc_version}.json"
+            if fallback.is_file():
+                self.log.emit(
+                    f"[警告] 未找到加载器版本 {version_id} 的 JSON，已回退到原版 {mc_version}。"
+                )
+                version_id = mc_version
+        if not (target / "versions" / version_id / f"{version_id}.json").is_file():
+            raise ContentError("加载器安装失败，未生成有效的版本 JSON")
         instance = self.ctx.config.add_instance(
             meta.name or self.project.title,
             str(target),
@@ -539,6 +726,8 @@ class InstallDialog(QDialog):
         self.targets = list(targets) if targets else scan_targets(ctx)
         self.selected_version: ContentVersion | None = None
         self.selected_target: dict | None = None
+        self.download_version: ContentVersion | None = None
+        self.download_path: Path | None = None
         self._preferred_id = preferred
         self._version_by_id = {v.id: v for v in self.versions}
 
@@ -608,6 +797,12 @@ class InstallDialog(QDialog):
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
+        self.save_button = QPushButton("仅下载文件…")
+        self.save_button.setObjectName("Ghost")
+        self.save_button.setToolTip("不安装到游戏目录，只把原文件保存到指定位置")
+        self.save_button.setVisible(self.project.project_type != "modpack")
+        self.save_button.clicked.connect(self._save_only)
+        buttons.addWidget(self.save_button)
         cancel_button = QPushButton("取消")
         cancel_button.setObjectName("Ghost")
         cancel_button.clicked.connect(self.reject)
@@ -712,6 +907,27 @@ class InstallDialog(QDialog):
         root = Path(str(target.get("game_dir") or ""))
         self.dir_label.setText(f"下载目标：{root / folder}")
 
+    def _save_only(self) -> None:
+        version = self._current_version()
+        if version is None or version.primary_file is None:
+            QMessageBox.information(self, APP_NAME, "没有可下载的文件。")
+            return
+        suffix = Path(version.primary_file.filename).suffix or ".jar"
+        path, _filter = QFileDialog.getSaveFileName(
+            self,
+            "仅下载文件",
+            str(_download_dir() / _save_default_name(self.project, version)),
+            f"文件 (*{suffix});;所有文件 (*)",
+        )
+        if not path:
+            return
+        dest = Path(path)
+        if not dest.suffix:
+            dest = dest.with_suffix(suffix)
+        self.download_version = version
+        self.download_path = dest
+        self.accept()
+
     def _accept(self) -> None:
         version = self._current_version()
         target = self.target_combo.currentData()
@@ -750,6 +966,10 @@ class ContentPage(QWidget):
         self._install_worker: ContentInstallWorker | None = None
         self._install_pause = threading.Event()
         self._pending_install: tuple[ContentProject, ContentVersion, Path] | None = None
+        self._save_task_id = ""
+        self._save_worker: SaveFileWorker | None = None
+        self._save_pause = threading.Event()
+        self._pending_save: tuple[ContentProject, ContentVersion, Path] | None = None
         self._cancel_requested = False
         self._target_worker: TargetScanWorker | None = None
         self._render_actions: list[tuple] = []
@@ -1453,6 +1673,9 @@ class ContentPage(QWidget):
         )
         if dialog.exec() != QDialog.Accepted:
             return
+        if dialog.download_version is not None and dialog.download_path is not None:
+            self._start_save_file(project, dialog.download_version, dialog.download_path)
+            return
         if dialog.selected_version is None or dialog.selected_target is None:
             return
         self._start_install(project, dialog.selected_version, dialog.selected_target)
@@ -1511,6 +1734,179 @@ class ContentPage(QWidget):
             self._install_task_id = task_id
         return worker
 
+    # ------------------------------------------------------------------
+    # 仅下载 / 导出源文件
+    def _start_save_file(
+        self, project: ContentProject, version: ContentVersion, dest: Path
+    ) -> None:
+        """只下载内容源文件到 dest，不安装。"""
+        self._pending_save = (project, version, dest)
+        self._save_pause.clear()
+        task = self.ctx.downloads.submit(
+            "纯下载",
+            dest.name,
+            lambda item: self._spawn_save(item.id),
+            cancel=lambda: self._save_worker.cancel_event.set() if self._save_worker else None,
+            pause=self._save_pause,
+            rebuild=lambda item: self._spawn_save(item.id),
+            target_dir=str(dest.parent),
+            detail=f"另存为：{dest.name}",
+        )
+        self._save_task_id = task.id
+        self.ctx.bus.log.emit(f"[下载] 开始另存为 {dest}")
+
+    def _spawn_save(self, task_id: str = "") -> SaveFileWorker:
+        """创建（或重试时重建）纯下载线程。"""
+        if self._pending_save is None:
+            raise RuntimeError("没有待保存的文件")
+        project, version, dest = self._pending_save
+        worker = SaveFileWorker(self.ctx, project, version, dest, self)
+        worker.pause_event = self._save_pause
+        worker.log.connect(self.ctx.bus.log.emit)
+        worker.progress.connect(
+            lambda value, speed, detail, tid=task_id: self.ctx.downloads.update(
+                tid, percent=value, status="下载中", detail=detail, speed=speed
+            )
+            if tid
+            else None
+        )
+        worker.done.connect(
+            lambda path, tid=task_id: self._on_save_done(tid, path)
+        )
+        worker.failed.connect(
+            lambda message, tid=task_id, w=worker: self._on_save_failed(tid, message, w)
+        )
+        self._save_worker = worker
+        if task_id:
+            self._save_task_id = task_id
+        self._track(worker)
+        return worker
+
+    def _on_save_done(self, task_id: str, path: str) -> None:
+        if task_id:
+            self.ctx.downloads.finish(task_id, True, f"已保存至：{path}")
+        self.ctx.bus.log.emit(f"[下载] 文件已保存至：{path}")
+        self.ctx.bus.toast.emit(f"文件已保存至：{path}")
+
+    def _on_save_failed(self, task_id: str, message: str, worker: SaveFileWorker) -> None:
+        if task_id:
+            self.ctx.downloads.finish(task_id, False, message)
+        if worker.cancel_event.is_set():
+            self.ctx.bus.toast.emit("下载已取消。")
+            return
+        self.ctx.bus.log.emit(f"[错误] {message}")
+        QMessageBox.warning(self, APP_NAME, message)
+
+    def _offer_modpack_export(
+        self, project: ContentProject, version: ContentVersion, source_path: Path
+    ) -> None:
+        """整合包安装完成后询问是否另存源文件。"""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle(APP_NAME)
+        box.setText(f"整合包「{project.title}」安装完成。")
+        box.setInformativeText("是否把原始整合包文件另存到其他位置？例如桌面或网盘同步目录。")
+        export_button = box.addButton("导出整合包源文件…", QMessageBox.ActionRole)
+        box.addButton("关闭", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is export_button:
+            self._export_modpack_source(project, version, source_path)
+
+    def _export_modpack_source(
+        self, project: ContentProject, version: ContentVersion, source_path: Path
+    ) -> None:
+        source_path = Path(source_path)
+        if not source_path.is_file():
+            QMessageBox.warning(self, APP_NAME, f"找不到整合包缓存文件：{source_path}")
+            return
+        suffix = source_path.suffix or ".zip"
+        stem = _safe_filename(
+            f"{project.title}-{version.version_number or version.name}", "modpack"
+        )
+        path, _filter = QFileDialog.getSaveFileName(
+            self,
+            "导出整合包源文件",
+            str(_download_dir() / f"{stem}{suffix}"),
+            f"整合包文件 (*{suffix});;所有文件 (*)",
+        )
+        if not path:
+            return
+        dest = Path(path)
+        if not dest.suffix:
+            dest = dest.with_suffix(suffix)
+        try:
+            if dest.resolve() == source_path.resolve():
+                self.ctx.bus.toast.emit("目标与缓存文件相同，无需复制。")
+                return
+            size = source_path.stat().st_size
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, f"无法读取整合包缓存：{exc}")
+            return
+        if size <= 50 * 1024 * 1024:
+            try:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, dest)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(self, APP_NAME, f"导出失败：{exc}")
+                return
+            self.ctx.bus.log.emit(f"[整合包] 源文件已导出至 {dest}")
+            self.ctx.bus.toast.emit(f"文件已保存至：{dest}")
+            return
+        self._start_modpack_copy(source_path, dest)
+
+    def _start_modpack_copy(self, source_path: Path, dest: Path) -> None:
+        """大于 50MB 时在后台复制，并登记到下载中心。"""
+        pause = threading.Event()
+        holder: dict[str, CopyFileWorker] = {}
+
+        def make(item) -> CopyFileWorker:
+            worker = CopyFileWorker(source_path, dest, pause, self)
+            holder["worker"] = worker
+            worker.progress.connect(
+                lambda value, speed, detail, tid=item.id: self.ctx.downloads.update(
+                    tid, percent=value, status="下载中", detail=detail, speed=speed
+                )
+            )
+            worker.done.connect(
+                lambda path, tid=item.id: self._on_copy_done(tid, path)
+            )
+            worker.failed.connect(
+                lambda message, tid=item.id, w=worker: self._on_copy_failed(tid, message, w)
+            )
+            self._track(worker)
+            return worker
+
+        def cancel() -> None:
+            worker = holder.get("worker")
+            if worker is not None:
+                worker.cancel_event.set()
+
+        self.ctx.downloads.submit(
+            "纯下载",
+            dest.name,
+            make,
+            cancel=cancel,
+            pause=pause,
+            rebuild=make,
+            target_dir=str(dest.parent),
+            detail=f"另存为：{dest.name}",
+        )
+
+    def _on_copy_done(self, task_id: str, path: str) -> None:
+        if task_id:
+            self.ctx.downloads.finish(task_id, True, f"已保存至：{path}")
+        self.ctx.bus.log.emit(f"[整合包] 源文件已导出至 {path}")
+        self.ctx.bus.toast.emit(f"文件已保存至：{path}")
+
+    def _on_copy_failed(self, task_id: str, message: str, worker: CopyFileWorker) -> None:
+        if task_id:
+            self.ctx.downloads.finish(task_id, False, message)
+        if worker.cancel_event.is_set():
+            self.ctx.bus.toast.emit("已取消导出。")
+            return
+        self.ctx.bus.log.emit(f"[错误] {message}")
+        QMessageBox.warning(self, APP_NAME, message)
+
     def _reset_progress(self, detail: str) -> None:
         for view in self._progress_views:
             try:
@@ -1547,6 +1943,21 @@ class ContentPage(QWidget):
         if getattr(self, "_install_task_id", ""):
             self.ctx.downloads.finish(self._install_task_id, True, message)
             self._install_task_id = ""
+        pending = self._pending_install
+        worker = self._install_worker
+        if (
+            pending is not None
+            and pending[0].project_type == "modpack"
+            and worker is not None
+            and worker.modpack_path is not None
+        ):
+            project, version, _target = pending
+            QTimer.singleShot(
+                0,
+                lambda p=project, v=version, z=worker.modpack_path: self._offer_modpack_export(
+                    p, v, z
+                ),
+            )
 
     def _on_install_failed(self, message: str) -> None:
         if getattr(self, "_install_task_id", ""):
@@ -1617,9 +2028,13 @@ class ContentPage(QWidget):
         worker = self._install_worker
         if worker is not None and worker.isRunning():
             worker.cancel_event.set()
+        save_worker = self._save_worker
+        if save_worker is not None and save_worker.isRunning():
+            save_worker.cancel_event.set()
         workers = list(self._workers)
-        if worker is not None and worker not in workers:
-            workers.append(worker)
+        for item in (worker, save_worker):
+            if item is not None and item not in workers:
+                workers.append(item)
         for item in workers:
             wait_thread(item, 1500)
         self._covers.shutdown()

@@ -1108,9 +1108,7 @@ class HomePage(QWidget):
         self.instance_combo.blockSignals(True)
         self.instance_combo.clear()
         for instance in self.ctx.config.instance_list():
-            label = instance.name
-            if instance.modpack:
-                label += "（整合包）"
+            label = f"[整合包] {instance.name}" if instance.modpack else instance.name
             if instance.mc_version:
                 label += f" · {instance.mc_version}"
             if instance.loader:
@@ -1129,6 +1127,19 @@ class HomePage(QWidget):
         self.refresh_versions()
         self.reload_config()
         self.ctx.bus.toast.emit(f"已切换到实例：{self.instance_combo.currentText()}")
+
+    def launch_instance_version(self, instance_id: str, version_id: str) -> bool:
+        """供「整合包」页调用：切换到指定实例并直接启动版本。"""
+        self.ctx.config.select_instance(instance_id)
+        self._selected_id = ""
+        self._loaded_instance = self.ctx.config.selected_instance_id
+        self._reload_instances()
+        self.refresh_versions()
+        if version_id not in self._rows:
+            return False
+        self._select_version(version_id)
+        self._start_launch()
+        return True
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if obj is self.avatar_label and event.type() == QEvent.MouseButtonRelease:

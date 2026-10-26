@@ -463,6 +463,38 @@ class Http:
                         time.sleep(0.4)
         raise DownloadError(f"下载失败：{dest.name}\n" + "\n".join(errors[-4:]))
 
+    def download_to_path(
+        self,
+        candidates: Iterable[Candidate],
+        dest_path: Path,
+        size: int = 0,
+        sha1: str = "",
+        cancel: threading.Event | None = None,
+        pause: threading.Event | None = None,
+        log: Callable[[str], None] | None = None,
+        on_bytes: Callable[[int], None] | None = None,
+    ) -> Path:
+        """只把源文件保存到 dest_path（不解压、不拼目录），保留 .part 续传语义。"""
+        dest = Path(dest_path)
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise DownloadError(f"无法创建保存目录 {dest.parent}：{exc}") from exc
+        if log:
+            log(f"[下载] 保存到 {dest}")
+        self.download(
+            candidates,
+            dest,
+            size=size or None,
+            sha1=sha1 or None,
+            cancel=cancel,
+            on_bytes=on_bytes,
+            pause=pause,
+        )
+        if log:
+            log(f"[下载] 已保存 {dest}")
+        return dest
+
     def is_valid(self, path: Path, size: int | None = None, sha1: str | None = None) -> bool:
         return self._valid(Path(path), size, sha1)
 

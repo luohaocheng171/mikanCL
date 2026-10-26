@@ -243,6 +243,11 @@ def make_nav_icon(kind: str, size: int = 20, color: str = "#9fb6a7") -> QIcon:
         painter.drawLine(QPointF(s * 0.36, s * 0.48), QPointF(s * 0.36, s * 0.72))
         painter.drawLine(QPointF(s * 0.5, s * 0.48), QPointF(s * 0.5, s * 0.66))
         painter.drawLine(QPointF(s * 0.64, s * 0.48), QPointF(s * 0.64, s * 0.72))
+    elif kind == "modpack":
+        painter.drawRect(QRectF(s * 0.18, s * 0.24, s * 0.64, s * 0.56))
+        painter.drawLine(QPointF(s * 0.18, s * 0.4), QPointF(s * 0.82, s * 0.4))
+        painter.drawLine(QPointF(s * 0.5, s * 0.4), QPointF(s * 0.5, s * 0.56))
+        painter.drawEllipse(QRectF(s * 0.42, s * 0.44, s * 0.16, s * 0.16))
     elif kind == "browser":
         painter.drawEllipse(QRectF(s * 0.16, s * 0.16, s * 0.68, s * 0.68))
         painter.drawEllipse(QRectF(s * 0.34, s * 0.16, s * 0.32, s * 0.68))

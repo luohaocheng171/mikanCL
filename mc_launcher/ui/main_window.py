@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMenu,
+    QMessageBox,
     QPushButton,
     QStackedWidget,
     QSystemTrayIcon,
@@ -31,6 +32,7 @@ from .page_content import ContentPage
 from .page_control import ControlPage
 from .page_download import DownloadPage
 from .page_download_center import DownloadCenterPage
+from .page_modpack import ModpackPage
 from .page_home import HomePage
 from .page_settings import SettingsPage
 from .theme import make_avatar, make_block_icon, make_nav_icon
@@ -224,6 +226,7 @@ class MainWindow(QMainWindow):
             ("download", "下载安装"),
             ("downloads", "下载中心"),
             ("content", "内容中心"),
+            ("modpack", "整合包"),
             ("account", "账号管理"),
             ("control", "版本设置"),
             ("browser", "内置浏览器"),
@@ -279,6 +282,7 @@ class MainWindow(QMainWindow):
         self.download_page = DownloadPage(self.ctx, self)
         self.download_center_page = DownloadCenterPage(self.ctx, self)
         self.content_page = ContentPage(self.ctx, self)
+        self.modpack_page = ModpackPage(self.ctx, self)
         self.accounts_page = AccountsPage(self.ctx, self)
         self.control_page = ControlPage(self.ctx, self)
         self.browser_page = BrowserPage(self.ctx, self)
@@ -288,6 +292,7 @@ class MainWindow(QMainWindow):
             self.download_page,
             self.download_center_page,
             self.content_page,
+            self.modpack_page,
             self.accounts_page,
             self.control_page,
             self.browser_page,
@@ -298,7 +303,18 @@ class MainWindow(QMainWindow):
         bar = self.statusBar()
         bar.setSizeGripEnabled(True)
         bar.showMessage(f"{APP_NAME} {APP_VERSION} 已就绪 · 正版 / 外置登录 / 内容中心")
+        self.modpack_page.launch_requested.connect(self._launch_from_modpack)
         self._refresh_sidebar_account()
+
+    def _launch_from_modpack(self, instance_id: str, version_id: str) -> None:
+        """从「整合包」页直接启动：切换实例并拉起对应版本。"""
+        self.switch_page(0)
+        if not self.home_page.launch_instance_version(instance_id, version_id):
+            QMessageBox.warning(
+                self,
+                "无法启动",
+                f"实例中找不到版本 {version_id}，请先在「整合包」页点击“修复”补全版本文件。",
+            )
 
     def _connect_bus(self) -> None:
         bus = self.ctx.bus
@@ -318,12 +334,13 @@ class MainWindow(QMainWindow):
             "downloads": 2,
             "download_center": 2,
             "content": 3,
-            "account": 4,
-            "accounts": 4,
-            "control": 5,
+            "modpack": 4,
+            "account": 5,
+            "accounts": 5,
+            "control": 6,
             "loader": 1,
-            "browser": 6,
-            "settings": 7,
+            "browser": 7,
+            "settings": 8,
         }
         self.switch_page(mapping.get(name, 0))
 
@@ -349,12 +366,14 @@ class MainWindow(QMainWindow):
         elif index == 3:
             self.content_page.refresh()
         elif index == 4:
-            self.accounts_page.refresh()
+            self.modpack_page.refresh()
         elif index == 5:
+            self.accounts_page.refresh()
+        elif index == 6:
             self.control_page.refresh()
 
     def _open_browser(self, url: str) -> None:
-        self.switch_page(6)
+        self.switch_page(7)
         self.browser_page.navigate_to(url)
 
     def _hide_to_tray(self) -> None:
@@ -423,6 +442,7 @@ class MainWindow(QMainWindow):
         self.home_page.shutdown()
         self.download_page.shutdown()
         self.content_page.shutdown()
+        self.modpack_page.shutdown()
         self.accounts_page.shutdown()
         self.settings_page.shutdown()
         self.browser_page.shutdown()

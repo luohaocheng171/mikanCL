@@ -839,25 +839,50 @@ class ContentClient:
             if log:
                 log(f"[整合包] 正在下载 {file.filename}…")
             self._download_single(project.source, file, dest, cancel, pause)
-        meta = self.parse_modpack(dest)
+        meta = self.parse_modpack(dest, log)
         return dest, meta
 
-    def parse_modpack(self, path: Path) -> ModpackMeta:
+    def parse_modpack(self, path: Path, log: Callable[[str], None] | None = None) -> ModpackMeta:
         try:
             with zipfile.ZipFile(path) as archive:
-                names = set(archive.namelist())
-                if "modrinth.index.json" in names:
-                    raw = json.loads(archive.read("modrinth.index.json").decode("utf-8"))
-                    return self._parse_mrpack(raw, names)
-                manifest_name = next(
-                    (n for n in names if n.lower().endswith("manifest.json")), ""
-                )
+                names = [name.replace("\\", "/") for name in archive.namelist()]
+                index_name = self._locate_member(names, "modrinth.index.json")
+                if index_name:
+                    raw = json.loads(archive.read(index_name).decode("utf-8"))
+                    return self._parse_mrpack(raw, self._relative_names(names, index_name))
+                manifest_name = self._locate_member(names, "manifest.json", suffix=True)
                 if manifest_name:
                     raw = json.loads(archive.read(manifest_name).decode("utf-8"))
-                    return self._parse_cf_pack(raw)
+                    return self._parse_cf_pack(raw, log)
         except (OSError, ValueError, zipfile.BadZipFile) as exc:
             raise ContentError(f"整合包文件无法解析：{exc}") from exc
         raise ContentError("无法识别的整合包格式（缺少 modrinth.index.json 或 manifest.json）。")
+
+    @staticmethod
+    def _locate_member(names: list[str], filename: str, suffix: bool = False) -> str:
+        """优先在根目录查找，其次在第一层子目录（如 MyPack/manifest.json）查找。"""
+        files = [name for name in names if name and not name.endswith("/")]
+        lowered = [(name, name.lower()) for name in files]
+        for name, low in lowered:
+            if low == filename:
+                return name
+        for name, low in lowered:
+            parts = low.split("/")
+            if len(parts) == 2 and (parts[1].endswith(filename) if suffix else parts[1] == filename):
+                return name
+        if suffix:
+            for name, low in lowered:
+                if low.endswith(filename):
+                    return name
+        return ""
+
+    @staticmethod
+    def _relative_names(names: list[str], member: str) -> set[str]:
+        """把清单所在子目录作为基准，返回相对路径集合，便于识别 overrides 目录。"""
+        base = member.rsplit("/", 1)[0] + "/" if "/" in member else ""
+        if not base:
+            return set(names)
+        return {name[len(base):] for name in names if name.startswith(base)}
 
     def _parse_mrpack(self, raw: dict, names: set[str]) -> ModpackMeta:
         dependencies = raw.get("dependencies") if isinstance(raw.get("dependencies"), dict) else {}
@@ -913,7 +938,7 @@ class ContentClient:
             version=str(raw.get("versionId") or ""),
         )
 
-    def _parse_cf_pack(self, raw: dict) -> ModpackMeta:
+    def _parse_cf_pack(self, raw: dict, log: Callable[[str], None] | None = None) -> ModpackMeta:
         minecraft = raw.get("minecraft") if isinstance(raw.get("minecraft"), dict) else {}
         mc_version = str(minecraft.get("version") or "")
         loader = ""
@@ -943,7 +968,7 @@ class ContentClient:
                 continue
         files: list[tuple[str, ContentFile]] = []
         if file_ids:
-            resolved = self._resolve_cf_file_ids(file_ids)
+            resolved = self._resolve_cf_file_ids(file_ids, log)
             for file_id, entry in resolved.items():
                 filename = str(entry.get("fileName") or f"{file_id}.jar")
                 url = str(entry.get("downloadUrl") or "") or _cf_file_url(file_id, filename)
@@ -974,14 +999,23 @@ class ContentClient:
             version=str(raw.get("version") or ""),
         )
 
-    def _resolve_cf_file_ids(self, file_ids: list[int]) -> dict[int, dict]:
+    def _resolve_cf_file_ids(
+        self, file_ids: list[int], log: Callable[[str], None] | None = None
+    ) -> dict[int, dict]:
+        """批量解析 CurseForge 文件 ID；某一批失败时记录日志并跳过，不阻断安装。"""
         result: dict[int, dict] = {}
         for start in range(0, len(file_ids), 100):
             chunk = file_ids[start:start + 100]
             try:
                 data = self._curseforge_post("/mods/files", {"fileIds": chunk})
             except DownloadError as exc:
-                raise ContentError(f"解析 CurseForge 整合包文件失败：{exc}") from exc
+                if log:
+                    log(f"[整合包] 解析 CurseForge 文件失败，已跳过 {len(chunk)} 个文件：{exc}")
+                continue
+            except Exception as exc:  # noqa: BLE001 - 单个批次失败不应阻断整个整合包
+                if log:
+                    log(f"[整合包] 解析 CurseForge 文件异常，已跳过 {len(chunk)} 个文件：{exc}")
+                continue
             rows = data.get("data") if isinstance(data, dict) else None
             for row in rows or []:
                 if isinstance(row, dict):
@@ -1012,15 +1046,52 @@ class ContentClient:
         if log:
             log(f"[整合包] 需要下载 {len(tasks)} 个文件，overrides：{', '.join(meta.overrides)}")
         failures = self.download_many(tasks, log=log, cancel=cancel, pause=pause)
-        if failures:
-            raise ContentError(
-                f"{len(failures)} 个整合包文件下载失败：\n" + "\n".join(failures[:5])
-            )
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
+        missing = self._collect_missing(tasks, failures, instance_dir, log)
         if progress:
             progress(0.9, "下载完成，正在解压 overrides…")
         self._extract_overrides(zip_path, meta.overrides, instance_dir, log, cancel)
         if progress:
-            progress(1.0, "整合包文件安装完成")
+            progress(1.0, "整合包文件安装完成" + (f"（{len(missing)} 个文件缺失）" if missing else ""))
+
+    def _collect_missing(
+        self,
+        tasks: list[tuple[str, ContentFile, Path]],
+        failures: list[str],
+        instance_dir: Path,
+        log: Callable[[str], None] | None = None,
+    ) -> list[ContentFile]:
+        """把下载失败的文件记录到 missing_mods.txt，允许其余内容继续安装。"""
+        missing: list[ContentFile] = []
+        for _source, file, dest in tasks:
+            try:
+                if dest.is_file() and dest.stat().st_size > 0:
+                    continue
+            except OSError:
+                pass
+            missing.append(file)
+        if not missing:
+            return []
+        path = instance_dir / "missing_mods.txt"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(f"# 下载失败的文件（{time.strftime('%Y-%m-%d %H:%M:%S')}）\n")
+                handle.write("# 可在「整合包」页点击“修复”重试\n")
+                for file in missing:
+                    handle.write(f"{file.filename}\t{file.url}\n")
+        except OSError as exc:
+            if log:
+                log(f"[整合包] 写入缺失清单失败：{exc}")
+        if log:
+            log(
+                f"[警告] {len(missing)} 个整合包文件下载失败，已记录到 missing_mods.txt，"
+                "其余内容继续安装。"
+            )
+            for message in failures[:10]:
+                log(f"[警告] {message}")
+        return missing
 
     @staticmethod
     def _safe_path(root: Path, rel: str) -> Path | None:
@@ -1043,6 +1114,9 @@ class ContentClient:
     ) -> None:
         extracted = 0
         checked = 0
+        if isinstance(prefixes, str):
+            prefixes = [prefixes] if prefixes else []
+        prefixes = [str(item).strip("/") for item in prefixes if str(item).strip("/")]
         try:
             with zipfile.ZipFile(zip_path) as archive:
                 for info in archive.infolist():
@@ -1052,14 +1126,20 @@ class ContentClient:
                     if info.is_dir():
                         continue
                     name = info.filename.replace("\\", "/")
-                    matched = ""
+                    matched_len = 0
                     for prefix in prefixes:
                         if name.startswith(prefix + "/"):
-                            matched = prefix
+                            matched_len = len(prefix) + 1
                             break
-                    if not matched:
+                        # 兼容「MyPack/overrides/…」这种多一层目录的整合包
+                        marker = f"/{prefix}/"
+                        position = name.find(marker)
+                        if position >= 0 and name.count("/", 0, position) <= 1:
+                            matched_len = position + len(prefix) + 2
+                            break
+                    if not matched_len:
                         continue
-                    rel = name[len(matched) + 1:]
+                    rel = name[matched_len:]
                     if not rel or rel.startswith("../") or "/../" in rel:
                         continue
                     target = instance_dir / rel

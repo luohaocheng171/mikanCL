@@ -30,7 +30,7 @@ from ..config import (
     write_instance_manifest,
 )
 from ..context import AppContext
-from ..content import ContentError
+from ..content import ContentError, mc_version_key
 from ..installer import GameInstaller
 from ..java import pick_java
 from ..launcher import prepare_isolated_dir
@@ -53,6 +53,17 @@ def _zip_names(path: Path) -> list[str]:
             return [name.replace("\\", "/") for name in archive.namelist()]
     except (OSError, zipfile.BadZipFile):
         return []
+
+
+def _single_root_prefix(names: list[str]) -> str:
+    """压缩包内所有文件都在同一个顶层目录时返回该目录前缀。"""
+    files = [name for name in names if name and not name.endswith("/")]
+    if not files:
+        return ""
+    first = files[0].split("/")[0] + "/"
+    if all(name.startswith(first) for name in files):
+        return first
+    return ""
 
 
 def write_install_error_log(title: str, detail: str) -> Path | None:
@@ -110,6 +121,13 @@ def detect_path(path: Path) -> str:
     if any(name.endswith("pack.mcmeta") for name in lowered):
         return "resourcepack"
     if any(name.endswith(".jar") for name in lowered):
+        return "modpack"
+    if any(
+        name.startswith("mods/") or "/mods/" in name
+        or name.startswith("config/") or "/config/" in name
+        for name in lowered
+    ):
+        # 没有清单、但带 mods/ 或 config/ 的压缩包：按“直装包”处理
         return "modpack"
     return ""
 
@@ -308,8 +326,12 @@ class ModpackDropWorker(QThread):
             self._restore(manifest)
             return
         try:
-            meta = self.ctx.content.parse_modpack(self.path)
+            meta = self.ctx.content.parse_modpack(self.path, self.log.emit)
         except ContentError as exc:
+            if self._looks_direct_pack():
+                self.log.emit(f"[整合包] 未找到清单文件，按直装包处理：{exc}")
+                self._install_direct()
+                return
             self._fail(str(exc), exc)
             return
         except Exception as exc:  # noqa: BLE001
@@ -370,6 +392,92 @@ class ModpackDropWorker(QThread):
             self._fail(str(exc), exc)
         except Exception as exc:  # noqa: BLE001
             self._fail(f"整合包导入失败：{exc}", exc)
+
+    def _looks_direct_pack(self) -> bool:
+        """没有清单但带 mods/ 或 config/ 的压缩包按“直装包”处理。"""
+        if self.path.is_dir():
+            return (self.path / "mods").is_dir() or (self.path / "config").is_dir()
+        lowered = [name.lower() for name in _zip_names(self.path)]
+        return any(
+            name.startswith("mods/") or "/mods/" in name
+            or name.startswith("config/") or "/config/" in name
+            for name in lowered
+        )
+
+    @staticmethod
+    def _guess_mc_version(target: Path) -> str:
+        """从 mods/ 文件名里推断 Minecraft 版本，取出现次数最多的一个。"""
+        pattern = re.compile(r"(?<![\d.])(1\.\d{1,2}(?:\.\d{1,2})?)(?![\d.])")
+        counts: dict[str, int] = {}
+        for folder in (target / "mods", target / "config", target):
+            try:
+                entries = list(folder.iterdir())[:1500] if folder.is_dir() else []
+            except OSError:
+                entries = []
+            for entry in entries:
+                for match in pattern.findall(entry.name):
+                    counts[match] = counts.get(match, 0) + 1
+            if counts:
+                break
+        if not counts:
+            return ""
+        return max(counts, key=lambda value: (counts[value], mc_version_key(value)))
+
+    def _install_direct(self) -> None:
+        """直装包：整包解压到独立实例，并尽力补装推断出的原版版本。"""
+        try:
+            name = self.path.stem
+            slug_base = re.sub(r"[^\w\-]+", "-", name.lower()).strip("-")[:36]
+            slug = f"{slug_base or 'modpack'}-{abs(hash(str(self.path))) % 10000:04d}"
+            target = INSTANCES_DIR / slug
+            target.mkdir(parents=True, exist_ok=True)
+            self._emit(0.1, "解压直装包…")
+            self.log.emit(f"[整合包] 未找到清单文件，按直装包解压到 {target.name}")
+            if self.path.is_dir():
+                shutil.copytree(self.path, target, dirs_exist_ok=True)
+            else:
+                with zipfile.ZipFile(self.path) as archive:
+                    names = [item.replace("\\", "/") for item in archive.namelist()]
+                    _safe_extract(archive, target, _single_root_prefix(names))
+            mc_version = self._guess_mc_version(target)
+            version_id = mc_version
+            if mc_version:
+                self.log.emit(f"[整合包] 推断 Minecraft 版本：{mc_version}")
+                self._emit(0.35, f"检查原版 {mc_version}…")
+                installer = self._make_installer(target, 0.35, 0.55)
+                if not (target / "versions" / mc_version / f"{mc_version}.json").is_file():
+                    payload, _name, _cached = self.ctx.sources.get_manifest()
+                    entries = payload.get("data", {}).get("versions", [])
+                    entry = next((v for v in entries if str(v.get("id")) == mc_version), None)
+                    if entry is None:
+                        self.log.emit(
+                            f"[警告] 版本清单中找不到 Minecraft {mc_version}，请稍后手动安装该版本。"
+                        )
+                        version_id = ""
+                    else:
+                        installer.install_version(entry)
+            else:
+                self.log.emit("[警告] 未能从文件推断 Minecraft 版本，请稍后手动补装版本。")
+            instance = self.ctx.config.add_instance(
+                name,
+                str(target),
+                version_id=version_id,
+                mc_version=mc_version,
+                modpack=name,
+            )
+            write_instance_manifest(instance, target)
+            self.ctx.config.select_instance(instance.id)
+            self.ctx.config.save()
+            self.ctx.bus.instances_changed.emit()
+            self._emit(1.0, "直装包导入完成")
+            self.done.emit(
+                f"直装包「{instance.name}」已导入并切换为当前实例"
+                + (f"（版本 {version_id}）" if version_id else "，请手动选择或安装游戏版本。")
+            )
+        except ContentError as exc:
+            self._fail(str(exc), exc)
+        except Exception as exc:  # noqa: BLE001
+            self._fail(f"直装包导入失败：{exc}", exc)
 
     def _restore(self, data: dict) -> None:
         """从 instance.json 恢复实例：解压覆盖文件并补装缺失的基础版本与加载器。"""
