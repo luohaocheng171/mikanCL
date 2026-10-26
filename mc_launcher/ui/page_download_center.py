@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -86,7 +87,19 @@ class TaskActions(QWidget):
             manager.pause(self.task_id)
 
     def _cancel(self) -> None:
-        self.page.ctx.downloads.cancel(self.task_id)
+        manager = self.page.ctx.downloads
+        task = manager.find(self.task_id)
+        if task is not None and task.active:
+            answer = QMessageBox.question(
+                self.page,
+                "取消任务",
+                f"确定要取消「{task.name}」吗？\n已下载的部分文件会保留，稍后可重试继续。",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+        manager.cancel(self.task_id)
 
     def _retry(self) -> None:
         self.page.ctx.downloads.retry(self.task_id)

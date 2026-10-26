@@ -45,7 +45,7 @@ from ..modloader import (
     java_for_mc,
     list_loader_versions,
 )
-from ..net import Cancelled, DownloadError, Http
+from ..net import Cancelled, Candidate, DownloadError, Http
 from ..version import (
     CATEGORY_LABELS,
     VersionError,
@@ -231,6 +231,219 @@ class ClientJarSaveWorker(QThread):
 
     def cancel(self) -> None:
         self.cancel_event.set()
+
+
+class LoaderInstallerSaveWorker(QThread):
+    """仅下载某个 Mod 加载器的官方安装器 jar（Fabric / Quilt / Forge / NeoForge / LiteLoader）。"""
+
+    progress = Signal(float, float, str)
+    log = Signal(str)
+    done = Signal(str)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        kind: str,
+        mc_version: str,
+        loader_version: str,
+        dest: Path,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.kind = kind
+        self.mc_version = mc_version
+        self.loader_version = loader_version
+        self.dest = Path(dest)
+        self.cancel_event = threading.Event()
+        self.pause_event = threading.Event()
+
+    # ------------------------------------------------------------------
+    def _resolve_urls(self) -> list[tuple[str, str]]:
+        """解析官方安装器下载地址，返回 [(url, 来源名)]；失败抛 DownloadError。"""
+        kind = self.kind
+        mc = self.mc_version
+        ver = self.loader_version
+        http = Http(timeout=30)
+        if kind in ("fabric", "quilt"):
+            meta = (
+                "https://meta.fabricmc.net/v2/versions/installer"
+                if kind == "fabric"
+                else "https://meta.quiltmc.org/v3/versions/installer"
+            )
+            data = http.get_json_url(meta)
+            entries = [
+                item
+                for item in (data if isinstance(data, list) else [])
+                if isinstance(item, dict) and item.get("url")
+            ]
+            chosen = None
+            if ver:
+                chosen = next(
+                    (item for item in entries if str(item.get("version")) == ver), None
+                )
+            if chosen is None:
+                chosen = next((item for item in entries if item.get("stable")), None)
+            if chosen is None and entries:
+                chosen = entries[0]
+            if chosen is None:
+                raise DownloadError(
+                    f"{LOADER_LABELS.get(kind, kind)} 官方 meta 未返回安装器信息。"
+                )
+            return [(str(chosen["url"]), f"{LOADER_LABELS.get(kind, kind)} 官方")]
+        if kind == "forge":
+            if not ver:
+                raise DownloadError("请先填写 Forge 版本（如 49.1.0）。")
+            url = (
+                f"https://maven.minecraftforge.net/net/minecraftforge/forge/"
+                f"{mc}-{ver}/forge-{mc}-{ver}-installer.jar"
+            )
+            mirror = (
+                f"https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/"
+                f"{mc}-{ver}/forge-{mc}-{ver}-installer.jar"
+            )
+            return [(url, "Forge 官方"), (mirror, "BMCLAPI 镜像")]
+        if kind == "neoforge":
+            if not ver:
+                raise DownloadError("请先填写 NeoForge 版本（如 20.4.237）。")
+            parts = mc.split(".")
+            old = (
+                len(parts) >= 3
+                and parts[0] == "1"
+                and int(parts[1]) == 20
+                and int(parts[2]) <= 1
+            )
+            if old:
+                url = (
+                    f"https://maven.neoforged.net/releases/net/neoforged/forge/"
+                    f"{mc}-{ver}/forge-{mc}-{ver}-installer.jar"
+                )
+                mirror = (
+                    f"https://bmclapi2.bangbang93.com/maven/net/neoforged/forge/"
+                    f"{mc}-{ver}/forge-{mc}-{ver}-installer.jar"
+                )
+            else:
+                url = (
+                    f"https://maven.neoforged.net/releases/net/neoforged/neoforge/"
+                    f"{ver}/neoforge-{ver}-installer.jar"
+                )
+                mirror = (
+                    f"https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/"
+                    f"{ver}/neoforge-{ver}-installer.jar"
+                )
+            return [(url, "NeoForge 官方"), (mirror, "BMCLAPI 镜像")]
+        if kind == "liteloader":
+            data = None
+            last_error: Exception | None = None
+            for source_url in (
+                "https://www.liteloader.com/version.json",
+                "http://dl.liteloader.com/versions/versions.json",
+            ):
+                try:
+                    data = http.get_json_url(source_url)
+                    break
+                except DownloadError as exc:
+                    last_error = exc
+            if data is None:
+                raise DownloadError(f"获取 LiteLoader 版本列表失败：{last_error}")
+            url = _liteloader_jar_url(data, mc)
+            if not url:
+                raise DownloadError(
+                    f"LiteLoader 不支持 Minecraft {mc}（官方仅提供到 1.12.2），"
+                    "请修改 MC 版本后重试。"
+                )
+            return [(url, "LiteLoader 官方")]
+        raise DownloadError(f"未知的加载器：{kind}")
+
+    def run(self) -> None:
+        try:
+            urls = self._resolve_urls()
+            self.dest.parent.mkdir(parents=True, exist_ok=True)
+            self.log.emit(
+                f"[下载] {LOADER_LABELS.get(self.kind, self.kind)} 安装器 → {self.dest}"
+            )
+            state = {"bytes": 0, "time": time.monotonic(), "sent": 0}
+
+            def report(count: int) -> None:
+                state["bytes"] += count
+                now = time.monotonic()
+                elapsed = now - state["time"]
+                if elapsed < 0.3:
+                    return
+                speed = (state["bytes"] - state["sent"]) / elapsed
+                state["time"] = now
+                state["sent"] = state["bytes"]
+                detail = f"{state['bytes'] / 1048576:.1f} MB"
+                self.progress.emit(0.0, speed, detail)
+
+            Http(timeout=60).download_to_path(
+                [Candidate(url, {}, "official", name) for url, name in urls],
+                self.dest,
+                cancel=self.cancel_event,
+                pause=self.pause_event,
+                log=self.log.emit,
+                on_bytes=report,
+            )
+            self.progress.emit(1.0, 0.0, "下载完成")
+            self.done.emit(str(self.dest))
+        except Cancelled:
+            self.failed.emit("下载已取消。")
+        except (DownloadError, ContentError, OSError) as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001 - 统一回传可读原因
+            self.failed.emit(f"保存失败：{exc}")
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+
+def _liteloader_jar_url(data, mc_version: str) -> str:
+    """从 LiteLoader versions.json 中查找指定 MC 版本的 jar 下载地址。"""
+    versions = data.get("versions") if isinstance(data, dict) else None
+    if not isinstance(versions, dict):
+        return ""
+    node = versions.get(mc_version)
+    if not isinstance(node, dict):
+        return ""
+    for section in ("artefacts", "snapshots", "repo"):
+        block = node.get(section)
+        if not isinstance(block, dict):
+            continue
+        artefacts = block.get("com.mumfrey:liteloader")
+        if not isinstance(artefacts, dict):
+            continue
+        entries = [
+            value
+            for value in artefacts.values()
+            if isinstance(value, dict) and value.get("version")
+        ]
+        if not entries:
+            continue
+        entries.sort(
+            key=lambda v: (
+                int(v.get("lastSuccessfulBuild") or 0),
+                str(v.get("timestamp") or ""),
+            ),
+            reverse=True,
+        )
+        best = entries[0]
+        version = str(best["version"])
+        file_name = str(best.get("file") or f"liteloader-{version}.jar")
+        return f"http://dl.liteloader.com/versions/com/mumfrey/liteloader/{version}/{file_name}"
+    return ""
+
+
+def _loader_installer_file_name(kind: str, mc_version: str, loader_version: str) -> str:
+    """为「另存为」对话框生成默认文件名：项目名-版本.ext，非法字符换 -。"""
+    ver = _safe_filename(loader_version or "latest", "latest")
+    mc = _safe_filename(mc_version or "1.20.1", "1.20.1")
+    names = {
+        "fabric": f"fabric-installer-{ver}.jar",
+        "quilt": f"quilt-installer-{ver}.jar",
+        "forge": f"forge-{mc}-{ver}-installer.jar",
+        "neoforge": f"neoforge-{ver}-installer.jar",
+        "liteloader": f"liteloader-{mc}-{ver}.jar",
+    }
+    return names.get(kind, f"{kind}-installer-{ver}.jar")
 
 
 class LoaderScanWorker(QThread):
@@ -498,6 +711,19 @@ class DownloadPage(QWidget):
         self._client_task_id = ""
         self._client_pause = threading.Event()
         self._pending_client_save: tuple[dict, Path] | None = None
+        self._loader_save_worker: LoaderInstallerSaveWorker | None = None
+        self._loader_save_task_id = ""
+        self._loader_save_pause = threading.Event()
+        self._pending_loader_save: tuple[str, str, str, Path] | None = None
+        self._loader_save_buttons: dict[str, QPushButton] = {}
+        self._loader_version_edited = False
+        self._loader_version_defaults = {
+            "fabric": "0.16.10",
+            "quilt": "0.9.3",
+            "forge": "49.1.0",
+            "neoforge": "20.4.237",
+            "liteloader": "1.12.2-SNAPSHOT",
+        }
         self._installing_mc = ""
         self._installing_kind = ""
         self._updating_table = False
@@ -688,6 +914,52 @@ class DownloadPage(QWidget):
             grid.setColumnStretch(column, 1)
         loaders.body.addLayout(grid)
         content_layout.addWidget(loaders)
+
+        loader_sources = Card(margins=16, spacing=10)
+        sources_title = QLabel("加载器源文件（另存为）")
+        sources_title.setObjectName("CardTitle")
+        loader_sources.body.addWidget(sources_title)
+        sources_note = QLabel(
+            "只下载官方安装器 jar 到指定位置，不安装。版本号可手动修改。"
+        )
+        sources_note.setObjectName("Tiny")
+        sources_note.setWordWrap(True)
+        loader_sources.body.addWidget(sources_note)
+        inputs = QHBoxLayout()
+        inputs.setSpacing(8)
+        mc_caption = QLabel("MC 版本")
+        mc_caption.setObjectName("Muted")
+        inputs.addWidget(mc_caption)
+        self.loader_mc_edit = QLineEdit("1.20.1")
+        self.loader_mc_edit.setFixedWidth(96)
+        inputs.addWidget(self.loader_mc_edit)
+        ver_caption = QLabel("加载器版本")
+        ver_caption.setObjectName("Muted")
+        inputs.addWidget(ver_caption)
+        self.loader_version_edit = QLineEdit("49.1.0")
+        self.loader_version_edit.setFixedWidth(150)
+        inputs.addWidget(self.loader_version_edit)
+        inputs.addStretch(1)
+        loader_sources.body.addLayout(inputs)
+        self.loader_version_edit.textEdited.connect(
+            lambda _text: setattr(self, "_loader_version_edited", True)
+        )
+        for kind in _LOADER_ORDER:
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            label = QLabel(LOADER_LABELS.get(kind, kind))
+            label.setStyleSheet("font-weight: 600;")
+            row.addWidget(label)
+            row.addStretch(1)
+            button = QPushButton("下载源文件")
+            button.setObjectName("Ghost")
+            button.clicked.connect(
+                lambda _checked=False, k=kind: self._save_loader_installer(k)
+            )
+            row.addWidget(button)
+            self._loader_save_buttons[kind] = button
+            loader_sources.body.addLayout(row)
+        content_layout.addWidget(loader_sources)
         content_layout.addStretch(1)
         scroll.setWidget(content)
         left.addWidget(scroll, 1)
@@ -1092,6 +1364,11 @@ class DownloadPage(QWidget):
         self.client_jar_button.setEnabled(
             self._detail_entry is not None and not saving
         )
+        saving_loader = (
+            self._loader_save_worker is not None and self._loader_save_worker.isRunning()
+        )
+        for button in self._loader_save_buttons.values():
+            button.setEnabled(not saving_loader)
 
     # ------------------------------------------------------------------
     # 串行安装
@@ -1208,6 +1485,16 @@ class DownloadPage(QWidget):
     def _on_install_failed(self, message: str) -> None:
         self.progress_box.setVisible(False)
         self.cancel_button.setEnabled(True)
+        worker = self._install_worker
+        if worker is not None and worker.cancel_event.is_set():
+            # 用户取消：不当作安装失败
+            self._append_log("[安装] 已取消。")
+            if getattr(self, "_install_task_id", ""):
+                self.ctx.downloads.finish_cancelled(self._install_task_id, "安装已取消。")
+                self._install_task_id = ""
+            self.cancel_button.setEnabled(True)
+            self.ctx.bus.toast.emit("安装已取消。")
+            return
         self._append_log(f"[安装] 失败：{message}")
         if getattr(self, "_install_task_id", ""):
             self.ctx.downloads.finish(self._install_task_id, False, message)
@@ -1307,7 +1594,10 @@ class DownloadPage(QWidget):
     ) -> None:
         self._append_log(f"[下载] 失败：{message}")
         if task_id:
-            self.ctx.downloads.finish(task_id, False, message)
+            if worker.cancel_event.is_set():
+                self.ctx.downloads.finish_cancelled(task_id, "下载已取消。")
+            else:
+                self.ctx.downloads.finish(task_id, False, message)
         if worker.cancel_event.is_set():
             self.ctx.bus.toast.emit("下载已取消。")
             return
@@ -1319,6 +1609,113 @@ class DownloadPage(QWidget):
             worker.deleteLater()
             return
         self._client_worker = None
+        worker.deleteLater()
+        self._update_install_button()
+
+    # ------------------------------------------------------------------
+    # 加载器源文件下载（另存为）
+    # ------------------------------------------------------------------
+    def _save_loader_installer(self, kind: str) -> None:
+        if self._loader_save_worker is not None and self._loader_save_worker.isRunning():
+            QMessageBox.information(self, APP_NAME, "已有加载器源文件下载任务正在进行，请稍候。")
+            return
+        if not self._loader_version_edited:
+            self.loader_version_edit.setText(self._loader_version_defaults.get(kind, ""))
+        mc = self.loader_mc_edit.text().strip() or "1.20.1"
+        ver = self.loader_version_edit.text().strip()
+        default_name = _loader_installer_file_name(kind, mc, ver)
+        path, _filter = QFileDialog.getSaveFileName(
+            self,
+            f"下载{LOADER_LABELS.get(kind, kind)}安装器",
+            str(_download_dir() / default_name),
+            "Jar 文件 (*.jar);;所有文件 (*)",
+        )
+        if not path:
+            return
+        dest = Path(path)
+        if not dest.suffix:
+            dest = dest.with_suffix(".jar")
+        self._pending_loader_save = (kind, mc, ver, dest)
+        self._loader_save_pause.clear()
+        task = self.ctx.downloads.submit(
+            "纯下载",
+            dest.name,
+            lambda item: self._spawn_loader_save(item.id),
+            cancel=lambda: self._loader_save_worker.cancel() if self._loader_save_worker else None,
+            pause=self._loader_save_pause,
+            rebuild=lambda item: self._spawn_loader_save(item.id),
+            target_dir=str(dest.parent),
+            detail=f"另存为：{dest.name}",
+        )
+        self._loader_save_task_id = task.id
+        self._append_log(f"[下载] 另存为 {dest}")
+        self._update_install_button()
+
+    def _spawn_loader_save(self, task_id: str = "") -> LoaderInstallerSaveWorker:
+        """创建（或重试时重建）加载器安装器下载线程。"""
+        if self._pending_loader_save is None:
+            raise RuntimeError("没有待保存的加载器安装器")
+        kind, mc, ver, dest = self._pending_loader_save
+        worker = LoaderInstallerSaveWorker(kind, mc, ver, dest, self)
+        worker.pause_event = self._loader_save_pause
+        worker.log.connect(self._append_log)
+        worker.log.connect(self.ctx.bus.log.emit)
+        worker.progress.connect(
+            lambda value, speed, detail, tid=task_id: self.ctx.downloads.update(
+                tid, percent=value, status="下载中", detail=detail, speed=speed
+            )
+            if tid
+            else None
+        )
+        worker.done.connect(
+            lambda path, tid=task_id: self._on_loader_save_done(tid, path)
+        )
+        worker.failed.connect(
+            lambda message, tid=task_id, w=worker: self._on_loader_save_failed(
+                tid, message, w
+            )
+        )
+        worker.finished.connect(lambda w=worker: self._on_loader_save_finished(w))
+        self._loader_save_worker = worker
+        if task_id:
+            self._loader_save_task_id = task_id
+        self._update_install_button()
+        return worker
+
+    def _on_loader_save_done(self, task_id: str, path: str) -> None:
+        self._append_log(f"[下载] 文件已保存至：{path}")
+        self.ctx.bus.log.emit(f"[下载] 文件已保存至：{path}")
+        self.ctx.bus.toast.emit(f"文件已保存至：{path}")
+        if task_id:
+            self.ctx.downloads.finish(task_id, True, f"已保存至：{path}")
+
+    def _on_loader_save_failed(
+        self, task_id: str, message: str, worker: LoaderInstallerSaveWorker
+    ) -> None:
+        self._append_log(f"[下载] 失败：{message}")
+        if task_id:
+            if worker.cancel_event.is_set():
+                self.ctx.downloads.finish_cancelled(task_id, "下载已取消。")
+            else:
+                self.ctx.downloads.finish(task_id, False, message)
+        if worker.cancel_event.is_set():
+            self.ctx.bus.toast.emit("下载已取消。")
+            return
+        self.ctx.bus.log.emit(f"[错误] {message}")
+        QMessageBox.warning(
+            self,
+            "下载失败",
+            message
+            + "\n可修改上方的 MC 版本 / 加载器版本后重试。"
+            if "版本" in message
+            else message,
+        )
+
+    def _on_loader_save_finished(self, worker: LoaderInstallerSaveWorker) -> None:
+        if worker is not self._loader_save_worker:
+            worker.deleteLater()
+            return
+        self._loader_save_worker = None
         worker.deleteLater()
         self._update_install_button()
 
@@ -1354,6 +1751,11 @@ class DownloadPage(QWidget):
         if client_worker is not None:
             client_worker.cancel()
             workers.append(client_worker)
+        loader_save_worker = self._loader_save_worker
+        self._loader_save_worker = None
+        if loader_save_worker is not None:
+            loader_save_worker.cancel()
+            workers.append(loader_save_worker)
         for worker in workers:
             wait_thread(worker, 2000)
             if not worker.isRunning():

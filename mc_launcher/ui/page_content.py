@@ -542,6 +542,7 @@ class ContentInstallWorker(QThread):
     log = Signal(str)
     done = Signal(str)
     failed = Signal(str)
+    cancelled = Signal(str)
 
     def __init__(
         self,
@@ -569,6 +570,9 @@ class ContentInstallWorker(QThread):
                 self._install_modpack()
             else:
                 self._install_single()
+        except Cancelled:
+            self.log.emit("[取消] 安装已取消，已下载的文件会保留。")
+            self.cancelled.emit("安装已取消。")
         except ContentError as exc:
             self.failed.emit(str(exc))
         except Exception as exc:  # noqa: BLE001
@@ -588,6 +592,73 @@ class ContentInstallWorker(QThread):
         self._emit(1.0, "安装完成")
         self.log.emit(f"[完成] 已安装 {len(installed)} 个文件到 {self.instance_dir}")
         self.done.emit(f"{self.project.title} 安装完成。")
+
+    def _install_version_with_retry(self, installer: GameInstaller, mc_version: str) -> None:
+        """完整安装基础版本，失败自动重试最多 3 次。"""
+        payload, _name, _cached = self.ctx.sources.get_manifest()
+        entries = payload.get("data", {}).get("versions", [])
+        entry = next((v for v in entries if str(v.get("id")) == mc_version), None)
+        if entry is None:
+            raise ContentError(f"版本清单中找不到 Minecraft {mc_version}。")
+        last_error: Exception | None = None
+        for attempt in range(3):
+            if self.cancel_event.is_set():
+                raise Cancelled()
+            try:
+                installer.install_version(entry)
+                return
+            except Cancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 - 网络抖动自动重试
+                last_error = exc
+                self.log.emit(
+                    f"[整合包] 安装基础版本 {mc_version} 失败（第 {attempt + 1} 次）：{exc}"
+                )
+                if attempt < 2:
+                    time.sleep(1)
+        raise ContentError(f"Minecraft {mc_version} 安装失败（已重试 3 次）：{last_error}")
+
+    def _install_loader_with_retry(
+        self,
+        installer: GameInstaller,
+        target: Path,
+        mc_version: str,
+        loader: str,
+        loader_version: str,
+    ) -> str:
+        """安装加载器，失败自动重试最多 3 次，返回加载器版本 ID。"""
+        self._emit(0.47, f"安装 {loader} 加载器…")
+        java, warning = pick_java(self.ctx.javas, java_for_mc(mc_version))
+        if java is None:
+            raise ContentError(
+                f"整合包需要 Java {java_for_mc(mc_version)}，未找到可用 Java。{warning}"
+            )
+        last_error: Exception | None = None
+        for attempt in range(3):
+            if self.cancel_event.is_set():
+                raise Cancelled()
+            try:
+                version_id = install_loader(
+                    installer,
+                    loader,
+                    mc_version,
+                    loader_version,
+                    java_path=java.path,
+                    log=self.log.emit,
+                    cancel=self.cancel_event,
+                )
+                self.log.emit(f"[整合包] 加载器版本：{version_id}")
+                return version_id
+            except Cancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 - 网络抖动自动重试
+                last_error = exc
+                self.log.emit(
+                    f"[整合包] 安装 {loader} 加载器失败（第 {attempt + 1} 次）：{exc}"
+                )
+                if attempt < 2:
+                    time.sleep(1)
+        raise ContentError(f"{loader} 加载器安装失败（已重试 3 次）：{last_error}")
 
     def _install_modpack(self) -> None:
         self._emit(0.02, "下载整合包…")
@@ -618,39 +689,39 @@ class ContentInstallWorker(QThread):
             pause=self.pause_event,
         )
         if self.cancel_event.is_set():
-            raise ContentError("安装已取消。")
+            raise Cancelled()
 
         mc_version = meta.mc_version
+        # ① 先完整安装 Minecraft 基础版本（失败自动重试最多 3 次）
         version_json = target / "versions" / mc_version / f"{mc_version}.json"
-        if not version_json.exists():
-            self.log.emit(f"[整合包] 安装基础版本 {mc_version}…")
-            payload, _name, _cached = self.ctx.sources.get_manifest()
-            entries = payload.get("data", {}).get("versions", [])
-            entry = next((v for v in entries if str(v.get("id")) == mc_version), None)
-            if entry is None:
-                raise ContentError(f"版本清单中找不到 Minecraft {mc_version}。")
-            installer.install_version(entry)
-        else:
+        if version_json.exists():
             self.log.emit(f"[整合包] 基础版本 {mc_version} 已存在，跳过。")
+        else:
+            self.log.emit(f"[整合包] 安装基础版本 {mc_version}…")
+            self._install_version_with_retry(installer, mc_version)
 
+        # ② 再安装加载器（失败自动重试最多 3 次）
         version_id = mc_version
         if meta.loader:
-            self._emit(0.47, f"安装 {meta.loader} 加载器…")
-            java, warning = pick_java(self.ctx.javas, java_for_mc(mc_version))
-            if java is None:
-                raise ContentError(
-                    f"整合包需要 Java {java_for_mc(mc_version)}，未找到可用 Java。{warning}"
-                )
-            version_id = install_loader(
-                installer,
-                meta.loader,
-                mc_version,
-                meta.loader_version,
-                java_path=java.path,
-                log=self.log.emit,
-                cancel=self.cancel_event,
+            version_id = self._install_loader_with_retry(
+                installer, target, mc_version, meta.loader, meta.loader_version
             )
-            self.log.emit(f"[整合包] 加载器版本：{version_id}")
+
+        # ③ 确认版本 JSON 已生成，失败则回退原版或中止
+        if not (target / "versions" / version_id / f"{version_id}.json").is_file():
+            fallback = target / "versions" / mc_version / f"{mc_version}.json"
+            if fallback.is_file():
+                self.log.emit(
+                    f"[警告] 未找到加载器版本 {version_id} 的 JSON，已回退到原版 {mc_version}。"
+                )
+                version_id = mc_version
+            else:
+                raise ContentError(
+                    f"版本安装失败：Minecraft {mc_version}（或加载器）未生成有效的版本 JSON，"
+                    "为保证启动可用，未写入整合包内容。"
+                )
+
+        # ④ 版本完整安装成功后，才刷入整合包内容（overrides + mods 下载）
         self._emit(0.6, "下载整合包内容…")
         self.ctx.content.install_modpack_files(
             zip_path,
@@ -661,17 +732,6 @@ class ContentInstallWorker(QThread):
             progress=lambda value, detail: self._emit(0.6 + value * 0.35, detail),
             pause=self.pause_event,
         )
-        # 加载器安装完成后必须真的生成了版本 JSON，否则启动必然失败
-        expected = target / "versions" / version_id / f"{version_id}.json"
-        if not expected.is_file() and version_id != mc_version:
-            fallback = target / "versions" / mc_version / f"{mc_version}.json"
-            if fallback.is_file():
-                self.log.emit(
-                    f"[警告] 未找到加载器版本 {version_id} 的 JSON，已回退到原版 {mc_version}。"
-                )
-                version_id = mc_version
-        if not (target / "versions" / version_id / f"{version_id}.json").is_file():
-            raise ContentError("加载器安装失败，未生成有效的版本 JSON")
         instance = self.ctx.config.add_instance(
             meta.name or self.project.title,
             str(target),
@@ -1699,7 +1759,7 @@ class ContentPage(QWidget):
             project.title,
             lambda _task: self._spawn_install(),
             cancel=lambda: (
-                self._install_worker.cancel_event.set if self._install_worker else None
+                self._install_worker.cancel_event.set() if self._install_worker else None
             ),
             pause=self._install_pause,
             rebuild=lambda _task: self._spawn_install(_task.id),
@@ -1729,6 +1789,7 @@ class ContentPage(QWidget):
         )
         worker.done.connect(self._on_install_done)
         worker.failed.connect(self._on_install_failed)
+        worker.cancelled.connect(self._on_install_cancelled)
         self._install_worker = worker
         if task_id:
             self._install_task_id = task_id
@@ -1983,6 +2044,20 @@ class ContentPage(QWidget):
             APP_NAME,
             f"{message}\n\n安装日志已复制到剪贴板，请反馈给开发者。",
         )
+
+    def _on_install_cancelled(self, message: str) -> None:
+        """用户取消安装：只提示已取消，不弹错误框、不复制剪贴板。"""
+        if getattr(self, "_install_task_id", ""):
+            self.ctx.downloads.finish_cancelled(self._install_task_id, message)
+            self._install_task_id = ""
+        for view in self._progress_views:
+            try:
+                view["button"].setEnabled(False)
+            except RuntimeError:
+                continue
+        self._set_progress(0.0, "安装已取消")
+        self.ctx.bus.log.emit(f"[取消] {message}")
+        self.ctx.bus.toast.emit(message)
 
     def _append_install_log(self, message: str) -> None:
         self.ctx.bus.log.emit(message)

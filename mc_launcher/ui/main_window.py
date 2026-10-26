@@ -32,8 +32,10 @@ from .page_content import ContentPage
 from .page_control import ControlPage
 from .page_download import DownloadPage
 from .page_download_center import DownloadCenterPage
+from .page_forbric import ForbricPage
 from .page_modpack import ModpackPage
 from .page_home import HomePage
+from .page_java_center import JavaCenterPage
 from .page_settings import SettingsPage
 from .theme import make_avatar, make_block_icon, make_nav_icon
 
@@ -230,6 +232,9 @@ class MainWindow(QMainWindow):
             ("account", "账号管理"),
             ("control", "版本设置"),
             ("browser", "内置浏览器"),
+            # theme.py 的 make_nav_icon 没有 "forbric" 分支，走默认图标（不要改 theme.py）
+            ("forbric", "Forbric"),
+            ("java", "Java 中心"),
             ("settings", "设置"),
         ]
         for index, (key, text) in enumerate(nav_items):
@@ -286,6 +291,8 @@ class MainWindow(QMainWindow):
         self.accounts_page = AccountsPage(self.ctx, self)
         self.control_page = ControlPage(self.ctx, self)
         self.browser_page = BrowserPage(self.ctx, self)
+        self.forbric_page = ForbricPage(self.ctx, self)
+        self.java_center_page = JavaCenterPage(self.ctx, self)
         self.settings_page = SettingsPage(self.ctx, self)
         for page in (
             self.home_page,
@@ -296,6 +303,8 @@ class MainWindow(QMainWindow):
             self.accounts_page,
             self.control_page,
             self.browser_page,
+            self.forbric_page,
+            self.java_center_page,
             self.settings_page,
         ):
             self.pages.addWidget(page)
@@ -340,7 +349,9 @@ class MainWindow(QMainWindow):
             "control": 6,
             "loader": 1,
             "browser": 7,
-            "settings": 8,
+            "forbric": 8,
+            "java": 9,
+            "settings": 10,
         }
         self.switch_page(mapping.get(name, 0))
 
@@ -371,6 +382,10 @@ class MainWindow(QMainWindow):
             self.accounts_page.refresh()
         elif index == 6:
             self.control_page.refresh()
+        elif index == 8:
+            self.forbric_page.refresh()
+        elif index == 9:
+            self.java_center_page.refresh()
 
     def _open_browser(self, url: str) -> None:
         self.switch_page(7)
@@ -446,6 +461,8 @@ class MainWindow(QMainWindow):
         self.accounts_page.shutdown()
         self.settings_page.shutdown()
         self.browser_page.shutdown()
+        self.forbric_page.shutdown()
+        self.java_center_page.shutdown()
         wait_thread(self._java_worker, 1500)
         self.tray.hide()
         event.accept()

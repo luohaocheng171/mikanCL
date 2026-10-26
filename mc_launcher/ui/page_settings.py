@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QThread, QUrl, Qt, Signal
@@ -41,7 +43,7 @@ from ..config import (
 )
 from ..context import AppContext, wait_thread
 from ..java import detect_java_installed, download_java
-from ..net import apply_proxy, test_source
+from ..net import Cancelled, apply_proxy, test_source
 from .widgets import Card, card_title_row, page_header
 
 
@@ -60,20 +62,56 @@ class TestSourceWorker(QThread):
 class JavaDownloadWorker(QThread):
     done = Signal(object)
     failed = Signal(str)
+    progress = Signal(float, float)  # 0~1 进度, 字节/秒
 
-    def __init__(self, major: int, dest_root: Path, parent=None):
+    def __init__(
+        self,
+        major: int,
+        dest_root: Path,
+        task_id: str = "",
+        cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.major = int(major)
         self.dest_root = Path(dest_root)
+        self.task_id = task_id
+        self.cancel_event = cancel_event or threading.Event()
+        self.pause_event = pause_event or threading.Event()
 
     def run(self) -> None:
+        state = {"total": 0, "bytes": 0, "last_t": time.time(), "last_b": 0}
+
+        def on_total(total: int) -> None:
+            state["total"] = int(total)
+
+        def on_bytes(n: int) -> None:
+            # 限频上报进度与速度，避免高频刷新下载中心表格
+            state["bytes"] += n
+            now = time.time()
+            if now - state["last_t"] < 0.25:
+                return
+            dt = now - state["last_t"]
+            speed = (state["bytes"] - state["last_b"]) / dt if dt > 0 else 0.0
+            state["last_t"], state["last_b"] = now, state["bytes"]
+            total = state["total"]
+            percent = min(1.0, state["bytes"] / total) if total else 0.0
+            self.progress.emit(percent, speed)
+
         try:
             info = download_java(
                 self.major,
                 self.dest_root,
                 log=lambda text: None,
+                on_bytes=on_bytes,
+                cancel=self.cancel_event,
+                pause=self.pause_event,
+                on_total=on_total,
             )
             self.done.emit(info)
+        except Cancelled:
+            pass  # 已由下载中心标记为取消
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
 
@@ -551,6 +589,10 @@ class SettingsPage(QWidget):
         self.java_download_button = QPushButton("下载 Java…")
         self.java_download_button.clicked.connect(self._download_java)
         top.addWidget(self.java_download_button)
+        java_center = QPushButton("Java 中心")
+        java_center.setObjectName("Ghost")
+        java_center.clicked.connect(self._open_java_center)
+        top.addWidget(java_center)
         card.body.addLayout(top)
 
         self.java_table = QTableWidget(0, 3)
@@ -1039,8 +1081,11 @@ class SettingsPage(QWidget):
             self.java_path_edit.setText(path)
             self._on_java_path_changed()
 
+    def _java_task_active(self) -> bool:
+        return any(t.kind == "Java" and t.active for t in self.ctx.downloads.tasks())
+
     def _download_java(self) -> None:
-        if self._java_download_worker is not None and self._java_download_worker.isRunning():
+        if self._java_task_active():
             self.ctx.bus.toast.emit("已有 Java 下载任务在进行中。")
             return
         major, ok = QInputDialog.getInt(
@@ -1048,16 +1093,42 @@ class SettingsPage(QWidget):
         )
         if not ok:
             return
+        cancel_event = threading.Event()
+        pause_event = threading.Event()
+
+        def factory(_task) -> QThread:
+            worker = JavaDownloadWorker(
+                major, DATA_DIR / "runtime", _task.id, cancel_event, pause_event, self
+            )
+            worker.progress.connect(
+                lambda p, s, tid=_task.id: self.ctx.downloads.update(
+                    tid, percent=p, speed=s
+                )
+            )
+            worker.done.connect(self._on_java_downloaded)
+            worker.failed.connect(
+                lambda msg, tid=_task.id: self._on_java_download_failed(tid, msg)
+            )
+            worker.finished.connect(self._restore_java_button)
+            self._java_download_worker = worker
+            return worker
+
+        self.ctx.downloads.submit(
+            kind="Java",
+            name=f"Java {major}",
+            factory=factory,
+            cancel=cancel_event.set,
+            pause=pause_event,
+            rebuild=factory,
+            target_dir=str(DATA_DIR / "runtime"),
+            detail=f"Adoptium JRE · Java {major}",
+        )
         self.java_download_button.setEnabled(False)
         self.java_download_button.setText("下载中…")
-        self.ctx.bus.toast.emit(f"正在从 Adoptium 下载 Java {major}…")
-        self._java_download_worker = JavaDownloadWorker(major, DATA_DIR / "runtime", self)
-        self._java_download_worker.done.connect(self._on_java_downloaded)
-        self._java_download_worker.failed.connect(self._on_java_download_failed)
-        self._java_download_worker.finished.connect(self._restore_java_button)
-        self._java_download_worker.start()
+        self.ctx.bus.toast.emit(f"已加入下载中心：Java {major}（Adoptium）")
 
     def _restore_java_button(self) -> None:
+        self._java_download_worker = None
         self.java_download_button.setEnabled(True)
         self.java_download_button.setText("下载 Java…")
 
@@ -1069,8 +1140,23 @@ class SettingsPage(QWidget):
         self.ctx.bus.toast.emit(f"Java 已就绪：{getattr(info, 'version', '')}")
         self._rebuild_java_table()
 
-    def _on_java_download_failed(self, message: str) -> None:
+    def _on_java_download_failed(self, task_id: str, message: str) -> None:
+        self.ctx.downloads.finish(task_id, ok=False, message=message)
         QMessageBox.warning(self, APP_NAME_CN, f"Java 下载失败：{message}")
+
+    def _open_java_center(self) -> None:
+        """以对话框形式打开 Java 中心，关闭时回收其后台 worker。"""
+        from .page_java_center import JavaCenterPage
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Java 中心")
+        dialog.resize(900, 540)
+        page = JavaCenterPage(self.ctx, dialog)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(page)
+        dialog.finished.connect(page.shutdown)
+        dialog.exec()
 
     def _rescan_java(self) -> None:
         if self._rescan_worker is not None and self._rescan_worker.isRunning():

@@ -6,16 +6,18 @@ import json
 import re
 import shutil
 import threading
+import time
 import traceback
 import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QStandardPaths, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -35,6 +37,7 @@ from ..installer import GameInstaller
 from ..java import pick_java
 from ..launcher import prepare_isolated_dir
 from ..modloader import install_loader, java_for_mc
+from ..net import Cancelled
 from .widgets import Badge, Card
 
 KIND_LABELS = {
@@ -244,6 +247,7 @@ class ModpackDropWorker(QThread):
     log = Signal(str)
     done = Signal(str)
     failed = Signal(str)
+    cancelled = Signal(str)
 
     def __init__(self, ctx: AppContext, path: Path, parent=None):
         super().__init__(parent)
@@ -252,6 +256,11 @@ class ModpackDropWorker(QThread):
         self.cancel_event = threading.Event()
         self.pause_event = threading.Event()
         self.failure_detail = ""
+
+    def _cancelled(self) -> None:
+        """用户取消：保留已下载文件，不当作失败处理。"""
+        self.log.emit("[取消] 导入已取消，已下载的文件会保留，稍后重新导入可继续。")
+        self.cancelled.emit("整合包导入已取消。")
 
     def _emit(self, value: float, detail: str = "") -> None:
         self.progress.emit(max(0.0, min(1.0, value)), detail)
@@ -291,6 +300,38 @@ class ModpackDropWorker(QThread):
             pause=self.pause_event,
         )
 
+    def _install_version_with_retry(
+        self, installer: GameInstaller, mc_version: str, strict: bool = True
+    ) -> bool:
+        """完整安装基础版本，失败自动重试最多 3 次。
+
+        版本清单中找不到时：strict=True 抛错，strict=False 返回 False 由调用方决定。
+        """
+        payload, _name, _cached = self.ctx.sources.get_manifest()
+        entries = payload.get("data", {}).get("versions", [])
+        entry = next((v for v in entries if str(v.get("id")) == mc_version), None)
+        if entry is None:
+            if not strict:
+                return False
+            raise ContentError(f"版本清单中找不到 Minecraft {mc_version}。")
+        last_error: Exception | None = None
+        for attempt in range(3):
+            if self.cancel_event.is_set():
+                raise Cancelled()
+            try:
+                installer.install_version(entry)
+                return True
+            except Cancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 - 网络抖动自动重试
+                last_error = exc
+                self.log.emit(
+                    f"[整合包] 安装基础版本 {mc_version} 失败（第 {attempt + 1} 次）：{exc}"
+                )
+                if attempt < 2:
+                    time.sleep(1)
+        raise ContentError(f"Minecraft {mc_version} 安装失败（已重试 3 次）：{last_error}")
+
     def _install_loader_if_needed(
         self,
         installer: GameInstaller,
@@ -310,15 +351,30 @@ class ModpackDropWorker(QThread):
             raise ContentError(
                 f"整合包需要 Java {java_for_mc(mc_version)}，未找到可用 Java。{warning}"
             )
-        return install_loader(
-            installer,
-            loader,
-            mc_version,
-            loader_version,
-            java_path=java.path,
-            log=self.log.emit,
-            cancel=self.cancel_event,
-        )
+        last_error: Exception | None = None
+        for attempt in range(3):
+            if self.cancel_event.is_set():
+                raise Cancelled()
+            try:
+                return install_loader(
+                    installer,
+                    loader,
+                    mc_version,
+                    loader_version,
+                    java_path=java.path,
+                    log=self.log.emit,
+                    cancel=self.cancel_event,
+                )
+            except Cancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 - 网络抖动自动重试
+                last_error = exc
+                self.log.emit(
+                    f"[整合包] 安装 {loader} 加载器失败（第 {attempt + 1} 次）：{exc}"
+                )
+                if attempt < 2:
+                    time.sleep(1)
+        raise ContentError(f"{loader} 加载器安装失败（已重试 3 次）：{last_error}")
 
     def run(self) -> None:
         manifest = self._read_manifest()
@@ -351,18 +407,34 @@ class ModpackDropWorker(QThread):
         installer = self._make_installer(target, 0.05, 0.4)
         try:
             mc_version = meta.mc_version
+            # ① 先完整安装 Minecraft 基础版本（失败自动重试最多 3 次）
             version_json = target / "versions" / mc_version / f"{mc_version}.json"
-            if not version_json.exists():
+            if version_json.exists():
+                self.log.emit(f"[整合包] 基础版本 {mc_version} 已存在，跳过。")
+            else:
                 self.log.emit(f"[整合包] 安装基础版本 {mc_version}…")
-                payload, _name, _cached = self.ctx.sources.get_manifest()
-                entries = payload.get("data", {}).get("versions", [])
-                entry = next((v for v in entries if str(v.get("id")) == mc_version), None)
-                if entry is None:
-                    raise ContentError(f"版本清单中找不到 Minecraft {mc_version}。")
-                installer.install_version(entry)
+                self._install_version_with_retry(installer, mc_version)
+
+            # ② 再安装加载器（失败自动重试最多 3 次）
             version_id = self._install_loader_if_needed(
                 installer, target, mc_version, meta.loader, meta.loader_version, mc_version
             )
+
+            # ③ 确认版本 JSON 已生成，失败则回退原版或中止
+            if not (target / "versions" / version_id / f"{version_id}.json").is_file():
+                fallback = target / "versions" / mc_version / f"{mc_version}.json"
+                if fallback.is_file():
+                    self.log.emit(
+                        f"[警告] 未找到加载器版本 {version_id} 的 JSON，已回退到原版 {mc_version}。"
+                    )
+                    version_id = mc_version
+                else:
+                    raise ContentError(
+                        f"版本安装失败：Minecraft {mc_version}（或加载器）未生成有效的版本 JSON，"
+                        "为保证启动可用，未写入整合包内容。"
+                    )
+
+            # ④ 版本完整安装成功后，才刷入整合包内容（overrides + mods 下载）
             self._emit(0.6, "下载整合包内容…")
             self.ctx.content.install_modpack_files(
                 self.path,
@@ -388,6 +460,8 @@ class ModpackDropWorker(QThread):
             self.ctx.bus.instances_changed.emit()
             self._emit(1.0, "整合包导入完成")
             self.done.emit(f"整合包「{instance.name}」已导入并切换为当前实例。")
+        except Cancelled:
+            self._cancelled()
         except ContentError as exc:
             self._fail(str(exc), exc)
         except Exception as exc:  # noqa: BLE001
@@ -446,16 +520,11 @@ class ModpackDropWorker(QThread):
                 self._emit(0.35, f"检查原版 {mc_version}…")
                 installer = self._make_installer(target, 0.35, 0.55)
                 if not (target / "versions" / mc_version / f"{mc_version}.json").is_file():
-                    payload, _name, _cached = self.ctx.sources.get_manifest()
-                    entries = payload.get("data", {}).get("versions", [])
-                    entry = next((v for v in entries if str(v.get("id")) == mc_version), None)
-                    if entry is None:
+                    if not self._install_version_with_retry(installer, mc_version, strict=False):
                         self.log.emit(
                             f"[警告] 版本清单中找不到 Minecraft {mc_version}，请稍后手动安装该版本。"
                         )
                         version_id = ""
-                    else:
-                        installer.install_version(entry)
             else:
                 self.log.emit("[警告] 未能从文件推断 Minecraft 版本，请稍后手动补装版本。")
             instance = self.ctx.config.add_instance(
@@ -474,6 +543,8 @@ class ModpackDropWorker(QThread):
                 f"直装包「{instance.name}」已导入并切换为当前实例"
                 + (f"（版本 {version_id}）" if version_id else "，请手动选择或安装游戏版本。")
             )
+        except Cancelled:
+            self._cancelled()
         except ContentError as exc:
             self._fail(str(exc), exc)
         except Exception as exc:  # noqa: BLE001
@@ -506,15 +577,22 @@ class ModpackDropWorker(QThread):
             installer = self._make_installer(target, 0.2, 0.35)
             if not (target / "versions" / mc_version / f"{mc_version}.json").is_file():
                 self.log.emit(f"[恢复] 安装基础版本 {mc_version}…")
-                payload, _n, _c = self.ctx.sources.get_manifest()
-                entries = payload.get("data", {}).get("versions", [])
-                entry = next((v for v in entries if str(v.get("id")) == mc_version), None)
-                if entry is None:
-                    raise ContentError(f"版本清单中找不到 Minecraft {mc_version}。")
-                installer.install_version(entry)
+                self._install_version_with_retry(installer, mc_version)
             version_id = self._install_loader_if_needed(
                 installer, target, mc_version, loader, loader_version, version_id
             )
+            # 恢复时也先确认版本 JSON 已生成，再继续后续步骤
+            if not (target / "versions" / version_id / f"{version_id}.json").is_file():
+                fallback = target / "versions" / mc_version / f"{mc_version}.json"
+                if fallback.is_file():
+                    self.log.emit(
+                        f"[警告] 未找到加载器版本 {version_id} 的 JSON，已回退到原版 {mc_version}。"
+                    )
+                    version_id = mc_version
+                else:
+                    raise ContentError(
+                        f"版本恢复失败：Minecraft {mc_version}（或加载器）未生成有效的版本 JSON。"
+                    )
             instance = self.ctx.config.add_instance(
                 name,
                 str(target),
@@ -533,6 +611,8 @@ class ModpackDropWorker(QThread):
             self.ctx.bus.instances_changed.emit()
             self._emit(1.0, "实例恢复完成")
             self.done.emit(f"实例「{instance.name}」已恢复并切换为当前实例。")
+        except Cancelled:
+            self._cancelled()
         except ContentError as exc:
             self._fail(str(exc), exc)
         except Exception as exc:  # noqa: BLE001
@@ -654,6 +734,14 @@ def handle_dropped_paths(parent, ctx: AppContext, paths: list[Path]) -> None:
         if ok:
             ctx.bus.log.emit(f"[导入] {message}")
             ctx.bus.toast.emit(message)
+            # 整合包源文件是缓存 zip/mrpack 时，提供「导出整合包源文件…」入口
+            if isinstance(worker, ModpackDropWorker):
+                suffix = Path(worker.path).suffix.lower()
+                if suffix in (".zip", ".mrpack", ".mikan"):
+                    QTimer.singleShot(
+                        0,
+                        lambda w=worker, m=message: _offer_modpack_export(parent, ctx, w.path, m),
+                    )
         else:
             detail = str(getattr(worker, "failure_detail", "") or "")
             copy_failure_log(message, detail)
@@ -662,6 +750,16 @@ def handle_dropped_paths(parent, ctx: AppContext, paths: list[Path]) -> None:
                 "导入失败",
                 f"{message}\n\n日志已复制到剪贴板，请反馈给开发者。",
             )
+        remaining[0] -= 1
+        if remaining[0] <= 0:
+            ctx.bus.toast.emit("拖入内容已全部处理完成。")
+
+    def cancelled(task_id: str, message: str) -> None:
+        """取消不是失败：不写错误日志、不复制剪贴板、不弹错误框。"""
+        if task_id:
+            ctx.downloads.finish_cancelled(task_id, message)
+        ctx.bus.log.emit(f"[导入] {message}")
+        ctx.bus.toast.emit(message)
         remaining[0] -= 1
         if remaining[0] <= 0:
             ctx.bus.toast.emit("拖入内容已全部处理完成。")
@@ -681,6 +779,10 @@ def handle_dropped_paths(parent, ctx: AppContext, paths: list[Path]) -> None:
         worker.failed.connect(
             lambda message, tid=task_id, w=worker: finish(w, tid, message, False)
         )
+        if isinstance(worker, ModpackDropWorker):
+            worker.cancelled.connect(
+                lambda message, tid=task_id: cancelled(tid, message)
+            )
 
     fallback_dir = str(Path(str(target.get("game_dir") or ctx.config.game_path)))
 
@@ -732,3 +834,126 @@ def handle_dropped_paths(parent, ctx: AppContext, paths: list[Path]) -> None:
             rebuild=make_file,
             target_dir=fallback_dir,
         )
+
+
+# ---------------------------------------------------------------------------
+# 整合包源文件另存为（导出缓存 zip/mrpack 到用户指定位置）
+# ---------------------------------------------------------------------------
+def _download_dir() -> Path:
+    """返回系统下载目录。"""
+    try:
+        locations = QStandardPaths.standardLocations(QStandardPaths.DownloadLocation)
+        if locations:
+            return Path(locations[0])
+    except Exception:
+        pass
+    return Path.home() / "Downloads"
+
+
+def _offer_modpack_export(parent, ctx: AppContext, source_path: Path, message: str) -> None:
+    """导入完成后弹窗询问是否导出整合包源文件。"""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Information)
+    box.setWindowTitle("导入完成")
+    box.setText(message)
+    box.setInformativeText("是否把原始整合包文件另存到其他位置？例如桌面或网盘同步目录。")
+    export_button = box.addButton("导出整合包源文件…", QMessageBox.ActionRole)
+    box.addButton("关闭", QMessageBox.RejectRole)
+    box.exec()
+    if box.clickedButton() is export_button:
+        _export_modpack_source(parent, ctx, source_path)
+
+
+def _export_modpack_source(parent, ctx: AppContext, source_path: Path) -> None:
+    """把整合包缓存文件复制到用户所选位置；大于 50MB 用后台线程。"""
+    source_path = Path(source_path)
+    if not source_path.is_file():
+        QMessageBox.warning(parent, "导出失败", f"找不到整合包缓存文件：{source_path}")
+        return
+    suffix = source_path.suffix or ".zip"
+    stem = re.sub(r'[\\/:*?"<>|\s]+', "-", source_path.stem).strip(".-") or "modpack"
+    path, _filter = QFileDialog.getSaveFileName(
+        parent,
+        "导出整合包源文件",
+        str(_download_dir() / f"{stem}{suffix}"),
+        f"整合包文件 (*{suffix});;所有文件 (*)",
+    )
+    if not path:
+        return
+    dest = Path(path)
+    if not dest.suffix:
+        dest = dest.with_suffix(suffix)
+    try:
+        if dest.resolve() == source_path.resolve():
+            ctx.bus.toast.emit("目标与缓存文件相同，无需复制。")
+            return
+        size = source_path.stat().st_size
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        QMessageBox.warning(parent, "导出失败", f"无法读取整合包缓存：{exc}")
+        return
+    if size <= 50 * 1024 * 1024:
+        try:
+            shutil.copy2(source_path, dest)
+        except Exception as exc:
+            QMessageBox.warning(parent, "导出失败", f"导出失败：{exc}")
+            return
+        ctx.bus.log.emit(f"[整合包] 源文件已导出至 {dest}")
+        ctx.bus.toast.emit(f"文件已保存至：{dest}")
+        return
+    # 大于 50MB 用后台线程复制，登记到下载中心
+    _start_modpack_copy(ctx, source_path, dest)
+
+
+def _start_modpack_copy(ctx: AppContext, source_path: Path, dest: Path) -> None:
+    """后台线程复制大文件，进度登记到下载中心。"""
+    from .page_content import CopyFileWorker
+
+    pause = threading.Event()
+    holder: dict[str, CopyFileWorker] = {}
+
+    def make(item) -> CopyFileWorker:
+        worker = CopyFileWorker(source_path, dest, pause, None)
+        holder["worker"] = worker
+        worker.progress.connect(
+            lambda value, speed, detail, tid=item.id: ctx.downloads.update(
+                tid, percent=value, status="复制中", detail=detail, speed=speed
+            )
+        )
+        worker.done.connect(
+            lambda path, tid=item.id: _on_modpack_copy_done(ctx, tid, path)
+        )
+        worker.failed.connect(
+            lambda message, tid=item.id: _on_modpack_copy_failed(ctx, tid, message)
+        )
+        worker.finished.connect(worker.deleteLater)
+        return worker
+
+    def cancel() -> None:
+        worker = holder.get("worker")
+        if worker is not None:
+            worker.cancel_event.set()
+
+    ctx.downloads.submit(
+        "纯下载",
+        dest.name,
+        make,
+        cancel=cancel,
+        pause=pause,
+        rebuild=make,
+        target_dir=str(dest.parent),
+        detail=f"另存为：{dest.name}",
+    )
+
+
+def _on_modpack_copy_done(ctx: AppContext, task_id: str, path: str) -> None:
+    ctx.bus.log.emit(f"[整合包] 源文件已导出至 {path}")
+    ctx.bus.toast.emit(f"文件已保存至：{path}")
+    if task_id:
+        ctx.downloads.finish(task_id, True, f"已保存至：{path}")
+
+
+def _on_modpack_copy_failed(ctx: AppContext, task_id: str, message: str) -> None:
+    if task_id:
+        ctx.downloads.finish(task_id, False, message)
+    ctx.bus.log.emit(f"[错误] 导出失败：{message}")

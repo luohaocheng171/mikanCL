@@ -413,8 +413,22 @@ class Http:
 
         tmp = dest.with_name(dest.name + ".part")
         errors: list[str] = []
+
+        def retry_sleep(seconds: float = 1.0) -> None:
+            """重试前等待 1 秒；等待期间被取消立即抛出，暂停中则继续等待。"""
+            deadline = time.monotonic() + seconds
+            while True:
+                if cancel is not None and cancel.is_set():
+                    raise Cancelled()
+                if pause is not None and pause.is_set():
+                    time.sleep(0.2)
+                    continue
+                if time.monotonic() >= deadline:
+                    return
+                time.sleep(0.1)
+
         for candidate in candidates:
-            for attempt in range(2):
+            for attempt in range(3):  # 连接被中止/超时最多重试 3 次
                 wait_if_paused()
                 if cancel is not None and cancel.is_set():
                     raise Cancelled()
@@ -452,15 +466,26 @@ class Http:
                     os.replace(tmp, dest)
                     return dest.stat().st_size
                 except Cancelled:
-                    tmp.unlink(missing_ok=True)
+                    # 取消时保留 .part：重新下载可走 Range 断点续传
                     raise
                 except Exception as exc:  # noqa: BLE001
                     # 校验/长度错误说明已下载内容不可信，删除 .part；网络中断则保留以便续传
-                    if "SHA1" in str(exc) or "长度不符" in str(exc):
+                    text = str(exc)
+                    if "SHA1" in text or "长度不符" in text:
                         tmp.unlink(missing_ok=True)
                     errors.append(f"{candidate.source_name} {candidate.url}: {exc}")
-                    if attempt == 0:
-                        time.sleep(0.4)
+                    retryable = (
+                        isinstance(exc, (urllib.error.URLError, ConnectionError))
+                        or "10053" in text
+                        or "10054" in text
+                        or "timed out" in text.lower()
+                        or "aborted" in text.lower()
+                        or "reset" in text.lower()
+                        or "connection" in text.lower()
+                    )
+                    if not retryable or attempt >= 2:
+                        break  # 非连接类错误不重试；连接类最多 3 次
+                    retry_sleep(1.0)
         raise DownloadError(f"下载失败：{dest.name}\n" + "\n".join(errors[-4:]))
 
     def download_to_path(

@@ -21,6 +21,7 @@ from PySide6.QtGui import (
     QTextCharFormat,
 )
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMenu,
     QMessageBox,
     QProgressBar,
@@ -64,6 +66,151 @@ from ..net import Cancelled, Http
 from ..version import InstalledVersion, VersionError, load_version, scan_installed_versions
 from .theme import make_avatar
 from .widgets import Badge, Card, page_header
+
+
+def _total_physical_memory_mb() -> int:
+    """读取物理内存总量（MB）；非 Windows 或失败返回 0。"""
+    if os.name != "nt":
+        return 0
+    try:
+        import ctypes
+
+        class _MemoryStatusEx(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        stat = _MemoryStatusEx()
+        stat.dwLength = ctypes.sizeof(_MemoryStatusEx)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+            return int(stat.ullTotalPhys // (1024 * 1024))
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
+
+def _integrated_gpu_name() -> str:
+    """从注册表读取显卡描述；含集成显卡字样（Intel / AMD APU / 集成）时返回名称，否则空串。"""
+    if os.name != "nt":
+        return ""
+    try:
+        import winreg  # type: ignore
+    except ImportError:
+        return ""
+    keywords = ("集成", "intel", "uhd graphics", "iris", "radeon(tm) graphics", "amd radeon graphics")
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Video") as root:
+            count, _, _ = winreg.QueryInfoKey(root)
+            for i in range(count):
+                sub = winreg.EnumKey(root, i)
+                try:
+                    with winreg.OpenKey(root, sub) as key:
+                        try:
+                            name, _ = winreg.QueryValueEx(key, "Device Description")
+                        except OSError:
+                            try:
+                                name, _ = winreg.QueryValueEx(key, "DriverDesc")
+                            except OSError:
+                                continue
+                        lowered = str(name).lower()
+                        if any(k in lowered for k in keywords):
+                            return str(name)
+                except OSError:
+                    continue
+    except OSError:
+        return ""
+    return ""
+
+
+def _scan_mod_conflicts(game_dir: Path) -> list[str]:
+    """防御式调用 content 的 Mod 冲突检测；返回冲突详情列表，空表示无冲突。"""
+    try:
+        from ..content import detect_mod_conflicts, scan_mod_metadata
+    except ImportError:
+        return []
+    mods_dir = Path(game_dir) / "mods"
+    if not mods_dir.is_dir():
+        return []
+    try:
+        metadata = scan_mod_metadata(mods_dir)
+        return [str(c.get("detail") or c.get("modid") or c.get("type") or "") for c in detect_mod_conflicts(metadata)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _preflight(
+    ctx: AppContext,
+    version_id: str,
+    game_dir: Path,
+    memory_mb: int,
+    log: Callable[[str], None],
+) -> dict:
+    """启动前 checklist 预检。返回 {"blocked": [...], "warnings": [...], "mod_conflicts": [...]}。
+
+    blocked 为红标阻止项（由页面弹框让用户选择是否继续）；warnings 为黄标警告仅提示。
+    """
+    blocked: list[str] = []
+    warnings: list[str] = []
+    log("[预检] 开始启动前检查…")
+
+    # 1) 内存 ≤ 物理内存 70%（仅警告）
+    total_mb = _total_physical_memory_mb()
+    used_mb = int(memory_mb or 0)
+    if total_mb > 0:
+        if used_mb > int(total_mb * 0.7):
+            msg = f"[预检][警告] 分配内存 {used_mb} MB 超过物理内存 70%（共 {total_mb} MB），可能出现内存不足或卡顿。"
+            warnings.append(msg)
+            log(msg)
+        else:
+            log(f"[预检] 内存分配 {used_mb} MB，物理内存 {total_mb} MB（未超 70%）。")
+    else:
+        log("[预检] 无法读取物理内存信息，跳过内存检查。")
+
+    # 2) 磁盘剩余 > 2GB（阻止）
+    try:
+        usage = shutil.disk_usage(game_dir)
+        free_gb = usage.free / (1024**3)
+        if free_gb <= 2.0:
+            msg = f"[预检][阻止] 磁盘剩余空间不足：仅剩 {free_gb:.1f} GB（需大于 2 GB）。"
+            blocked.append(msg)
+            log(msg)
+        else:
+            log(f"[预检] 磁盘剩余 {free_gb:.1f} GB（OK）。")
+    except OSError as exc:
+        log(f"[预检] 无法读取磁盘空间：{exc}")
+
+    # 3) Mods 冲突（阻止）
+    mod_conflicts = _scan_mod_conflicts(game_dir)
+    if mod_conflicts:
+        msg = f"[预检][阻止] 检测到 {len(mod_conflicts)} 个 Mod 冲突：\n" + "\n".join(
+            f"  - {text}" for text in mod_conflicts[:3]
+        )
+        blocked.append(msg)
+        log(msg)
+    else:
+        log("[预检] Mod 冲突检查通过。")
+
+    # 4) 显卡：集成显卡 + 开启光影（仅警告；读不到就跳过）
+    shader_dir = Path(game_dir) / "shaderpacks"
+    has_shaders = shader_dir.is_dir() and any(shader_dir.iterdir())
+    gpu_name = _integrated_gpu_name()
+    if gpu_name and has_shaders:
+        msg = f"[预检][警告] 检测到集成显卡（{gpu_name}）且已启用光影包，游戏性能可能不足。"
+        warnings.append(msg)
+        log(msg)
+    elif gpu_name:
+        log(f"[预检] 显卡：{gpu_name}")
+
+    log(f"[预检] 检查完成：{len(warnings)} 项警告，{len(blocked)} 项阻止。")
+    return {"blocked": blocked, "warnings": warnings, "mod_conflicts": mod_conflicts}
 
 
 class VersionRow(QFrame):
@@ -388,6 +535,7 @@ class LaunchWorker(QThread):
     log = Signal(str)
     started = Signal(object)
     failed = Signal(str)
+    preflight_blocked = Signal(list)  # 预检阻止项列表，由页面弹框决定是否继续
 
     def __init__(
         self,
@@ -421,6 +569,20 @@ class LaunchWorker(QThread):
         self.session = None
 
     def run(self) -> None:  # noqa: D401
+        # ---- 启动前 checklist 预检：日志输出全部检查项；阻止项由页面弹框决定 ----
+        root_dir = Path(self.game_dir or self.ctx.config.game_path)
+        preflight = _preflight(
+            self.ctx, self.version_id, root_dir, int(self.memory_mb), self.log.emit
+        )
+        if preflight["blocked"]:
+            self._preflight_wait = threading.Event()
+            self._preflight_continue = False
+            self.preflight_blocked.emit(preflight["blocked"])
+            if not self._preflight_wait.wait(120):
+                self.log.emit("[预检] 等待用户确认超时，已中止启动。")
+                return
+            if not self._preflight_continue:
+                return
         try:
             cfg = self.ctx.config
             root_dir = Path(self.game_dir or cfg.game_path)
@@ -623,6 +785,10 @@ class HomePage(QWidget):
         self._required_java = 21
         self._worker: LaunchWorker | None = None
         self._session = None
+        self._launch_queue: list[str] = []
+        self._queue_running = False
+        self._queue_stop = False
+        self._queue_total = 0
         self._server_ping: ServerPingWorker | None = None
         self._server_ping_cache: dict[str, tuple[float, int, str]] = {}
         self._log_lines: list[str] = []
@@ -826,6 +992,15 @@ class HomePage(QWidget):
         refresh_button.setObjectName("Ghost")
         refresh_button.clicked.connect(self.refresh_versions)
         versions_head.addWidget(refresh_button)
+        self.queue_launch_button = QPushButton("多选启动")
+        self.queue_launch_button.setObjectName("Ghost")
+        self.queue_launch_button.clicked.connect(self._open_queue_dialog)
+        versions_head.addWidget(self.queue_launch_button)
+        self.queue_stop_button = QPushButton("停止队列")
+        self.queue_stop_button.setObjectName("Ghost")
+        self.queue_stop_button.setVisible(False)
+        self.queue_stop_button.clicked.connect(self._stop_queue)
+        versions_head.addWidget(self.queue_stop_button)
         download_button = QPushButton("安装新版本")
         download_button.clicked.connect(lambda: self.ctx.bus.navigate.emit("download"))
         versions_head.addWidget(download_button)
@@ -1272,6 +1447,9 @@ class HomePage(QWidget):
         self._start_launch()
 
     def _on_launch_clicked(self) -> None:
+        if self._queue_running:
+            self.ctx.bus.toast.emit("多选启动队列进行中，请先点击“停止队列”。")
+            return
         if self._session is not None:
             if self._session.process.poll() is None:
                 self._append_log("[启动] 正在停止游戏…")
@@ -1363,6 +1541,7 @@ class HomePage(QWidget):
         self._worker.started.connect(self._on_started)
         self._worker.failed.connect(self._on_failed)
         self._worker.finished.connect(self._on_worker_finished)
+        self._worker.preflight_blocked.connect(self._on_preflight_blocked)
         self._append_log(f"[启动] 准备启动 {version_id}，Java：{java.path}")
         self._worker.start()
 
@@ -1428,6 +1607,9 @@ class HomePage(QWidget):
     def _on_failed(self, message: str) -> None:
         self._append_log(f"[错误] {message}")
         self._reset_launch_ui()
+        if self._queue_running:
+            self._append_log("[多选启动] 当前版本启动失败，继续队列中的下一个。")
+            return  # 队列模式只记录，不弹框打断
         QMessageBox.critical(self, "启动失败", message)
 
     def _on_exited(self, code: int, tail: str) -> None:
@@ -1442,6 +1624,14 @@ class HomePage(QWidget):
         self._worker = None
         if worker is not None:
             worker.deleteLater()
+        if self._launch_queue:
+            # 队列模式：只记录异常，不弹框打断，自动推进下一个
+            if code != 0:
+                self._append_log(
+                    f"[多选启动] {self._selected_id} 异常退出（代码 {code}），继续下一个。"
+                )
+            QTimer.singleShot(0, self._maybe_advance_queue)
+            return
         if code != 0:
             if session is not None:
                 archived = archive_crash_log(session, code)
@@ -1472,6 +1662,133 @@ class HomePage(QWidget):
             worker = self._worker
             self._worker = None
             worker.deleteLater()
+        # 队列模式：worker 结束但游戏未启动（预检中止 / 启动失败）时推进队列
+        if self._queue_running and self._launch_queue and self._session is None:
+            QTimer.singleShot(0, self._maybe_advance_queue)
+
+    def _on_preflight_blocked(self, blocked: list) -> None:
+        """预检阻止项：弹框让用户选择仍要启动 / 中止。"""
+        worker = self._worker
+        if worker is None:
+            return
+        answer = QMessageBox.warning(
+            self,
+            "启动前预检未通过",
+            "\n".join(str(line) for line in blocked) + "\n\n仍要启动吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        worker._preflight_continue = answer == QMessageBox.Yes
+        worker._preflight_wait.set()
+        if not worker._preflight_continue:
+            self._append_log("[预检] 用户选择不启动，已中止。")
+            self._reset_launch_ui()
+
+    # ------------------------------------------------------------------
+    # 多选启动队列
+    # ------------------------------------------------------------------
+    def _open_queue_dialog(self) -> None:
+        if self._queue_running:
+            self.ctx.bus.toast.emit("已有启动队列在进行中。")
+            return
+        if self._session is not None or (
+            self._worker is not None and self._worker.isRunning()
+        ):
+            self.ctx.bus.toast.emit("当前已有游戏在运行，请先退出再使用多选启动。")
+            return
+        if not self._rows:
+            QMessageBox.information(self, "多选启动", "当前没有可启动的版本。")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("多选启动")
+        dialog.setMinimumSize(360, 420)
+        layout = QVBoxLayout(dialog)
+        tip = QLabel("按选择顺序依次启动；同一实例目录不能并行，需等前一个游戏退出。")
+        tip.setObjectName("Muted")
+        tip.setWordWrap(True)
+        layout.addWidget(tip)
+        list_widget = QListWidget()
+        list_widget.setSelectionMode(QAbstractItemView.MultiSelection)
+        for version_id in self._rows:
+            list_widget.addItem(version_id)
+        layout.addWidget(list_widget, 1)
+        buttons = QHBoxLayout()
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(dialog.reject)
+        launch_btn = QPushButton("启动")
+        launch_btn.setObjectName("Primary")
+        launch_btn.clicked.connect(dialog.accept)
+        buttons.addWidget(cancel_btn)
+        buttons.addWidget(launch_btn)
+        layout.addLayout(buttons)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        selected = [
+            list_widget.item(i).text()
+            for i in range(list_widget.count())
+            if list_widget.item(i).isSelected()
+        ]
+        if not selected:
+            return
+
+        self._launch_queue = list(selected)
+        self._queue_total = len(selected)
+        self._queue_running = True
+        self._queue_stop = False
+        self.queue_stop_button.setVisible(True)
+        self.queue_launch_button.setEnabled(False)
+        self._append_log(f"[多选启动] 已加入队列：{'、'.join(selected)}")
+        self._launch_queue_next()
+
+    def _launch_queue_next(self) -> None:
+        if not self._launch_queue:
+            self._finish_queue()
+            return
+        if self._queue_stop:
+            self._finish_queue("已停止队列。")
+            return
+        version_id = self._launch_queue.pop(0)
+        self._append_log(
+            f"[多选启动] 开始启动：{version_id}（队列剩余 {len(self._launch_queue)}）"
+        )
+        self._select_version(version_id)
+        self._start_launch()
+        # _start_launch 可能因 Java/账号问题提前返回（未创建 worker），交给下一轮推进
+        if self._worker is None or not self._worker.isRunning():
+            QTimer.singleShot(0, self._maybe_advance_queue)
+
+    def _maybe_advance_queue(self) -> None:
+        """队列推进的唯一入口：仅在无运行中游戏 / 无运行中 worker 时启动下一个。"""
+        if not self._queue_running or not self._launch_queue:
+            return
+        if self._session is not None:
+            return
+        if self._worker is not None and self._worker.isRunning():
+            return
+        self._launch_queue_next()
+
+    def _stop_queue(self) -> None:
+        if not self._queue_running:
+            return
+        self._queue_stop = True
+        self._append_log("[多选启动] 已请求停止队列：当前版本退出后不再继续。")
+        self.ctx.bus.toast.emit("已请求停止队列。")
+
+    def _finish_queue(self, message: str = "") -> None:
+        total = self._queue_total
+        self._launch_queue = []
+        self._queue_running = False
+        self._queue_stop = False
+        self._queue_total = 0
+        self.queue_stop_button.setVisible(False)
+        self.queue_launch_button.setEnabled(True)
+        if message:
+            self._append_log(f"[多选启动] {message}")
+            self.ctx.bus.toast.emit(message)
+        elif total:
+            self._append_log(f"[多选启动] 已依次启动 {total} 个版本。")
+            self.ctx.bus.toast.emit(f"已依次启动 {total} 个版本。")
 
     # ------------------------------------------------------------------
     def _open_game_dir(self) -> None:

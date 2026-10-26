@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -247,8 +248,16 @@ def download_java(
     dest_root: str | Path,
     log: Callable[[str], None] | None = None,
     on_bytes: Callable[[int], None] | None = None,
+    cancel: threading.Event | None = None,
+    pause: threading.Event | None = None,
+    on_total: Callable[[int], None] | None = None,
+    url: str = "",
 ) -> JavaInfo:
-    """从 Adoptium 下载并解压 JRE 到 <dest_root>/jre-<major>。"""
+    """下载并解压 JRE 到 <dest_root>/jre-<major>。
+
+    url 为空时走 Adoptium API 自动解析；非空则直接下载该链接（用于其他发行版）。
+    cancel / pause 透传给 Http.download；on_total 在拿到总大小后回调。
+    """
     root = Path(dest_root)
     target = root / f"jre-{major}"
     existing = find_java_in(target)
@@ -257,16 +266,23 @@ def download_java(
         if info is not None and info.major == int(major):
             return info
 
-    asset = adoptium_asset(major)
+    if url:
+        asset = {"url": url, "name": f"jre-{major}.zip", "size": None, "major": int(major)}
+    else:
+        asset = adoptium_asset(major)
+    if on_total:
+        on_total(int(asset.get("size") or 0))
     if log:
         log(f"[Java] 正在下载 Java {major}：{asset['name']}")
     archive = root / f"jre-{major}.zip"
     root.mkdir(parents=True, exist_ok=True)
     Http(timeout=60).download(
-        [Candidate(asset["url"], source_name="Adoptium")],
+        [Candidate(asset["url"], source_name="Adoptium" if not url else "Java")],
         archive,
         size=asset.get("size"),
         on_bytes=on_bytes,
+        cancel=cancel,
+        pause=pause,
     )
     if target.exists():
         shutil.rmtree(target, ignore_errors=True)

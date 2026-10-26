@@ -167,6 +167,20 @@ class DownloadManager(QObject):
         self._pump()
         self.changed.emit()
 
+    def finish_cancelled(self, task_id: str, message: str = "") -> None:
+        """把任务标记为已取消（不显示成失败）。"""
+        task = self.find(task_id)
+        if task is None or task.finished:
+            return
+        task.status = "已取消"
+        task.message = message
+        task.speed = 0.0
+        task.finished_at = time.time()
+        if task.pause_event is not None:
+            task.pause_event.clear()
+        self._pump()
+        self.changed.emit()
+
     def pause(self, task_id: str) -> None:
         """暂停任务：worker 在下一个检查点挂起，不丢弃已下载数据。"""
         task = self.find(task_id)

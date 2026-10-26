@@ -251,6 +251,7 @@ class ControlPage(QWidget):
         self._file_tables: dict[str, QTableWidget] = {}
         self._file_empty_labels: dict[str, QLabel] = {}
         self._file_count_labels: dict[str, QLabel] = {}
+        self._file_conflict_labels: dict[str, QLabel] = {}
         self._mod_updates: dict[str, ContentVersion] = {}
         self._mod_update_worker: ModUpdateWorker | None = None
         self._mod_apply_worker: ModUpdateApplyWorker | None = None
@@ -546,6 +547,14 @@ class ControlPage(QWidget):
 
         card = Card(margins=14, spacing=10)
         card.body.addWidget(card_title_row(f"{label}管理", str(spec["hint"])))
+
+        if key == "mods":
+            self._conflict_label = QLabel("")
+            self._conflict_label.setStyleSheet("color: #ff6b6b; font-weight: 600;")
+            self._conflict_label.setWordWrap(True)
+            self._conflict_label.setVisible(False)
+            card.body.addWidget(self._conflict_label)
+            self._file_conflict_labels[key] = self._conflict_label
 
         table = QTableWidget(0, 3)
         table.setHorizontalHeaderLabels(["文件名", "大小", "状态"])
@@ -1317,6 +1326,76 @@ class ControlPage(QWidget):
         count_label = self._file_count_labels.get(key)
         if count_label is not None:
             count_label.setText(f"{enabled} 已启用 / {len(entries)} 个文件" if entries else "")
+
+        if key == "mods":
+            self._scan_mod_conflicts(key)
+
+    def _scan_mod_conflicts(self, key: str) -> None:
+        """防御式调用 content 的 Mod 元数据扫描，标红冲突行并给出提示。"""
+        table = self._file_tables.get(key)
+        label = self._file_conflict_labels.get(key)
+        if label is not None:
+            label.setVisible(False)
+        try:
+            from ..content import detect_mod_conflicts, scan_mod_metadata
+        except ImportError:
+            return  # 并行开发中：content 的扫描函数尚未就绪，静默跳过
+        mods_dir = self._files_dir("mods")
+        if not mods_dir.is_dir():
+            return
+        try:
+            metadata = scan_mod_metadata(mods_dir)
+            conflicts = detect_mod_conflicts(metadata)
+        except Exception as exc:  # noqa: BLE001
+            if label is not None:
+                label.setText(f"Mod 冲突检测失败：{exc}")
+                label.setVisible(True)
+            return
+        if not conflicts:
+            return
+
+        row_index: dict[str, int] = {}
+        if table is not None:
+            for row in range(table.rowCount()):
+                item = table.item(row, 0)
+                if item is not None:
+                    row_index[str(item.data(Qt.UserRole) or "")] = row
+
+        def _detail(conflict: dict) -> str:
+            detail = str(conflict.get("detail") or "")
+            if detail:
+                return detail
+            ctype = str(conflict.get("type") or "")
+            modid = str(conflict.get("modid") or "")
+            if ctype == "duplicate_modid":
+                return f"Mod ID 重复：{modid}，请禁用其中一个"
+            if ctype == "missing_dependency":
+                return f"缺少前置依赖：{modid}"
+            return ctype or "未知冲突"
+
+        touched: set[int] = set()
+        first_detail = ""
+        for conflict in conflicts:
+            detail = _detail(conflict)
+            if not first_detail:
+                first_detail = detail
+            for raw in conflict.get("files") or []:
+                row = row_index.get(str(raw))
+                if row is None or row in touched:
+                    continue
+                touched.add(row)
+                name_item = table.item(row, 0) if table is not None else None
+                status_item = table.item(row, 2) if table is not None else None
+                if name_item is not None:
+                    name_item.setForeground(Qt.GlobalColor.red)
+                    name_item.setToolTip(detail)
+                if status_item is not None:
+                    status_item.setForeground(Qt.GlobalColor.red)
+                    status_item.setToolTip(detail)
+
+        if label is not None and conflicts:
+            label.setText(f"发现 {len(conflicts)} 个冲突：{first_detail}")
+            label.setVisible(True)
 
     def _selected_paths(self, table: QTableWidget) -> list[Path]:
         rows = sorted({index.row() for index in table.selectedIndexes()})

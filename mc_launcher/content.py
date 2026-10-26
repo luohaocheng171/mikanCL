@@ -13,6 +13,7 @@ import re
 import shutil
 import threading
 import time
+import urllib.error
 import urllib.parse
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -232,6 +233,30 @@ class ContentClient:
         self.config = config
         self.http = Http(timeout=35)
 
+    def _request_retry(self, fn: Callable[[], dict | list], label: str) -> dict | list:
+        """网络请求重试：遇连接类异常（URLError / ConnectionError / 10053 / 10054 / timed out）
+        最多重试 3 次（间隔 1~2 秒），重试耗尽抛 DownloadError；其余异常原样抛出。"""
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                return fn()
+            except urllib.error.HTTPError:
+                raise  # HTTP 状态类错误（404 等）不重试
+            except Exception as exc:  # noqa: BLE001 - 仅连接类异常重试
+                text = str(exc)
+                retryable = (
+                    isinstance(exc, (urllib.error.URLError, ConnectionError, OSError))
+                    or "10053" in text
+                    or "10054" in text
+                    or "timed out" in text.lower()
+                )
+                if not retryable:
+                    raise
+                last_error = exc
+            if attempt < 2:
+                time.sleep(1 + attempt)
+        raise DownloadError(f"{label}连续重试 3 次仍失败：{last_error}") from last_error
+
     # ------------------------------------------------------------------
     # 平台请求
     def _modrinth(self, path: str, params: dict | None = None) -> dict | list:
@@ -239,7 +264,10 @@ class ContentClient:
         url = base + path
         if params:
             url += "?" + urllib.parse.urlencode(params)
-        return self.http.get_json_url(url, headers={"User-Agent": USER_AGENT})
+        return self._request_retry(
+            lambda: self.http.get_json_url(url, headers={"User-Agent": USER_AGENT}),
+            "Modrinth 请求",
+        )
 
     def _curseforge(self, path: str, params: dict | None = None) -> dict | list:
         base = (self.config.curseforge_api_base or "https://api.curseforge.com/v1").rstrip("/")
@@ -250,7 +278,10 @@ class ContentClient:
         headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
         if key:
             headers["x-api-key"] = key
-        return self.http.get_json_url(url, headers=headers)
+        return self._request_retry(
+            lambda: self.http.get_json_url(url, headers=headers),
+            "CurseForge 请求",
+        )
 
     def _curseforge_post(self, path: str, payload: dict) -> dict | list:
         base = (self.config.curseforge_api_base or "https://api.curseforge.com/v1").rstrip("/")
@@ -258,7 +289,10 @@ class ContentClient:
         key = (self.config.curseforge_api_key or "").strip()
         if key:
             headers["x-api-key"] = key
-        return self.http.post_json_url(base + path, payload, headers=headers)
+        return self._request_retry(
+            lambda: self.http.post_json_url(base + path, payload, headers=headers),
+            "CurseForge 请求",
+        )
 
     # ------------------------------------------------------------------
     def search(
@@ -661,18 +695,39 @@ class ContentClient:
         if rewritten and rewritten != file.url:
             candidates.append(Candidate(rewritten, {"User-Agent": USER_AGENT}, source, "镜像"))
         candidates.append(Candidate(file.url, {"User-Agent": USER_AGENT}, source, source))
-        try:
-            self.http.download(
-                candidates,
-                dest,
-                size=file.size or None,
-                sha1=file.sha1 or None,
-                cancel=cancel,
-                pause=pause,
-            )
-        except DownloadError as exc:
-            raise ContentError(f"下载 {file.filename} 失败：{exc}") from exc
-        return dest
+        # 连接类异常最多重试 3 次；取消时立即退出
+        last_error: Exception | None = None
+        for attempt in range(3):
+            if cancel is not None and cancel.is_set():
+                raise Cancelled()
+            try:
+                self.http.download(
+                    candidates,
+                    dest,
+                    size=file.size or None,
+                    sha1=file.sha1 or None,
+                    cancel=cancel,
+                    pause=pause,
+                )
+                return dest
+            except Cancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 - 仅连接类异常重试
+                text = str(exc)
+                retryable = (
+                    isinstance(exc, (urllib.error.URLError, ConnectionError, OSError))
+                    or "10053" in text
+                    or "10054" in text
+                    or "timed out" in text.lower()
+                )
+                if not retryable:
+                    raise ContentError(f"下载 {file.filename} 失败：{exc}") from exc
+                last_error = exc
+            if attempt < 2:
+                time.sleep(1 + attempt)
+        raise ContentError(
+            f"下载 {file.filename} 失败（重试 3 次仍失败）：{last_error}"
+        ) from last_error
 
     def download_to(
         self,
@@ -1151,3 +1206,312 @@ class ContentClient:
             raise ContentError(f"解压整合包 overrides 失败：{exc}") from exc
         if log:
             log(f"[整合包] 已应用 {extracted} 个 overrides 文件")
+
+
+# ---------------------------------------------------------------------------
+# Mod 元数据扫描与冲突/依赖检测（只读纯函数，不联网、不写文件）
+# ---------------------------------------------------------------------------
+def scan_mod_metadata(mods_dir) -> dict[Path, dict]:
+    """扫描 mods 目录下的 .jar，解析 Fabric / Forge / NeoForge / LiteLoader 元数据。
+
+    返回 {jar_path: {modid, name, version, loader, depends}}；
+    解析失败的文件保留基础记录（modid 取文件名，loader=unknown），不抛异常。
+    """
+    result: dict[Path, dict] = {}
+    mods_dir = Path(mods_dir)
+    try:
+        if not mods_dir.is_dir():
+            return result
+        jars = sorted(
+            path for path in mods_dir.iterdir()
+            if path.is_file() and path.suffix.lower() == ".jar"
+        )
+    except OSError:
+        return result
+    for jar in jars:
+        result[jar] = _read_mod_metadata(jar)
+    return result
+
+
+def _read_mod_metadata(jar: Path) -> dict:
+    """读取单个 jar 的 mod 元数据；解析失败时返回基础记录。"""
+    stem = jar.stem
+    record = {"modid": stem, "name": stem, "version": "", "loader": "unknown", "depends": []}
+    try:
+        with zipfile.ZipFile(jar) as archive:
+            names = {name.replace("\\", "/") for name in archive.namelist()}
+            # Fabric：fabric.mod.json
+            if "fabric.mod.json" in names:
+                raw = json.loads(archive.read("fabric.mod.json").decode("utf-8", errors="replace"))
+                if isinstance(raw, dict):
+                    modid = str(raw.get("id") or stem)
+                    record.update(
+                        {
+                            "modid": modid,
+                            "name": str(raw.get("name") or modid),
+                            "version": str(raw.get("version") or ""),
+                            "loader": "fabric",
+                            "depends": _fabric_depends(raw),
+                        }
+                    )
+                    return record
+            # Forge / NeoForge：META-INF/mods.toml
+            if "META-INF/mods.toml" in names:
+                text = archive.read("META-INF/mods.toml").decode("utf-8", errors="replace")
+                mods, depends, loader = _parse_mods_toml(text)
+                if mods:
+                    first = mods[0]
+                    modid = str(first.get("modId") or stem)
+                    record.update(
+                        {
+                            "modid": modid,
+                            "name": str(first.get("displayName") or modid),
+                            "version": str(first.get("version") or ""),
+                            "loader": loader,
+                            "depends": depends,
+                        }
+                    )
+                    return record
+            # LiteLoader / 旧版：mcmod.info
+            if "mcmod.info" in names:
+                raw = json.loads(archive.read("mcmod.info").decode("utf-8", errors="replace"))
+                items = raw if isinstance(raw, list) else ([raw] if isinstance(raw, dict) else [])
+                if items and isinstance(items[0], dict):
+                    item = items[0]
+                    modid = str(item.get("modid") or stem)
+                    record.update(
+                        {
+                            "modid": modid,
+                            "name": str(item.get("name") or modid),
+                            "version": str(item.get("version") or ""),
+                            "loader": "liteloader",
+                            "depends": [
+                                {"modid": str(value), "version_range": "", "type": "required"}
+                                for value in (item.get("requiredMods") or [])
+                                if str(value)
+                            ],
+                        }
+                    )
+                    return record
+    except Exception as exc:  # noqa: BLE001 - 解析失败保留基础记录，不阻断扫描
+        pass
+    return record
+
+
+def _fabric_depends(raw: dict) -> list[dict]:
+    """fabric.mod.json 的 depends：全部按 required 记录。"""
+    depends = raw.get("depends") if isinstance(raw.get("depends"), dict) else {}
+    result: list[dict] = []
+    for key, value in depends.items():
+        if isinstance(value, list):
+            value = ", ".join(str(item) for item in value)
+        result.append({"modid": str(key), "version_range": str(value or ""), "type": "required"})
+    return result
+
+
+def _parse_mods_toml(text: str) -> tuple[list[dict], list[dict], str]:
+    """简易解析 mods.toml，返回 (mods 列表, depends 列表, loader)。
+
+    依赖段只保留 mandatory=true（REQUIRED）的条目；loader 依据依赖里
+    出现的 neoforge / forge 判定。
+    """
+    mods: list[dict] = []
+    deps: list[dict] = []
+    current_mod: dict | None = None
+    current_dep: dict | None = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = re.match(r"^\[\[(mods|dependencies\.[A-Za-z0-9_.\-]+)\]\]$", line)
+        if match:
+            header = match.group(1)
+            if header == "mods":
+                current_mod = {}
+                mods.append(current_mod)
+                current_dep = None
+            else:
+                current_dep = {}
+                deps.append(current_dep)
+                current_mod = None
+            continue
+        kv = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"(.*)"\s*$', line)
+        if not kv:
+            # TOML 布尔/数字等无引号值（如 mandatory=true）
+            kv = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^\s#]+)', line)
+        if not kv:
+            continue
+        key, value = kv.group(1), kv.group(2)
+        if current_dep is not None:
+            current_dep[key] = value
+        elif current_mod is not None:
+            current_mod[key] = value
+    loader = "unknown"
+    for dep in deps:
+        dep_modid = str(dep.get("modId") or "").lower()
+        if dep_modid == "neoforge":
+            loader = "neoforge"
+        elif dep_modid == "forge" and loader != "neoforge":
+            loader = "forge"
+    depends = []
+    for dep in deps:
+        mandatory = str(dep.get("mandatory") or "").strip().lower()
+        if mandatory not in ("true", "1", "yes"):
+            continue
+        depends.append(
+            {
+                "modid": str(dep.get("modId") or ""),
+                "version_range": str(dep.get("versionRange") or ""),
+                "type": "required",
+            }
+        )
+    return mods, depends, loader
+
+
+def detect_mod_conflicts(metadata: dict[Path, dict]) -> list[dict]:
+    """检测重复 Mod ID、缺少前置依赖、前置版本不匹配；只读纯函数。
+
+    返回列表可空，每条含 type / modid / files / detail。
+    """
+    issues: list[dict] = []
+    by_modid: dict[str, list[Path]] = {}
+    for path, meta in metadata.items():
+        modid = str(meta.get("modid") or "")
+        if modid:
+            by_modid.setdefault(modid, []).append(path)
+    installed: dict[str, dict] = {}
+    for modid, paths in by_modid.items():
+        installed[modid] = metadata[paths[0]]
+        if len(paths) > 1:
+            issues.append(
+                {
+                    "type": "duplicate_modid",
+                    "modid": modid,
+                    "files": list(paths),
+                    "detail": f"重复的 Mod ID：{modid}，请禁用其中一个",
+                }
+            )
+    for path, meta in metadata.items():
+        for dep in meta.get("depends") or []:
+            if str(dep.get("type") or "required") != "required":
+                continue
+            dep_modid = str(dep.get("modid") or "")
+            if not dep_modid:
+                continue
+            if dep_modid not in installed:
+                issues.append(
+                    {
+                        "type": "missing_dependency",
+                        "modid": dep_modid,
+                        "files": [path],
+                        "detail": f"缺少前置依赖：{dep_modid}",
+                    }
+                )
+                continue
+            installed_version = str(installed[dep_modid].get("version") or "")
+            range_text = str(dep.get("version_range") or "").strip()
+            if range_text and _version_in_range(installed_version, range_text) is False:
+                issues.append(
+                    {
+                        "type": "version_mismatch",
+                        "modid": dep_modid,
+                        "files": [path],
+                        "detail": (
+                            f"前置依赖 {dep_modid} 版本不满足：需要 {range_text}，"
+                            f"已安装 {installed_version or '未知'}"
+                        ),
+                    }
+                )
+    return issues
+
+
+def _parse_version(text: str) -> tuple[int, ...] | None:
+    """把版本字符串转成可比较的数值元组；无法解析返回 None。"""
+    parts = re.split(r"[.\-+_]", str(text).strip())
+    result: list[int] = []
+    for part in parts:
+        if not part:
+            continue
+        if part.isdigit():
+            result.append(int(part))
+        else:
+            match = re.match(r"(\d+)", part)
+            if match is None:
+                return None
+            result.append(int(match.group(1)))
+    return tuple(result) if result else None
+
+
+def _version_in_range(version: str, range_text: str) -> bool | None:
+    """packaging 风格版本范围判断；无法解析返回 None（跳过，不误报）。"""
+    installed = _parse_version(version)
+    if installed is None:
+        return None
+    text = str(range_text).strip()
+    if not text:
+        return True
+    # [1.2,3) / (1.2,3.4] / [1.2,] / [,3) 形式
+    match = re.match(r"^([\[(])\s*([^,]*?)\s*,\s*([^)\]]*?)\s*([\])])$", text)
+    if match:
+        left_bracket, lower_text, upper_text, right_bracket = match.groups()
+        if lower_text:
+            lower = _parse_version(lower_text)
+            if lower is None:
+                return None
+            if left_bracket == "[":
+                if installed < lower:
+                    return False
+            elif installed <= lower:
+                return False
+        if upper_text:
+            upper = _parse_version(upper_text)
+            if upper is None:
+                return None
+            if right_bracket == "]":
+                if installed > upper:
+                    return False
+            elif installed >= upper:
+                return False
+        return True
+    # 1.2.3+ 形式（>=）
+    if text.endswith("+"):
+        base = _parse_version(text[:-1])
+        if base is None:
+            return None
+        return installed >= base
+    # ~1.2.3 / ~=1.2.3 形式（>=1.2.3 且 <1.3）
+    if text.startswith("~"):
+        raw = text[2:] if text.startswith("~=") else text[1:]
+        base = _parse_version(raw)
+        if base is None:
+            return None
+        if installed < base:
+            return False
+        if base:
+            upper = base[:-1] + (base[-1] + 1,)
+            if installed >= upper:
+                return False
+        return True
+    # == / >= / > / <= / < / != 前缀
+    match = re.match(r"^(==|>=|>|<=|<|!=)\s*(.+)$", text)
+    if match:
+        op, raw = match.groups()
+        target = _parse_version(raw)
+        if target is None:
+            return None
+        if op == "==":
+            return installed == target
+        if op == ">=":
+            return installed >= target
+        if op == ">":
+            return installed > target
+        if op == "<=":
+            return installed <= target
+        if op == "<":
+            return installed < target
+        return installed != target
+    # 纯版本号：要求相等
+    exact = _parse_version(text)
+    if exact is None:
+        return None
+    return installed == exact
