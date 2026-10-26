@@ -4,7 +4,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![PySide6](https://img.shields.io/badge/PySide6-Qt6-brightgreen.svg)](https://www.qt.io/)
-[![License](https://img.shields.io/badge/License-待定-lightgrey.svg)](#许可证)
+
 
 **MikanCL** — 正版登录 + 外置登录 + 5 大加载器一键安装 + Modrinth/CurseForge 内容中心 + 整合包管理 + Java 中心 + 启动预检
 
