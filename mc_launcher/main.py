@@ -24,7 +24,7 @@ from .context import AppBus, AppContext  # noqa: E402
 from .i18n import Translator  # noqa: E402
 from .net import SourceManager, apply_proxy  # noqa: E402
 from .ui.main_window import MainWindow  # noqa: E402
-from .ui.theme import STYLESHEET, make_block_icon  # noqa: E402
+from .ui.theme import STYLESHEET, apply_theme, make_block_icon  # noqa: E402
 
 
 def _dark_palette() -> QPalette:
@@ -137,6 +137,8 @@ def main() -> None:
     _SINGLE_INSTANCE = guard
 
     config = Config.load()
+    # 主题色在配置加载后才能确定：重算样式表与高亮色
+    apply_theme(app, config.accent_color)
     # 翻译器需在 QApplication 之后、MainWindow 之前安装；Translator 自身挂到 app 上防 GC
     Translator(app).load(config.language)
     apply_proxy(config.effective_proxy)

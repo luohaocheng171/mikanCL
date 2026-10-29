@@ -5,8 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QUrl, Qt
-from PySide6.QtGui import QIcon, QKeySequence, QShortcut
-from PySide6.QtWebEngineCore import QWebEngineDownloadRequest, QWebEnginePage, QWebEngineProfile
+from PySide6.QtGui import QDesktopServices, QIcon, QKeySequence, QShortcut
+from PySide6.QtWebEngineCore import (
+    QWebEngineDownloadRequest,
+    QWebEnginePage,
+    QWebEngineProfile,
+    QWebEngineSettings,
+)
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -72,10 +77,27 @@ class WebPage(QWebEnginePage):
     def __init__(self, profile: QWebEngineProfile, owner: "BrowserPage", parent=None):
         super().__init__(profile, parent)
         self.owner = owner
+        self.fullScreenRequested.connect(self._on_fullscreen)
 
     def createWindow(self, _window_type):  # noqa: N802
         view = self.owner.add_tab("about:blank", background=False)
         return view.page()
+
+    def _on_fullscreen(self, request) -> None:
+        """HTML5 视频进入/退出全屏：交给整个窗口切换，避免画面被裁剪。"""
+        request.accept()
+        view = self.view()
+        if view is None:
+            return
+        window = view.window()
+        if request.toggleOn():
+            self._was_maximized = window.isMaximized()
+            window.showFullScreen()
+        else:
+            if getattr(self, "_was_maximized", False):
+                window.showMaximized()
+            else:
+                window.showNormal()
 
 
 class WebView(QWebEngineView):
@@ -135,6 +157,11 @@ class BrowserPage(QWidget):
         new_tab.setObjectName("Chip")
         new_tab.clicked.connect(lambda: self.add_tab(None))
         quick_row.addWidget(new_tab)
+        system_browser = QPushButton("🌐 系统浏览器")
+        system_browser.setObjectName("Chip")
+        system_browser.setToolTip("用系统默认浏览器打开当前页面（可播放 H.264 视频）")
+        system_browser.clicked.connect(self._open_in_system_browser)
+        quick_row.addWidget(system_browser)
         outer.addLayout(quick_row)
 
         self.tabs = QTabWidget()
@@ -175,6 +202,11 @@ class BrowserPage(QWidget):
             QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies
         )
         profile.downloadRequested.connect(self._on_download)
+        # 显式从磁盘加载已保存的 cookie，保证 B 站等站点登录状态跨会话保留
+        try:
+            profile.cookieStore().loadAllCookies()
+        except (AttributeError, RuntimeError):
+            pass
         self.profile = profile
 
         self._new_shortcut = QShortcut(QKeySequence("Ctrl+T"), self)
@@ -201,12 +233,17 @@ class BrowserPage(QWidget):
         view.loadProgress.connect(lambda value, v=view: self._on_load_progress(v, value))
         view.loadFinished.connect(lambda ok, v=view: self._on_load_finished(v, ok))
         view.iconChanged.connect(lambda icon, v=view: self._set_tab_icon(v, icon))
-        try:
-            from PySide6.QtWebEngineCore import QWebEngineSettings
-
-            view.page().settings().setAttribute(QWebEngineSettings.WebAttribute.DarkMode, True)
-        except Exception:  # noqa: BLE001
-            pass
+        settings = view.page().settings()
+        # HTML5 媒体播放：允许脚本自动播放、支持视频全屏、允许播放器弹窗
+        for attribute, value in (
+            ("PlaybackRequiresUserGesture", False),
+            ("FullScreenSupportEnabled", True),
+            ("JavascriptCanOpenWindows", True),
+            ("DarkMode", True),
+        ):
+            flag = getattr(QWebEngineSettings.WebAttribute, attribute, None)
+            if flag is not None:
+                settings.setAttribute(flag, value)
 
         index = self.tabs.addTab(view, "新标签页")
         if url is None:
@@ -279,6 +316,20 @@ class BrowserPage(QWidget):
         view = self.tabs.currentWidget()
         return view if isinstance(view, WebView) else None
 
+    def _open_in_system_browser(self) -> None:
+        """内置内核缺少 H.264 解码，无法播放部分站点视频时改交给系统浏览器。"""
+        view = self.current_view()
+        url = view.url() if view is not None else QUrl()
+        if url.scheme() not in ("http", "https"):
+            raw = self.url_edit.text().strip()
+            if raw:
+                url = QUrl(self._clean_input(raw))
+        if url.scheme() not in ("http", "https"):
+            self.ctx.bus.toast.emit("当前没有可打开的网页地址")
+            return
+        QDesktopServices.openUrl(url)
+        self.ctx.bus.toast.emit("已用系统浏览器打开当前页面")
+
     def _navigate(self) -> None:
         view = self.current_view()
         if view is None:
@@ -343,6 +394,13 @@ class BrowserPage(QWidget):
         self.ctx.bus.toast.emit(f"已开始下载：{name}")
 
     def shutdown(self) -> None:
+        # 退出前把内存中的 cookie 落盘，确保下次启动仍保持登录状态
+        try:
+            flush = getattr(self.profile.cookieStore(), "flushCookieStore", None)
+            if callable(flush):
+                flush()
+        except (AttributeError, RuntimeError):
+            pass
         while self.tabs.count():
             view = self.tabs.widget(0)
             self.tabs.removeTab(0)

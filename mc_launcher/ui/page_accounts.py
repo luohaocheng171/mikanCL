@@ -47,7 +47,7 @@ from ..auth import (
 from ..context import AppContext, wait_thread
 from ..i18n import t
 from .skin_view import SkinPreview3D
-from .theme import make_avatar
+from .theme import resolve_account_avatar
 from .widgets import Badge, Card, card_title_row, page_header
 
 
@@ -691,7 +691,7 @@ class AccountsPage(QWidget):
             self.delete_button.setEnabled(False)
             self._update_skin_card(None)
             return
-        self.avatar.setPixmap(make_avatar(account.name or "Steve", 72))
+        self.avatar.setPixmap(resolve_account_avatar(account, 72))
         suffix = t("AccountsPage", "（当前）") if account.id == self.ctx.accounts.selected_id else ""
         self.name_label.setText(account.name + suffix)
         kinds = {"offline": "gray", "microsoft": "blue", "authlib": "orange"}

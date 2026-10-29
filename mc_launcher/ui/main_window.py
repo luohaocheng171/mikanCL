@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPoint, QSize, QThread, Qt, Signal
-from PySide6.QtGui import QAction, QGuiApplication
+from PySide6.QtGui import QAction, QGuiApplication, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -30,6 +30,7 @@ from .. import APP_NAME, APP_NAME_CN, APP_VERSION
 from ..context import AppContext, wait_thread
 from ..i18n import t
 from ..java import detect_java_installed
+from ..plugins import PluginManager, PluginPage
 from .dropinstall import handle_dropped_paths
 from .page_accounts import AccountsPage
 from .page_browser import BrowserPage
@@ -44,7 +45,16 @@ from .page_java_center import JavaCenterPage
 from .page_loaders import LoadersPage
 from .page_multiplayer import MultiplayerPage
 from .page_settings import SettingsPage
-from .theme import make_avatar, make_block_icon, make_nav_icon
+from .page_wiki import WikiPage
+from .covers import CoverLoader
+from .theme import (
+    background_overlay_stylesheet,
+    make_avatar,
+    make_block_icon,
+    make_nav_icon,
+    make_skin_avatar,
+    resolve_account_avatar,
+)
 from .widgets import scroll_page
 
 # 无边框窗口的边缘缩放：Windows 命中测试消息与结果码
@@ -146,11 +156,47 @@ class JavaScanWorker(QThread):
         self.done.emit(detect_java_installed())
 
 
+class RootWidget(QWidget):
+    """根容器：自定义背景图按窗口大小等比铺满并居中裁切，不会拉伸变形。"""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("Root")
+        self._source: QPixmap | None = None
+        self._cache: QPixmap | None = None
+        self._cache_size = QSize()
+
+    def set_background(self, path: str) -> None:
+        pixmap = QPixmap(path) if path else QPixmap()
+        self._source = None if pixmap.isNull() else pixmap
+        self._cache = None
+        self._cache_size = QSize()
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        if self._source is None or self.width() <= 0 or self.height() <= 0:
+            super().paintEvent(event)
+            return
+        if self._cache is None or self._cache_size != self.size():
+            self._cache = self._source.scaled(
+                self.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
+            )
+            self._cache_size = self.size()
+        painter = QPainter(self)
+        painter.drawPixmap(
+            (self.width() - self._cache.width()) // 2,
+            (self.height() - self._cache.height()) // 2,
+            self._cache,
+        )
+
+
 class MainWindow(QMainWindow):
     def __init__(self, ctx: AppContext):
         super().__init__()
         self.ctx = ctx
         self._java_worker: JavaScanWorker | None = None
+        self._plugin_pages: dict[int, QWidget] = {}
+        self.plugin_manager: PluginManager | None = None
         self.setWindowTitle(f"{APP_NAME} · {self.tr('Minecraft 启动器')}")
         self.setWindowIcon(make_block_icon(64))
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
@@ -158,7 +204,10 @@ class MainWindow(QMainWindow):
         self._apply_default_geometry()
 
         self._build()
+        self._avatar_covers = CoverLoader(self)
         self._connect_bus()
+        self._load_plugins()
+        self._apply_appearance()
         self._start_java_scan()
         self._setup_tray()
 
@@ -241,11 +290,35 @@ class MainWindow(QMainWindow):
         if not paths:
             return
         event.acceptProposedAction()
-        handle_dropped_paths(self, self.ctx, paths)
+        plugins = [p for p in paths if p.suffix.lower() == ".py" and p.is_file()]
+        others = [p for p in paths if p not in plugins]
+        if plugins:
+            self._install_plugins(plugins)
+        if others:
+            handle_dropped_paths(self, self.ctx, others)
+
+    def _install_plugins(self, paths: list[Path]) -> None:
+        """拖入的 .py 文件当作插件：复制到 data/plugins 并立即加载。"""
+        manager = self.plugin_manager
+        if manager is None:
+            return
+        messages: list[str] = []
+        success = 0
+        for path in paths:
+            ok, message = manager.install_file(path)
+            messages.append(message)
+            success += 1 if ok else 0
+            self.ctx.bus.log.emit(f"[插件] {message}")
+        if len(messages) == 1:
+            self.statusBar().showMessage(messages[0], 8000)
+        else:
+            self.statusBar().showMessage(f"{success}/{len(paths)} 个插件已处理", 8000)
+            QMessageBox.information(self, "插件安装", "\n".join(messages))
 
     # ------------------------------------------------------------------
     def _build(self) -> None:
-        root = QWidget()
+        self.root = RootWidget()
+        root = self.root
         root.setObjectName("Root")
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
@@ -304,6 +377,7 @@ class MainWindow(QMainWindow):
             # theme.py 的 make_nav_icon 没有 "forbric" 分支，走默认图标（不要改 theme.py）
             ("forbric", self.tr("Forbric")),
             ("java", self.tr("Java 中心")),
+            ("wiki", self.tr("教程中心")),
             ("settings", self.tr("设置")),
         ]
         nav_host = QWidget()
@@ -311,6 +385,7 @@ class MainWindow(QMainWindow):
         nav_layout = QVBoxLayout(nav_host)
         nav_layout.setContentsMargins(0, 0, 0, 0)
         nav_layout.setSpacing(10)
+        self.nav_layout = nav_layout
         for index, (key, text) in enumerate(nav_items):
             button = QPushButton(text)
             button.setObjectName("NavButton")
@@ -378,6 +453,7 @@ class MainWindow(QMainWindow):
         self.browser_page = BrowserPage(self.ctx, self)
         self.forbric_page = ForbricPage(self.ctx, self)
         self.java_center_page = JavaCenterPage(self.ctx, self)
+        self.wiki_page = WikiPage(self.ctx, self)
         self.settings_page = SettingsPage(self.ctx, self)
         for page in (
             self.home_page,
@@ -392,6 +468,7 @@ class MainWindow(QMainWindow):
             self.browser_page,
             self.forbric_page,
             self.java_center_page,
+            self.wiki_page,
             self.settings_page,
         ):
             # 浏览器页内含 WebEngine 视图，保持原样；其余页面在窗口变矮时改为滚轮滚动，
@@ -431,6 +508,53 @@ class MainWindow(QMainWindow):
         bus.javas_changed.connect(self.settings_page._rebuild_java_table)
         bus.accounts_changed.connect(self._refresh_sidebar_account)
         bus.config_changed.connect(self._refresh_sidebar_account)
+        bus.config_changed.connect(self._apply_appearance)
+        # 主页右键「编辑版本设置」：先由 ControlPage 选中版本，再切到该页（不重复 refresh）
+        bus.focus_version.connect(self._show_version_settings)
+
+    def _show_version_settings(self, _version_id: str = "") -> None:
+        """切到「版本设置」页，但不再刷新，避免把刚选中的版本重置回实例默认版本。"""
+        control_index = 6
+        self.pages.setCurrentIndex(control_index)
+        if control_index < len(self.nav_buttons):
+            self.nav_buttons[control_index].setChecked(True)
+
+    # ------------------------------------------------------------------
+    # 插件
+    def _load_plugins(self) -> None:
+        self.plugin_manager = PluginManager(self.ctx)
+        self.plugin_manager.on_page_added = self._add_plugin_page
+        self.plugin_manager.load()
+        if self.plugin_manager.errors:
+            names = "、".join(plugin_id for plugin_id, _detail in self.plugin_manager.errors)
+            self.statusBar().showMessage(f"插件加载失败：{names}，详见控制台日志", 10000)
+
+    def _add_plugin_page(self, page: PluginPage) -> None:
+        index = len(self.nav_buttons)
+        widget = page.widget
+        if not isinstance(widget, QScrollArea):
+            widget = scroll_page(widget)
+        self.pages.addWidget(widget)
+        button = QPushButton(page.title)
+        button.setObjectName("NavButton")
+        button.setCheckable(True)
+        button.setMinimumHeight(36)
+        button.setIcon(make_nav_icon("content", 18, "#9fb6a7"))
+        button.setIconSize(QSize(18, 18))
+        button.clicked.connect(lambda checked=False, i=index: self.switch_page(i))
+        self.nav_group.addButton(button, index)
+        # 侧边栏末尾有 stretch，插件按钮插在它前面
+        self.nav_layout.insertWidget(max(0, self.nav_layout.count() - 1), button)
+        self.nav_buttons.append(button)
+        self._plugin_pages[index] = page.widget
+
+    # ------------------------------------------------------------------
+    # 外观
+    def _apply_appearance(self) -> None:
+        image = (self.ctx.config.background_image or "").strip()
+        has_image = bool(image) and Path(image).exists()
+        self.root.set_background(image if has_image else "")
+        self.setStyleSheet(background_overlay_stylesheet(has_image))
 
     def _navigate_by_name(self, name: str) -> None:
         mapping = {
@@ -450,7 +574,8 @@ class MainWindow(QMainWindow):
             "browser": 9,
             "forbric": 10,
             "java": 11,
-            "settings": 12,
+            "wiki": 12,
+            "settings": 13,
         }
         self.switch_page(mapping.get(name, 0))
 
@@ -458,10 +583,27 @@ class MainWindow(QMainWindow):
         account = self.ctx.current_account()
         if account is None:
             return
-        self.sidebar_avatar.setPixmap(make_avatar(account.name or "Steve", 34))
+        self.sidebar_avatar.setPixmap(resolve_account_avatar(account, 34))
+        if getattr(account, "skin_url", "") and not getattr(account, "skin_path", ""):
+            base = resolve_account_avatar(account, 34)
+            self._avatar_covers.load(
+                account.skin_url,
+                lambda pm: self._on_sidebar_avatar(
+                    make_skin_avatar(pm, 34)
+                    if pm is not None and not pm.isNull()
+                    else base
+                ),
+                QSize(34, 34),
+            )
         type_label = t("AccountsPage", account.type_label)
         self.sidebar_account.setText(f"{account.name} · {type_label}")
         self.sidebar_account.setToolTip(account.note or type_label)
+
+    def _on_sidebar_avatar(self, pixmap) -> None:
+        try:
+            self.sidebar_avatar.setPixmap(pixmap)
+        except RuntimeError:
+            pass
 
     def switch_page(self, index: int) -> None:
         if not (0 <= index < self.pages.count()):
@@ -490,6 +632,13 @@ class MainWindow(QMainWindow):
             self.forbric_page.refresh()
         elif index == 11:
             self.java_center_page.refresh()
+        elif index == 12:
+            self.wiki_page.refresh()
+        elif index in self._plugin_pages:
+            # 插件页可选提供 refresh() 方法，切页时自动调用
+            refresh = getattr(self._plugin_pages[index], "refresh", None)
+            if callable(refresh):
+                refresh()
 
     def _open_browser(self, url: str) -> None:
         self.switch_page(9)
@@ -569,6 +718,10 @@ class MainWindow(QMainWindow):
         self.java_center_page.shutdown()
         self.loaders_page.shutdown()
         self.multiplayer_page.shutdown()
+        self.wiki_page.shutdown()
+        self._avatar_covers.shutdown()
+        if self.plugin_manager is not None:
+            self.plugin_manager.shutdown()
         wait_thread(self._java_worker, 1500)
         self.tray.hide()
         event.accept()

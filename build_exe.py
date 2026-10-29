@@ -67,6 +67,9 @@ def main() -> int:
             "--add-data",
             f"{translations}{os.pathsep}mc_launcher/translations",
         ]
+    plugins = ROOT / "plugins"
+    if plugins.is_dir():
+        command += ["--add-data", f"{plugins}{os.pathsep}plugins"]
     command.append(str(ROOT / "run.py"))
 
     print("执行：", " ".join(command))

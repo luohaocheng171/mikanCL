@@ -8,10 +8,11 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QStandardPaths, QThread, Qt, Signal
+from PySide6.QtCore import QSize, QStandardPaths, QThread, Qt, Signal
 from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -52,15 +53,15 @@ from ..version import (
     scan_installed_versions,
     version_category,
 )
+from .theme import make_version_icon, make_version_pixmap
 from .widgets import Badge, Card, hline, page_header
 
-# 分类筛选：键为 version_category 的返回值，all 表示不过滤
+# 版本分类标签：默认只展示正式版，点击哪个标签才加载哪一类
 _CATEGORY_FILTERS = [
-    ("all", "全部"),
     ("release", "正式版"),
-    ("snapshot", "快照"),
-    ("april", "愚人节版本"),
-    ("old", "远古版本"),
+    ("snapshot", "测试版"),
+    ("old", "远古版"),
+    ("april", "愚人节"),
 ]
 
 _LOADER_ORDER = ("forge", "neoforge", "fabric", "quilt", "liteloader")
@@ -694,6 +695,60 @@ class LoaderCard(QFrame):
         super().mousePressEvent(event)
 
 
+class LatestCard(QFrame):
+    """顶部「最新正式版 / 最新测试版」卡片，点击直接进入详情。"""
+
+    clicked = Signal()
+
+    def __init__(self, title: str, kind: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("LatestCard")
+        self.setCursor(Qt.PointingHandCursor)
+        self._entry: dict | None = None
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(10)
+        icon_label = QLabel()
+        icon_label.setPixmap(make_version_pixmap(kind, 32))
+        icon_label.setFixedSize(32, 32)
+        layout.addWidget(icon_label)
+
+        texts = QVBoxLayout()
+        texts.setSpacing(2)
+        caption = QLabel(title)
+        caption.setObjectName("Tiny")
+        texts.addWidget(caption)
+        self.version_label = QLabel("尚未获取")
+        self.version_label.setStyleSheet(
+            "font-size: 15px; font-weight: 600; color: #eaf4ec;"
+        )
+        texts.addWidget(self.version_label)
+        self.date_label = QLabel("")
+        self.date_label.setObjectName("Tiny")
+        texts.addWidget(self.date_label)
+        layout.addLayout(texts)
+        layout.addStretch(1)
+
+    def set_entry(self, entry: dict | None) -> None:
+        self._entry = entry
+        if not entry:
+            self.version_label.setText("尚未获取")
+            self.date_label.setText("")
+            self.setCursor(Qt.ArrowCursor)
+            return
+        self.setCursor(Qt.PointingHandCursor)
+        self.version_label.setText(str(entry.get("id") or "—"))
+        release = str(entry.get("releaseTime") or entry.get("time") or "")[:10]
+        self.date_label.setText(release or "未知时间")
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and self._entry is not None:
+            self.clicked.emit()
+            return
+        super().mousePressEvent(event)
+
+
 # ---------------------------------------------------------------------------
 # 页面
 # ---------------------------------------------------------------------------
@@ -736,6 +791,7 @@ class DownloadPage(QWidget):
         self._installing_kind = ""
         self._updating_table = False
         self._loaded = False
+        self._category = "release"
 
         self._build()
         self._connect()
@@ -769,6 +825,16 @@ class DownloadPage(QWidget):
         header_layout.addWidget(manage)
         outer.addWidget(header)
 
+        latest_row = QHBoxLayout()
+        latest_row.setSpacing(12)
+        self.release_card = LatestCard("最新正式版", "release")
+        self.snapshot_card = LatestCard("最新测试版", "snapshot")
+        self.release_card.clicked.connect(lambda: self._open_latest("release"))
+        self.snapshot_card.clicked.connect(lambda: self._open_latest("snapshot"))
+        latest_row.addWidget(self.release_card, 1)
+        latest_row.addWidget(self.snapshot_card, 1)
+        outer.addLayout(latest_row)
+
         tools = Card(margins=16, spacing=10)
         row1 = QHBoxLayout()
         row1.setSpacing(10)
@@ -793,15 +859,29 @@ class DownloadPage(QWidget):
         self.search_edit.setPlaceholderText("搜索版本号，如 1.20.1")
         self.search_edit.setClearButtonEnabled(True)
         row2.addWidget(self.search_edit, 1)
-        self.category_combo = QComboBox()
-        for key, text in _CATEGORY_FILTERS:
-            self.category_combo.addItem(text, key)
-        self.category_combo.setFixedWidth(132)
-        row2.addWidget(self.category_combo)
         self.count_label = QLabel("")
         self.count_label.setObjectName("Tiny")
         row2.addWidget(self.count_label)
         tools.body.addLayout(row2)
+
+        row3 = QHBoxLayout()
+        row3.setSpacing(8)
+        category_label = QLabel("版本分类")
+        category_label.setObjectName("Muted")
+        row3.addWidget(category_label)
+        self.category_group = QButtonGroup(self)
+        self.category_buttons: dict[str, QPushButton] = {}
+        for key, text in _CATEGORY_FILTERS:
+            chip = QPushButton(text)
+            chip.setObjectName("Chip")
+            chip.setCheckable(True)
+            chip.setChecked(key == self._category)
+            chip.clicked.connect(lambda _checked=False, k=key: self._set_category(k))
+            self.category_group.addButton(chip)
+            self.category_buttons[key] = chip
+            row3.addWidget(chip)
+        row3.addStretch(1)
+        tools.body.addLayout(row3)
         outer.addWidget(tools)
 
         table_card = Card(margins=14, spacing=10)
@@ -821,6 +901,7 @@ class DownloadPage(QWidget):
         self.table.setColumnWidth(2, 108)
         self.table.setColumnWidth(3, 88)
         self.table.verticalHeader().setDefaultSectionSize(34)
+        self.table.setIconSize(QSize(18, 18))
         self.table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         table_card.body.addWidget(self.table, 1)
 
@@ -1039,7 +1120,6 @@ class DownloadPage(QWidget):
     def _connect(self) -> None:
         self.source_combo.currentIndexChanged.connect(self._on_source_changed)
         self.search_edit.textChanged.connect(lambda _: self._populate())
-        self.category_combo.currentIndexChanged.connect(lambda _: self._populate())
         self.table.itemSelectionChanged.connect(self._on_selection_changed)
         self.table.cellDoubleClicked.connect(lambda _row, _col: self._open_selected_detail())
         for card in self._loader_cards.values():
@@ -1138,20 +1218,54 @@ class DownloadPage(QWidget):
         if self._detail_entry is not None:
             self._update_detail_header()
 
+    def _set_category(self, category: str) -> None:
+        """切换到某个版本分类标签（默认只加载被点击的那一类）。"""
+        if category == self._category:
+            return
+        self._category = category
+        chip = self.category_buttons.get(category)
+        if chip is not None and not chip.isChecked():
+            chip.setChecked(True)
+        self._populate()
+
+    def _latest_of(self, category: str) -> dict | None:
+        """取该分类中发布时间最新的一条版本清单条目。"""
+        best: dict | None = None
+        best_time = ""
+        for entry in self._entries:
+            version_id = str(entry.get("id") or "")
+            if version_category(version_id, str(entry.get("type") or "")) != category:
+                continue
+            stamp = str(entry.get("releaseTime") or entry.get("time") or "")
+            if best is None or stamp > best_time:
+                best = entry
+                best_time = stamp
+        return best
+
+    def _update_latest_cards(self) -> None:
+        self.release_card.set_entry(self._latest_of("release"))
+        self.snapshot_card.set_entry(self._latest_of("snapshot"))
+
+    def _open_latest(self, category: str) -> None:
+        entry = self._latest_of(category)
+        if entry is not None:
+            self._open_detail(entry)
+
     def _populate(self) -> None:
         if self._updating_table:
             return
         self._updating_table = True
         try:
+            self._update_latest_cards()
             needle = self.search_edit.text().strip().lower()
-            category = str(self.category_combo.currentData() or "all")
+            category = self._category
             selected_id = self._selected_version_id()
             visible: list[dict] = []
             for entry in self._entries:
                 version_id = str(entry.get("id") or "")
                 if needle and needle not in version_id.lower():
                     continue
-                if category != "all" and version_category(
+                if version_category(
                     version_id, str(entry.get("type") or "")
                 ) != category:
                     continue
@@ -1162,14 +1276,15 @@ class DownloadPage(QWidget):
             for entry in visible:
                 version_id = str(entry.get("id") or "")
                 entry_type = str(entry.get("type") or "")
+                kind = version_category(version_id, entry_type)
                 row = self.table.rowCount()
                 self.table.insertRow(row)
                 id_item = QTableWidgetItem(version_id)
                 id_item.setData(Qt.UserRole, version_id)
                 id_item.setToolTip(str(entry.get("url") or ""))
+                id_item.setIcon(make_version_icon(kind, 16))
                 self.table.setItem(row, 0, id_item)
 
-                kind = version_category(version_id, entry_type)
                 type_item = QTableWidgetItem(CATEGORY_LABELS.get(kind, entry_type or "未知"))
                 type_item.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(row, 1, type_item)

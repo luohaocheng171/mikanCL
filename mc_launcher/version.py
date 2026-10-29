@@ -31,9 +31,9 @@ APRIL_FOOLS_IDS = {
 
 CATEGORY_LABELS = {
     "release": "正式版",
-    "snapshot": "快照",
-    "old": "远古版本",
-    "april": "愚人节版本",
+    "snapshot": "测试版",
+    "old": "远古版",
+    "april": "愚人节",
 }
 
 
@@ -485,7 +485,7 @@ class InstalledVersion:
     def display_type(self) -> str:
         mapping = {
             "release": "正式版",
-            "snapshot": "快照",
+            "snapshot": "测试版",
             "old_beta": "Beta",
             "old_alpha": "Alpha",
         }

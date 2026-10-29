@@ -13,6 +13,93 @@ from __future__ import annotations
 
 import re
 
+# PCL 风格的「用途分类」：界面按这个顺序展示筛选按钮
+CATEGORY_LABELS: dict[str, str] = {
+    "optimization": "优化",
+    "utility": "辅助",
+    "library": "前置",
+    "decoration": "装饰",
+    "tech": "科技",
+    "magic": "魔法",
+    "adventure": "冒险",
+    "farming": "农业",
+    "worldgen": "世界生成",
+    "modpack": "整合包",
+    "resourcepack": "资源包",
+    "shader": "光影",
+}
+
+# 关键词表：标题 / 中文简介 / 平台标签里命中任一关键词即归入该分类。
+# 中英文都收录，因为未收录进词表的项目只有平台返回的英文标题与简介。
+CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "optimization": (
+        "优化", "性能", "帧率", "卡顿", "内存", "启动速度", "剔除", "渲染", "光照", "加载",
+        "optimiz", "performance", "fps", "lag", "memory", "render", "cull", "light",
+    ),
+    "utility": (
+        "管理", "信息", "显示", "地图", "界面", "操作", "按键", "配置", "整理", "提示",
+        "hud", "tooltip", "minimap", "overlay", "config", "utility", "screen", "menu", "map",
+    ),
+    "library": (
+        "前置", "依赖", "开发", "库", "api", "kotlin", "library", "framework", "lib",
+    ),
+    "decoration": (
+        "装饰", "家具", "建筑", "美化", "外观", "decor", "furniture", "cosmetic",
+    ),
+    "tech": (
+        "科技", "机械", "电力", "能源", "自动化", "机器", "工业", "存储", "物流", "反应堆",
+        "tech", "machine", "energy", "automation", "storage", "power", "factory", "reactor",
+    ),
+    "magic": (
+        "魔法", "神秘", "法术", "符文", "附魔", "咒语", "magic", "spell", "rune", "arcane",
+        "enchant", "mystic",
+    ),
+    "adventure": (
+        "冒险", "地牢", "探索", "战斗", "生物", "维度", "神话", "boss", "怪物",
+        "adventure", "dungeon", "explore", "combat", "mob", "dimension", "creature",
+    ),
+    "farming": (
+        "农业", "种植", "作物", "料理", "食物", "村民", "蜜蜂", "钓鱼", "食谱",
+        "farm", "crop", "food", "cooking", "recipe", "villager", "bee", "agriculture",
+    ),
+    "worldgen": (
+        "世界生成", "地形", "群系", "生物群系", "区块", "结构", "世界",
+        "worldgen", "biome", "terrain", "chunk", "world generation", "structure",
+    ),
+    "modpack": (
+        "整合包", "任务书", "modpack", "quest",
+    ),
+    "resourcepack": (
+        "资源包", "材质", "贴图", "resource pack", "resourcepack", "texture",
+    ),
+    "shader": (
+        "光影", "着色器", "shader",
+    ),
+}
+
+# 平台自带标签 → 本地分类（Modrinth 用 categories，CurseForge 用分类名）
+PLATFORM_CATEGORY_MAP: dict[str, str] = {
+    "optimization": "optimization",
+    "technology": "tech",
+    "tech": "tech",
+    "magic": "magic",
+    "adventure": "adventure",
+    "decoration": "decoration",
+    "cosmetic": "decoration",
+    "worldgen": "worldgen",
+    "food": "farming",
+    "farming": "farming",
+    "library": "library",
+    "utility": "utility",
+    "storage": "tech",
+    "equipment": "adventure",
+    "mobs": "adventure",
+    "quests": "modpack",
+    "shaders": "shader",
+    "resource packs": "resourcepack",
+    "fonts": "resourcepack",
+}
+
 # 键：规范化后的英文项目名（小写、去括号、去标点）；值：(中文名, 中文简介)
 CN_PROJECTS: dict[str, tuple[str, str]] = {
     # ---- 物品与配方 ----
@@ -182,6 +269,53 @@ def cn_name(title: str) -> str:
 def cn_description(title: str) -> str:
     entry = CN_PROJECTS.get(normalize_title(title))
     return entry[1] if entry else ""
+
+
+def categories_for(
+    title: str,
+    description: str = "",
+    platform_categories: list[str] | None = None,
+    project_type: str = "mod",
+) -> list[str]:
+    """按用途给项目归类（PCL 风格）。
+
+    判定顺序：平台标签 → 词表中文名/简介 → 标题与简介关键词。
+    返回的分类键按 ``CATEGORY_LABELS`` 的顺序排列，未命中任何分类时返回空列表。
+    """
+    kind = str(project_type or "mod")
+    entry = CN_PROJECTS.get(normalize_title(title))
+    parts = [title or "", description or "", " ".join(platform_categories or [])]
+    if entry:
+        parts.extend(entry)
+    text = " ".join(parts).lower()
+
+    found: set[str] = set()
+    for key, words in CATEGORY_KEYWORDS.items():
+        if any(word in text for word in words):
+            found.add(key)
+    for raw in platform_categories or []:
+        mapped = PLATFORM_CATEGORY_MAP.get(str(raw).strip().lower())
+        if mapped:
+            found.add(mapped)
+
+    if kind == "modpack":
+        found.add("modpack")
+    elif kind in ("resourcepack", "texturepack"):
+        found.add("resourcepack")
+    elif kind == "shader":
+        found.add("shader")
+        # 光影包常被平台同时标成资源包，按类型只保留「光影」
+        found.discard("resourcepack")
+
+    # 「前置」类项目往往也会命中「辅助」的关键词，只保留更具体的「前置」
+    if "library" in found and "utility" in found:
+        found.discard("utility")
+
+    return [key for key in CATEGORY_LABELS if key in found]
+
+
+def category_label(key: str) -> str:
+    return CATEGORY_LABELS.get(key, key)
 
 
 def translate_query(query: str) -> list[str]:

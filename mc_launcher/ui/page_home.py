@@ -11,11 +11,23 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QThread, QTimer, Qt, QUrl, Signal
+from PySide6.QtCore import (
+    QEvent,
+    QPropertyAnimation,
+    QRect,
+    QRectF,
+    QSize,
+    QThread,
+    QTimer,
+    Qt,
+    QUrl,
+    Signal,
+)
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
     QGuiApplication,
+    QPainter,
     QPixmap,
     QSyntaxHighlighter,
     QTextCharFormat,
@@ -26,6 +38,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -64,8 +77,21 @@ from ..launcher import (
     wait_early_exit,
 )
 from ..net import Cancelled, Http
-from ..version import InstalledVersion, VersionError, load_version, scan_installed_versions
-from .theme import make_avatar
+from ..version import (
+    InstalledVersion,
+    VersionError,
+    load_version,
+    scan_installed_versions,
+    version_category,
+)
+from .covers import CoverLoader
+from .theme import (
+    draw_block_pixel_progress,
+    make_avatar,
+    make_skin_avatar,
+    make_version_pixmap,
+    resolve_account_avatar,
+)
 from .widgets import Badge, Card, page_header
 
 
@@ -214,6 +240,212 @@ def _preflight(
     return {"blocked": blocked, "warnings": warnings, "mod_conflicts": mod_conflicts}
 
 
+# 启动动画下方轮播的随机启动词池（每次启动随机抽取，不重复演示顺序）
+START_TIPS = [
+    "正在唤醒草方块…", "正在给苦力怕充能…", "正在校准红石信号…",
+    "正在加载 42 个 Mod…", "正在和末影人对视…", "正在给钻石剑抛光…",
+    "正在数羊（不是）…", "正在编译下界传送门…", "正在给村民涨价…",
+    "马上就好，真的…", "正在说服僵尸不要敲门…", "正在给史莱姆量体重…",
+    "正在给铁傀儡上发条…", "正在整理物品栏…", "正在给猪灵递金锭…",
+    "正在编译区块…", "正在给末影箱贴标签…", "正在给熔炉添煤…",
+    "正在给附魔台擦灰…", "正在给信标调频…", "正在给海龟修壳…",
+    "正在给恶魂递纸巾…", "正在给凋灵系蝴蝶结…", "正在给羊驼梳毛…",
+    "正在给蝙蝠调音量…", "正在给女巫换扫帚…", "正在给鱿鱼配墨汁…",
+    "正在给兔子计时…", "正在给熊猫找竹子…", "正在给狐狸偷鸡蛋…",
+    "正在给蜜蜂排班…", "正在给青蛙换荷叶…", "正在给蝾螈洗澡…",
+    "正在给监守者戴耳塞…", "正在给悦灵发糖果…", "正在给循声守卫关警报…",
+    "正在给潜影贝叠被子…", "正在给守卫者擦眼镜…", "正在给远古守卫者补牙…",
+    "正在给幻翼定闹钟…", "正在给疣猪兽剪指甲…", "正在给猪灵蛮兵放假…",
+    "正在给烈焰人开空调…", "正在给岩浆怪降温…", "正在给恶魂擦眼泪…",
+    "正在给凋灵骷髅补钙…", "正在给骷髅马钉掌…", "正在给蜘蛛织网…",
+    "正在给洞穴蜘蛛量腿长…", "正在给蠹虫排队…", "正在给末影螨找家…",
+    "正在给潜影贝编程序…", "正在给海豚指路…", "正在给鳕鱼发泳帽…",
+    "正在给鲑鱼分组…", "正在给河豚打气…", "正在给热带鱼调色…",
+    "正在给美西螈换水…", "正在给山羊练嗓…", "正在给铁傀儡充电…",
+    "正在给雪傀儡加雪…", "正在给哞菇挤蘑菇汤…", "正在给棕色哞菇换色…",
+    "正在给马配鞍…", "正在给驴驮货…", "正在给骡子算账…",
+    "正在给羊驼吐口水（不是）…", "正在给猫挠下巴…", "正在给豹猫喂鱼…",
+    "正在给鹦鹉学舌…", "正在给鸡下蛋…", "正在给牛反刍…",
+    "正在给猪打滚…", "正在给羊剪毛…", "正在给兔子跳高…",
+    "正在给狼摇尾巴…", "正在给狐狸骗食物…", "正在给熊猫啃竹子…",
+    "正在给北极熊划水…", "正在给海龟晒背…", "正在给海龟蛋保温…",
+    "正在给鱿鱼喷墨…", "正在给发光鱿鱼开灯…", "正在给蝾螈摆姿势…",
+    "正在给青蛙唱情歌…", "正在给蜜蜂开会…", "正在给铁傀儡系围裙…",
+    "正在给雪傀儡戴帽子…", "正在给村民开班…", "正在给流浪商人牵羊驼…",
+    "正在给卫道士磨斧头…", "正在给唤魔者练咒语…", "正在给幻术师隐身（不是）…",
+    "正在给掠夺者擦弩…", "正在给女巫煮药水…", "正在给岩浆怪切块…",
+    "正在给烈焰人添柴…", "正在给恶魂递纸巾（又是你）…", "正在给僵尸找假发…",
+    "正在给骷髅补钙…", "正在给苦力怕换引信…", "正在给末影人递方块…",
+    "正在给末影龙梳头…", "正在给凋灵递牛奶…", "正在给凋灵骷髅擦剑…",
+    "正在给猪灵换金装…", "正在给猪灵蛮兵换金斧…", "正在给监守者递耳塞（又是你）…",
+    "正在给悦灵发任务…", "正在给潜影贝补壳…", "正在给末影螨找拖鞋…",
+    "正在给蠹虫发工资…", "正在给蜘蛛擦网…", "正在给洞穴蜘蛛补牙…",
+    "正在给骷髅马钉新掌…", "正在给僵尸马喂草…", "正在给鱿鱼发墨水瓶…",
+    "正在给海豚开派对…", "正在给海龟算年龄…", "正在给美西螈叠被子…",
+    "正在给青蛙排节目…", "正在给熊猫找自拍角度…", "正在给蜜蜂修蜂巢…",
+    "正在给铁傀儡补铁…", "正在给雪傀儡补雪…", "正在给羊驼梳毛（又是你）…",
+    "正在给马刷鬃毛…", "正在给驴打包…", "正在给猫挠痒…",
+    "正在给鹦鹉戴帽子…", "正在给鸡配饲料…", "正在给牛挤奶…",
+    "正在给猪加餐…", "正在给羊配铃铛…", "正在给兔子修剪…",
+    "正在给狼配项圈…", "正在给狐狸偷鸡蛋（成功）…", "正在给末地石铺路…",
+    "正在给下界岩降温…", "正在给灵魂沙排队…", "正在给岩浆块加湿…",
+    "正在给黑曜石抛光…", "正在给钻石剑开刃…", "正在给铁剑磨边…",
+    "正在给金剑配鞘…", "正在给木剑打蜡…", "正在给石剑补缝…",
+    "正在给弓上弦…", "正在给弩装弹…", "正在给三叉戟擦锈…",
+    "正在给盾牌刷漆…", "正在给盔甲抛光…", "正在给头盔开孔…",
+    "正在给胸甲系带…", "正在给护腿调松紧…", "正在给靴子钉掌…",
+    "正在给鞘翅补翼…", "正在给烟花填药…", "正在给火箭调轨迹…",
+    "正在给末影珍珠擦亮…", "正在给末影之眼校准…", "正在给附魔书盖章…",
+    "正在给附魔台调频…", "正在给书架排队…", "正在给钻石附魔（不是）…",
+    "正在给经验球称重…", "正在给等级条充电…", "正在给创造模式开锁…",
+    "正在给生存模式递面包…", "正在给极限模式祈祷…", "正在给旁观者模式发眼镜…",
+    "正在给冒险模式发地图…", "正在给和平模式关音效…", "正在给简单模式加面包…",
+    "正在给普通模式调难度…", "正在给困难模式递护甲…", "正在给服务器加端口…",
+    "正在给局域网广播…", "正在给玩家发邀请…", "正在给世界存档备份…",
+    "正在给区块生成地形…", "正在给生物群系调色…", "正在给结构生成器校准…",
+    "正在给战利品表洗牌…", "正在给进度树浇水…", "正在给合成表排序…",
+    "正在给熔炉添煤（又是你）…", "正在给烟熏炉换木炭…", "正在给高炉加热…",
+    "正在给营火加柴…", "正在给信标充能…", "正在给潮涌核心找海洋…",
+    "正在给哭泣的黑曜石擦眼泪…", "正在给重生锚充能…", "正在给磁石定位…",
+    "正在给地图标记路径点…", "正在给指南针校准…", "正在给时钟上发条…",
+    "正在给望远镜擦镜片…", "正在给钓鱼竿挂鱼饵…", "正在给桶装水…",
+    "正在给桶装岩浆…", "正在给桶装牛奶…", "正在给桶装鱼（不是）…",
+    "正在给末影箱贴标签（又是你）…", "正在给潜影盒叠放…", "正在给潜影壳抛光…",
+    "正在给箱子分类…", "正在给漏斗对齐…", "正在给投掷器装货…",
+    "正在给发射器上膛…", "正在给活塞调行程…", "正在给粘性活塞涂胶…",
+    "正在给观察者开眼…", "正在给侦测器装电池…", "正在给红石粉通电…",
+    "正在给红石火把点火…", "正在给中继器调延迟…", "正在给比较器称重…",
+    "正在给阳光传感器晒太阳…", "正在给铁轨铺路…", "正在给矿车装轮…",
+    "正在给船装桨…", "正在给漏斗矿车装货…", "正在给TNT拆引线（不是）…",
+    "正在给末地传送门摆方块…", "正在给下界传送门调色…", "正在给远古城市关警报…",
+    "正在给海底神殿换水…", "正在给林地府邸贴墙纸…", "正在给沙漠神殿扫沙…",
+    "正在给丛林神庙擦藤蔓…", "正在给要塞铺砖…", "正在给矿井装灯…",
+    "正在给村庄修路…", "正在给掠夺者塔调角度…", "正在给海底废墟整理…",
+    "正在给沉船排水…", "正在给宝藏填箱…", "正在给废弃矿井通风…",
+    "正在给雪屋开暖气…", "正在给女巫小屋换锅…", "正在给冰屋补冰…",
+    "正在给沙漠水井打水…", "马上就好，真的（第 N 次）…",
+    "正在给苦力怕贴创可贴…", "正在给村民发工作牌…", "正在给末影龙修翅膀…",
+    "正在给岩浆怪找一个不烫的家…", "正在给史莱姆解释什么是重力…",
+    "正在给骷髅借一副弓…", "正在给羊驼讲冷笑话…", "正在给北极熊开泳池…",
+    "正在给恶魂量血压…", "正在给幻翼发夜班费…",
+]
+
+
+class StartAnimationWidget(QWidget):
+    """启动游戏时覆盖在主页上的半透明遮罩，像素草方块按进度逐格填充。"""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.setAutoFillBackground(False)
+        self._progress = 0.0
+        self._stage = ""
+        self._tip = ""
+        self._fade_anim: QPropertyAnimation | None = None
+        self._effect = QGraphicsOpacityEffect(self)
+        self._effect.setOpacity(0.0)
+        self.setGraphicsEffect(self._effect)
+        self._effect.setEnabled(False)
+        self.hide()
+
+    # ------------------------------------------------------------------
+    def start(self) -> None:
+        """开始显示：每次启动随机抽一条启动词并固定显示，不再轮播。"""
+        self._progress = 0.0
+        self._stage = ""
+        self._tip = self._pick_tip()
+        self._effect.setEnabled(True)
+        self._effect.setOpacity(0.0)
+        self.show()
+        self.raise_()
+        self._animate_fade(1.0, 300)
+        self.update()
+
+    def set_progress(self, percent: float, stage: str = "") -> None:
+        self._progress = max(0.0, min(1.0, float(percent)))
+        if stage:
+            self._stage = stage
+        self.update()
+
+    def finish(self) -> None:
+        if not self.isVisible():
+            return
+        self._progress = 1.0
+        self.update()
+        self._animate_fade(0.0, 400, on_finished=self._on_faded_out)
+
+    def _on_faded_out(self) -> None:
+        self.hide()
+        self._effect.setEnabled(False)
+
+    def _pick_tip(self) -> str:
+        import random
+
+        return random.choice(START_TIPS)
+
+    def _animate_fade(self, target: float, duration: int, on_finished=None) -> None:
+        if self._fade_anim is not None:
+            self._fade_anim.stop()
+        anim = QPropertyAnimation(self._effect, b"opacity", self)
+        anim.setDuration(duration)
+        anim.setStartValue(self._effect.opacity())
+        anim.setEndValue(target)
+        if on_finished is not None:
+            anim.finished.connect(on_finished)
+        anim.start()
+        self._fade_anim = anim
+
+    # ------------------------------------------------------------------
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        painter.fillRect(self.rect(), QColor(12, 19, 16, 220))
+
+        block_size = 256
+        x = (self.width() - block_size) // 2
+        y = (self.height() - block_size) // 2 - 60
+        if y < 16:
+            y = 16
+        painter.save()
+        painter.translate(x, y)
+        draw_block_pixel_progress(painter, block_size, self._progress)
+        painter.restore()
+
+        # 进度百分比
+        font = painter.font()
+        font.setPointSize(14)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor("#8fe89b"))
+        painter.drawText(
+            QRect(x, y + block_size + 20, block_size, 30),
+            Qt.AlignCenter,
+            f"{int(self._progress * 100)}%",
+        )
+
+        # 阶段文字
+        font.setPointSize(11)
+        font.setBold(False)
+        painter.setFont(font)
+        painter.setPen(QColor("#b3c8b9"))
+        painter.drawText(
+            QRect(x, y + block_size + 55, block_size, 24),
+            Qt.AlignCenter,
+            self._stage,
+        )
+
+        # 随机启动词
+        font.setPointSize(10)
+        painter.setFont(font)
+        painter.setPen(QColor("#8aa192"))
+        painter.drawText(
+            QRect(x - 140, y + block_size + 90, block_size + 280, 24),
+            Qt.AlignCenter,
+            self._tip,
+        )
+        painter.end()
+
+
 class VersionRow(QFrame):
     selected = Signal(str)
     activated = Signal(str)
@@ -239,6 +471,15 @@ class VersionRow(QFrame):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 10, 12, 10)
         layout.setSpacing(10)
+
+        icon_label = QLabel()
+        icon_label.setPixmap(
+            make_version_pixmap(
+                version_category(version.base_version or version.id, version.type), 32
+            )
+        )
+        icon_label.setFixedSize(32, 32)
+        layout.addWidget(icon_label)
 
         texts = QVBoxLayout()
         texts.setSpacing(4)
@@ -802,6 +1043,7 @@ class HomePage(QWidget):
         self._log_lines: list[str] = []
         self._loaded_instance = self.ctx.config.selected_instance_id
         self._build()
+        self._covers = CoverLoader(self)
         self._connect()
         self.refresh_versions()
         self.reload_config()
@@ -825,6 +1067,10 @@ class HomePage(QWidget):
         settings_button.setObjectName("Chip")
         settings_button.clicked.connect(lambda: self.ctx.bus.navigate.emit("settings"))
         header_layout.addWidget(settings_button)
+        nbt_button = QPushButton(self.tr("NBT 编辑器…"))
+        nbt_button.setObjectName("Chip")
+        nbt_button.clicked.connect(self._open_nbt_editor)
+        header_layout.addWidget(nbt_button)
         outer.addWidget(header)
 
         body = QHBoxLayout()
@@ -1074,6 +1320,16 @@ class HomePage(QWidget):
         self.console_highlighter = LogHighlighter(self.console.document())
         console_card.body.addWidget(self.console, 1)
         right.addWidget(console_card)
+
+        # 启动动画遮罩：覆盖在整页之上，默认隐藏
+        self.start_anim = StartAnimationWidget(self)
+        self.start_anim.setGeometry(self.rect())
+        self.start_anim.hide()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if hasattr(self, "start_anim"):
+            self.start_anim.setGeometry(self.rect())
 
     @staticmethod
     def _card_title(title: str, subtitle: str, extra: QWidget | None = None) -> QWidget:
@@ -1387,7 +1643,16 @@ class HomePage(QWidget):
         kinds = {"offline": "gray", "microsoft": "blue", "authlib": "orange"}
         self.account_badge.setText(t("HomePage", account.type_label))
         self.account_badge.set_kind(kinds.get(account.type, "gray"))
-        self.avatar_label.setPixmap(make_avatar(account.name or "Steve", 56))
+        avatar = resolve_account_avatar(account, 56)
+        self.avatar_label.setPixmap(avatar)
+        if getattr(account, "skin_url", "") and not getattr(account, "skin_path", ""):
+            self._covers.load(
+                account.skin_url,
+                lambda pm: self._on_avatar_ready(
+                    make_skin_avatar(pm, 56) if pm is not None and not pm.isNull() else avatar
+                ),
+                QSize(56, 56),
+            )
         if not self.name_edit.hasFocus():
             self.name_edit.blockSignals(True)
             self.name_edit.setText(account.name)
@@ -1401,6 +1666,18 @@ class HomePage(QWidget):
         if account.auth_server:
             tip += f" · {account.auth_server}"
         self.name_edit.setToolTip(tip)
+
+    def _on_avatar_ready(self, pixmap) -> None:
+        try:
+            self.avatar_label.setPixmap(pixmap)
+        except RuntimeError:
+            pass
+
+    def _open_nbt_editor(self) -> None:
+        from .dialog_nbt import NbtEditorDialog
+
+        dialog = NbtEditorDialog(self.ctx, self)
+        dialog.exec()
 
     def _refresh_java_combo(self) -> None:
         current = self.ctx.config.java_path
@@ -1557,6 +1834,9 @@ class HomePage(QWidget):
         self.progress_bar.setValue(0)
         self.launch_button.setText(self.tr("取消"))
 
+        if self.ctx.config.start_animation:
+            self.start_anim.start()
+
         self._worker = LaunchWorker(
             self.ctx,
             version_id,
@@ -1593,6 +1873,7 @@ class HomePage(QWidget):
         if progress.speed > 0 and progress.percent < 1:
             detail += f" · {progress.speed / 1048576:.1f} MB/s"
         self.progress_detail.setText(detail)
+        self.start_anim.set_progress(progress.percent, progress.stage)
 
     def _on_log(self, line: str) -> None:
         self._append_log(line)
@@ -1633,6 +1914,7 @@ class HomePage(QWidget):
         self.launch_button.setEnabled(True)
         self.launch_info.setText(t("HomePage", "游戏运行中：{0}", self._selected_id))
         self._append_log("[启动] 游戏进程已启动。")
+        self.start_anim.finish()
         action = self.ctx.config.after_launch_action
         if action == "hide":
             QTimer.singleShot(800, self.ctx.bus.hide_window.emit)
@@ -1680,6 +1962,7 @@ class HomePage(QWidget):
 
     def _reset_launch_ui(self) -> None:
         self.progress_card.setVisible(False)
+        self.start_anim.finish()
         self.launch_button.setText(self.tr("启动游戏"))
         self.launch_button.setEnabled(bool(self._selected_id))
         if self._selected_id:
@@ -1842,3 +2125,4 @@ class HomePage(QWidget):
         if self._worker is not None and self._worker.isRunning():
             self._worker.cancel_event.set()
             wait_thread(self._worker, 4000)
+        self._covers.shutdown()

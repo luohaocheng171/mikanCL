@@ -23,9 +23,10 @@ CACHE_DIR = DATA_DIR / "cache"
 LOG_DIR = DATA_DIR / "logs"
 BROWSER_DIR = DATA_DIR / "browser"
 INSTANCES_DIR = DATA_DIR / "instances"
+WIKI_DIR = DATA_DIR / "wiki"
 CONFIG_PATH = DATA_DIR / "config.json"
 
-for _d in (DATA_DIR, CACHE_DIR, LOG_DIR, BROWSER_DIR, INSTANCES_DIR):
+for _d in (DATA_DIR, CACHE_DIR, LOG_DIR, BROWSER_DIR, INSTANCES_DIR, WIKI_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 OFFICIAL_MANIFEST = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json"
@@ -342,11 +343,14 @@ class Config:
     after_launch_action: str = "nothing"
     keep_launcher_on_game_exit: bool = True
     close_to_tray: bool = False
+    start_animation: bool = True
     selected_source_id: str = "official"
     sources: list[DownloadSource] = field(default_factory=builtin_sources)
 
     # ---- 界面 ----
     language: str = "zh_CN"
+    accent_color: str = "#65d46e"
+    background_image: str = ""
 
     # ---- 版本隔离与单版本设置 ----
     isolation_mode: str = "none"
@@ -626,8 +630,11 @@ class Config:
             after_launch_action=self.after_launch_action,
             keep_launcher_on_game_exit=self.keep_launcher_on_game_exit,
             close_to_tray=self.close_to_tray,
+            start_animation=self.start_animation,
             selected_source_id=self.selected_source_id,
             sources=list(self.sources),
+            accent_color=self.accent_color,
+            background_image=self.background_image,
             isolation_mode=self.isolation_mode,
             process_priority=self.process_priority,
             window_title=self.window_title,
@@ -669,7 +676,10 @@ class Config:
                 "after_launch_action": self.after_launch_action,
                 "keep_launcher_on_game_exit": bool(self.keep_launcher_on_game_exit),
                 "close_to_tray": bool(self.close_to_tray),
+                "start_animation": bool(self.start_animation),
                 "language": self.language,
+                "accent_color": self.accent_color,
+                "background_image": self.background_image,
                 "selected_source_id": self.selected_source_id,
                 "sources": [s.to_dict() for s in self.sources],
                 "isolation_mode": self.isolation_mode,
@@ -774,12 +784,15 @@ class Config:
         cfg.hide_after_launch = bool(data.get("hide_after_launch", False))
         cfg.keep_launcher_on_game_exit = bool(data.get("keep_launcher_on_game_exit", True))
         cfg.close_to_tray = bool(data.get("close_to_tray", False))
+        cfg.start_animation = bool(data.get("start_animation", True))
         # 延迟导入，避免 config 模块在导入时就依赖 Qt
         from .i18n import SUPPORTED_LANGUAGES
 
         cfg.language = str(data.get("language") or "zh_CN")
         if cfg.language not in SUPPORTED_LANGUAGES:
             cfg.language = "zh_CN"
+        cfg.accent_color = str(data.get("accent_color") or "#65d46e")
+        cfg.background_image = str(data.get("background_image") or "")
         cfg.after_launch_action = str(data.get("after_launch_action") or "")
         if cfg.after_launch_action not in AFTER_LAUNCH_ACTIONS:
             cfg.after_launch_action = "hide" if cfg.hide_after_launch else "nothing"
@@ -828,7 +841,7 @@ class Config:
         )
         cfg.curseforge_cdn_mirror = str(data.get("curseforge_cdn_mirror") or "")
         try:
-            cfg.download_threads = max(1, min(64, int(data.get("download_threads") or 16)))
+            cfg.download_threads = max(1, min(328, int(data.get("download_threads") or 16)))
         except (TypeError, ValueError):
             cfg.download_threads = 16
 

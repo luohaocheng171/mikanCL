@@ -1,4 +1,4 @@
-# MikanCL v4.2.0 官方文档
+# MikanCL v4.3.0 官方文档
 
 <div align="center">
 
@@ -6,7 +6,7 @@
 [![PySide6](https://img.shields.io/badge/PySide6-Qt6-brightgreen.svg)](https://www.qt.io/)
 [![License](https://img.shields.io/badge/License-GPL--3.0-red.svg)](https://www.gnu.org/licenses/gpl-3.0.html)
 
-**MikanCL** — 正版登录 + 外置登录 + 5 大加载器一键安装 + Modrinth/CurseForge 内容中心（含中文译名）+ 整合包管理 + 陶瓦联机 + Java 中心 + 启动预检
+**MikanCL** — 正版登录 + 外置登录 + 5 大加载器一键安装 + Modrinth/CurseForge 内容中心（含中文译名）+ 整合包管理 + 陶瓦联机 + Java 中心 + 教程 Wiki + NBT 编辑器 + 启动动画
 
 *AI 辅助开发工具：DeepSeek*
 
@@ -22,7 +22,7 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 
 ### 版本信息
 
-- **当前版本**：v4.2.0
+- **当前版本**：v4.3.0
 - **框架**：PySide6（Qt6，Fusion 深色主题 + 自绘标题栏）
 - **Python 要求**：3.10+
 - **运行平台**：Windows 10 / 11（x64）
@@ -50,6 +50,8 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 | 换 Java / 装 Java | 「Java 中心」一键下载 6 家发行版；「设置」里手动指定或自动匹配 |
 | 管账号与皮肤 | 微软正版设备码登录、皮肤站外置登录、离线账号，皮肤查询 / 上传 / 本地皮肤 |
 | 排查「装上了但起不来」 | 启动预检 5 项拦截 + Mod 冲突检测 + 界面日志与 `install_error.log` 落盘 |
+| 不会装 / 装崩了想查教程 | 「教程中心」内置 8 篇 Markdown 攻略（Forge / Fabric / 光影 / 内存 / Mod 冲突 / Java / NBT / 离线皮肤），支持标题与正文搜索 |
+| 想改世界种子 / 游戏模式 | 「NBT 编辑器」可视化读写 `level.dat` 与 `playerdata/*.dat`，双击改值、右键增删标签，首次保存自动备份 `.bak` |
 | 多个版本互不干扰 | 4 种隔离模式（不隔离 / 仅模组 / 仅存档 / 全部隔离），整合包自动独立目录 |
 | 小屏幕 / 想调窗口 | 无边框窗口可拖四边四角自由缩放，默认 1080×680，内容放不下自动变滚轮滚动 |
 
@@ -101,6 +103,76 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 14. **单文件免安装**
     一个 `MikanCL.exe`，双击即用，配置与缓存写在 exe 同目录的 `data/`，换机直接拷走。
 
+15. **PCL 风格用途分类**
+    内容中心新增一排「优化 / 辅助 / 前置 / 装饰 / 科技 / 魔法 / 冒险 / 农业 / 世界生成」等分类按钮，点一下即按用途过滤；分类由本地词表 + 平台标签 + 中英文关键词共同判定，不额外依赖网络。
+
+16. **主题色与自定义背景**
+    内置森林绿 / 海蓝 / 暮紫 / 赤红 / 琥珀 / 青碧 6 套主题色，支持取色器自定义，切换即时生效；可指定任意图片作为启动器整体背景，按窗口比例等比铺满并居中裁切（不拉伸变形），侧边栏与标题栏自动半透明保证可读。
+
+17. **插件扩展**
+    `data/plugins/` 下放一个 `.py` 文件即可新增侧边栏页面，通过 `setup(api)` 使用启动器 API（版本、实例、内容搜索、下载、安装、后台线程等），无需改源码或重新打包；单个插件出错只记录日志，不影响启动器运行。
+
+18. **内置教程 Wiki**
+    启动器自带 8 篇 Markdown 教程（安装 Forge / Fabric、装光影、内存不足、Mod 冲突、Java 版本、NBT 编辑器、离线皮肤），首次运行自动写入 `data/wiki/`，可直接改文件扩充；教程中心支持按标题与正文搜索，外链交给系统浏览器，站内锚点就地跳转。
+
+19. **启动动画**
+    点启动后主页覆盖一层半透明遮罩，256×256 草方块按真实下载进度逐格填满，下方显示阶段文字与百分比，并从 255 条彩蛋启动词中随机挑一条固定展示（每次启动不重复轮播），进度完成或失败时 400ms 淡出；可在设置里关闭。
+
+20. **NBT 编辑器**
+    纯 Python 手写的 NBT 读写（13 种标签、自动识别 gzip、写回时严格保留原标签类型），配合树形编辑器可视化查看 `level.dat` / `playerdata`：双击改叶子值、右键增删标签、根节点保护、未保存提醒，首次保存自动在同目录生成 `.bak` 副本。
+
+21. **账号头像即皮肤头部**
+    主页卡片、侧边栏与账号详情不再用随机像素头像，而是直接从皮肤文件裁出「头部 + 帽子层」生成圆角头像；本地无皮肤时异步拉取 `skin_url` 补全，失败自动回退像素头像。
+
+22. **浏览器登录态持久化**
+    内置浏览器使用命名持久化 Profile，启动时主动加载磁盘 Cookie、退出时主动落盘，B 站 / 皮肤站等站点一次登录长期有效；QtWebEngine 缺少 H.264 无法播放部分视频时，可一键「系统浏览器」打开当前页。
+
+---
+
+## 插件扩展
+
+MikanCL 支持用单个 `.py` 文件扩展页面，无需修改启动器源码、无需重新打包。
+
+- 用户插件目录：`data/plugins/*.py`（不存在时自动创建）
+- 直接把 `.py` 文件拖进启动器窗口即可安装插件：文件会被复制到 `data/plugins/` 并立即加载，侧边栏出现新页面
+- 插件加载失败不会影响启动器，错误会写进控制台日志并在状态栏提示
+
+最小插件：
+
+```python
+from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+
+PLUGIN_NAME = "我的插件"
+
+def setup(api):
+    page = QWidget()
+    layout = QVBoxLayout(page)
+    layout.addWidget(QLabel(f"你好，{api.app_name} {api.app_version}"))
+    api.add_page("我的插件", page)   # 侧边栏出现「我的插件」
+```
+
+### 插件 API 一览
+
+| API | 说明 |
+| :--- | :--- |
+| `api.app_name` / `api.app_version` | 启动器名称与版本 |
+| `api.config` | 当前 `Config` 对象，可直接读写字段（改完调用 `config.save()`） |
+| `api.data_dir` / `api.plugins_dir` | 数据目录与插件目录 |
+| `api.add_page(标题, QWidget)` | 新增侧边栏页面；页面可提供 `refresh()`，切页时自动调用 |
+| `api.log(文本)` / `api.toast(文本)` | 写控制台日志 / 状态栏提示 |
+| `api.navigate(名称)` | 跳转内置页：`home` `download` `downloads` `content` `modpack` `account` `control` `loaders` `multiplayer` `browser` `forbric` `java` `wiki` `settings` |
+| `api.open_url(网址)` / `api.open_folder(路径)` | 用内置浏览器打开网址 / 打开本地目录 |
+| `api.list_instances()` | 实例列表（id / 名称 / MC 版本 / 加载器 / 路径 / 是否选中） |
+| `api.list_versions(实例 id)` | 已安装版本列表（id / 类型 / 加载器 / 基础版本 / 路径） |
+| `api.current_account()` | 当前账号（名称 / UUID / 类型） |
+| `api.list_java()` | 已检测到的 Java |
+| `api.search(...)` | 调用 Modrinth / CurseForge 搜索，返回纯字典列表 |
+| `api.download_file(网址, 目标路径, 进度回调)` | 直接下载文件（同步，建议放进 `background`） |
+| `api.install_version(MC 版本, 实例 id, 进度/完成/失败回调)` | 后台安装原版版本 |
+| `api.background(函数, 完成回调, 失败回调)` | 把耗时任务放到后台线程，不卡界面 |
+
+> 插件代码与启动器同权限运行，请只安装可信来源的插件。
+
 ---
 
 ## 设计参考
@@ -122,10 +194,11 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 ### 基础功能
 
 - **版本管理**：原版版本下载与安装、版本列表双击启动、多版本同时安装、版本重命名/删除
+- **版本分类**：正式版（草方块）、测试版（命令方块）、远古版（原石）、愚人节（TNT）四类标签，默认只显示正式版，点哪个标签加载哪一类；顶部常驻「最新正式版 / 最新测试版」卡片，可一键进入详情；所有版本图标均为自绘像素图
 - **下载中心**：独立任务页，统一管理原版安装、加载器安装、整合包、内容下载、Java 下载、纯文件下载等任务，支持暂停 / 恢复 / 取消 / 重试 / 打开目录
 - **版本隔离**：不隔离、仅隔离模组、仅隔离存档、全部隔离（独立游戏目录）四种模式，可按版本单独覆盖
 - **数据目录**：支持添加多个 `.minecraft` 目录，通过侧边栏下拉框快速切换
-- **多线程下载**：线程数可配置（默认 64），所有任务共用同一套并发与调度策略
+- **多线程下载**：线程数可配置（1–328，默认 16），所有任务共用同一套并发与调度策略
 - **日志与诊断**：界面日志同步落盘 `data/logs/launcher.log`（5MB × 3 轮转）；安装失败时额外写入 `data/logs/install_error.log` 并自动复制日志到剪贴板
 - **单实例保护**：基于 QSharedMemory，避免两个进程同时读写配置与浏览器缓存
 
@@ -135,6 +208,7 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 - **多选启动**：在主页勾选多个版本后按顺序依次启动，支持中途停止队列
 - **进程优先级**：启动游戏时可设置进程优先级（低 / 正常 / 高 / 实时）
 - **启动后行为**：隐藏启动器、关闭启动器、保持打开等可选；可配置游戏退出后是否保留启动器
+- **启动动画**：启动时草方块按进度逐格填充、随机彩蛋词条、淡入淡出，可在设置中关闭
 - **自动连接服务器**：启动时自动进入配置好的服务器地址
 - **代理支持**：HTTP 代理可同时应用于下载与游戏 JVM 参数
 - **系统托盘**：最小化到托盘、托盘快捷启动
@@ -166,10 +240,13 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 - **外置登录**：基于 authlib-injector，支持任意皮肤站 / 外置登录服务器；自动下载并注入 `authlib-injector.jar`
 - **离线账号**：自定义玩家名，生成离线 UUID
 - **皮肤管理**：正版皮肤查询、按用户名查找皮肤、上传皮肤；离线皮肤支持 Steve / Alex 手臂模型，写入 `CustomSkinLoader/LocalSkin/skins`，游戏内显示需搭配 CustomSkinLoader Mod
+- **皮肤头像**：主页卡片、侧边栏、账号详情直接使用皮肤「头部 + 帽子层」生成圆角头像，无本地皮肤时异步拉取 `skin_url`，失败回退像素头像
 
 ### 扩展与实验性功能
 
-- **内置浏览器**：QtWebEngine 内置页面，便于查看 MC 百科、Mod 页面、皮肤站
+- **内置浏览器**：QtWebEngine 内置页面，便于查看 MC 百科、Mod 页面、皮肤站；已开启 HTML5 视频自动播放与全屏支持；使用命名持久化 Profile，启动时加载 Cookie、退出时落盘，登录状态跨会话保留；缺少 H.264 的站点可一键用「系统浏览器」打开当前页
+- **教程中心**：内置 8 篇 Markdown 攻略，左侧目录 + 右侧渲染，支持搜索、内部锚点与外链跳转，可从教程页直接打开 NBT 编辑器
+- **NBT 编辑器**：纯手写 NBT 读写（13 种标签、gzip 自动识别、类型完整保留），树形查看 / 编辑 `level.dat` 与 `playerdata`，右键增删标签，首次保存自动生成 `.bak`
 - **Java 中心**：Adoptium Temurin、Microsoft OpenJDK、Azul Zulu、Amazon Corretto、Alibaba Dragonwell、Tencent Kona 六大发行版，按主版本（8 / 11 / 17 / 21）下载安装，自动解压到 `data/` 并在设置中选中
 - **Forbric 引导式安装**：实验性 Fabric/Forge/NeoForge 三合一加载器，通过 GitHub Releases 自动获取最新安装器与 `Forbric-Installer.bat`，用 Java 21 拉起官方 GUI，后台轮询 `versions/26.2-forbric/26.2-forbric.json`，生成后自动注册实例
 
@@ -308,9 +385,11 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | `mc_launcher/downloads.py` | 下载中心任务模型与调度（并发上限、暂停 / 恢复 / 取消 / 重试） |
 | `mc_launcher/java.py` | Java 探测、版本匹配、Java 下载与解压 |
 | `mc_launcher/forbric.py` | Forbric 安装器获取 / 下载 / 启动、版本结果轮询 |
+| `mc_launcher/nbt.py` | 最小 NBT 读写（13 种标签 / gzip 自动识别），含保留标签类型的 typed 变体 |
 | `mc_launcher/terracotta.py` | 陶瓦联机发行包下载校验、进程管理与本地 HTTP API |
 | `mc_launcher/cn_source.py` | MC百科译名查询、节流与 `cn_names.json` 缓存（可选在线词典） |
-| `mc_launcher/mod_cn.py` | 本地中文词表、标题归一化、`cn_name()` / `translate_query()` |
+| `mc_launcher/mod_cn.py` | 本地中文词表、用途分类（`categories_for()`）、标题归一化、`cn_name()` / `translate_query()` |
+| `mc_launcher/plugins.py` | 插件加载（`data/plugins/*.py`）与插件 API（页面、实例、搜索、下载、后台线程） |
 | `mc_launcher/i18n.py` | 五语言翻译表加载与运行时切换 |
 | `mc_launcher/context.py` | `AppContext`（配置 / 源 / 账号 / 内容 / 下载中心）与 `AppBus`（日志、提示、事件） |
 | `mc_launcher/version.py` | 版本清单缓存与版本列表筛选 |
@@ -323,16 +402,17 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | 启动游戏 | `HomePage` | 版本列表、双击 / 多选启动、启动预检、拖拽导入、整合包快速入口 |
 | 下载安装 | `DownloadPage` | 原版版本安装、加载器安装、加载器源文件另存为、仅下载客户端 Jar |
 | 下载中心 | `DownloadCenterPage` | 任务表格、进度 / 速度 / 状态、暂停 / 恢复 / 取消 / 重试 / 打开目录 |
-| 内容中心 | `ContentPage` | Modrinth / CurseForge 搜索、详情、安装到实例、另存为、中文译名与材质包分类 |
+| 内容中心 | `ContentPage` | Modrinth / CurseForge 搜索、用途分类（优化 / 科技 / 魔法等）、详情、安装到实例、另存为、中文译名与材质包分类 |
 | 整合包 | `ModpackPage` | 已装整合包列表、导入、导出（CF 格式 / `.mikan`）、删除 |
 | 账号管理 | `AccountsPage` | 三种登录方式、账号切换、皮肤管理 |
 | 版本设置 | `ControlPage` | 单版本 Java / 内存 / 参数 / 隔离、Mod 管理、资源包、光影、存档、日志 |
 | Mod 加载器 | `LoadersPage` | 左侧按 MC 版本浏览，右侧列出该版本可用的加载器版本（最多 12 行），一键安装 |
 | 多人联机 | `MultiplayerPage` | 陶瓦联机安装、创建 / 加入房间、房间码复制、联机日志 |
-| 内置浏览器 | `BrowserPage` | QtWebEngine 浏览页 |
+| 内置浏览器 | `BrowserPage` | QtWebEngine 浏览页、Cookie 登录态持久化、系统浏览器回退 |
 | Forbric | `ForbricPage` | 版本兼容拦截、安装器下载与 GUI 启动、结果监控 |
 | Java 中心 | `JavaCenterPage` | 六大 Java 发行版下载与安装 |
-| 设置 | `SettingsPage` | 数据目录、下载源、线程数、代理、API Key、镜像、界面选项 |
+| 教程中心 | `WikiPage` | 内置 8 篇 Markdown 教程、目录浏览、标题与正文搜索、NBT 编辑器入口 |
+| 设置 | `SettingsPage` | 数据目录、下载源、线程数（1–328）、代理、API Key、镜像、界面选项（含启动动画开关）、主题色与背景、插件目录 |
 
 > 注意区分两个加载器页：`LoaderPage`（`page_loader.py`）是「下载安装」页里的**表单式**加载器安装区（手动填 MC 版本 + 加载器版本）；`LoadersPage`（`page_loaders.py`）是导航栏独立入口「Mod 加载器」，按 MC 版本**浏览列表**后选择安装。两者共用同一套安装 worker 与 `modloader.install_loader()`。
 
@@ -351,6 +431,7 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | `data/config.json` | 全部设置项、下载源列表、数据目录列表、实例列表、版本设置、服务器列表 |
 | `data/accounts.json` | 账号列表与当前选中账号（含刷新令牌） |
 | `data/instances/<实例>/instance.json` | 实例元数据（名称、MC 版本、加载器、来源整合包、创建时间） |
+| `data/wiki/*.md` | 内置教程 Markdown（首次运行自动写入，可自行修改 / 扩充） |
 
 ---
 
@@ -377,9 +458,11 @@ MikanCL/
 │   ├── downloads.py            # 下载中心
 │   ├── java.py                  # Java 探测与下载
 │   ├── forbric.py              # Forbric
+│   ├── nbt.py                  # NBT 读写（level.dat / playerdata）
 │   ├── terracotta.py           # 陶瓦联机
 │   ├── cn_source.py            # MC百科译名词典（在线 + 缓存）
-│   ├── mod_cn.py               # 本地中文词表与中文检索
+│   ├── mod_cn.py               # 本地中文词表、用途分类与中文检索
+│   ├── plugins.py              # 插件加载与插件 API
 │   ├── i18n.py                 # 五语言翻译
 │   ├── context.py              # 应用上下文
 │   ├── version.py              # 版本清单
@@ -398,6 +481,8 @@ MikanCL/
 │       ├── page_browser.py     # 内置浏览器
 │       ├── page_forbric.py     # Forbric（+ forbric_worker.py）
 │       ├── page_java_center.py # Java 中心
+│       ├── page_wiki.py        # 教程中心（内置 Markdown Wiki）
+│       ├── dialog_nbt.py       # NBT 编辑器对话框
 │       ├── page_settings.py    # 设置
 │       ├── page_loader.py      # 加载器安装（表单式：手动选 MC 版本 + 加载器版本）
 │       ├── page_loaders.py     # 加载器安装（按 MC 版本浏览，LoadersPage）
@@ -412,7 +497,8 @@ MikanCL/
 │   ├── libs/                   # authlib-injector 等运行库
 │   ├── logs/                   # launcher.log、install_error.log
 │   ├── skins/                  # 皮肤缓存
-│   └── browser/                # QtWebEngine profile
+│   ├── wiki/                   # 内置教程 Markdown（首次运行自动生成）
+│   └── browser/                # QtWebEngine profile（Cookie / 登录态）
 └── dist/                       # 打包产物（MikanCL.exe）
 ```
 
@@ -529,7 +615,7 @@ pyinstaller --noconfirm --clean --onefile --windowed --name MikanCL \
 
 ### 主题与图标
 
-`ui/theme.py` 提供全局 `STYLESHEET`、`make_block_icon()`（应用 / 标题栏图标）、`make_nav_icon()`（侧边栏图标）、`make_avatar()`（离线头像）。新增导航项时若没有专属图标分支，会自动回退到默认方块图标。
+`ui/theme.py` 提供全局 `STYLESHEET`、`make_block_icon()`（应用 / 标题栏图标）、`make_nav_icon()`（侧边栏图标）、`make_version_pixmap()`（版本分类图标）、`draw_block_pixel_progress()`（启动动画草方块）、`make_avatar()`（离线像素头像）、`make_skin_avatar()`（皮肤头部头像）与 `resolve_account_avatar()`（按皮肤 / 像素自动回退）。新增导航项时若没有专属图标分支，会自动回退到默认方块图标。
 
 ---
 

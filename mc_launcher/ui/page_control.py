@@ -669,6 +669,9 @@ class ControlPage(QWidget):
         import_world = QPushButton("导入世界存档…")
         import_world.clicked.connect(self._import_world_archive)
         buttons.addWidget(import_world)
+        edit_nbt = QPushButton("编辑 level.dat…")
+        edit_nbt.clicked.connect(self._edit_level_dat)
+        buttons.addWidget(edit_nbt)
         export_pack = QPushButton("导出为整合包…")
         export_pack.clicked.connect(self._export_modpack)
         buttons.addWidget(export_pack)
@@ -693,6 +696,30 @@ class ControlPage(QWidget):
         layout.addWidget(hint)
         layout.addStretch(1)
         return page
+
+    def _edit_level_dat(self) -> None:
+        """打开当前实例世界存档的 level.dat NBT 编辑器。"""
+        saves = self._instance_dir() / "saves"
+        levels = sorted(saves.glob("*/level.dat")) if saves.exists() else []
+        if not levels:
+            QMessageBox.information(
+                self, APP_NAME, "当前实例还没有世界存档，先启动游戏创建世界吧。"
+            )
+            return
+        target = levels[0]
+        if len(levels) > 1:
+            names = [f"{p.parent.name}" for p in levels]
+            name, ok = QInputDialog.getItem(
+                self, "选择世界存档", "要编辑哪个世界的 level.dat？", names, 0, False
+            )
+            if not ok:
+                return
+            target = levels[names.index(name)]
+        from .dialog_nbt import NbtEditorDialog
+
+        dialog = NbtEditorDialog(self.ctx, self)
+        dialog.open_path(str(target))
+        dialog.exec()
 
     def _import_world_archive(self) -> None:
         version = self._current_version()

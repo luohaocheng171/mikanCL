@@ -12,6 +12,7 @@ from pathlib import Path
 from PySide6.QtCore import QRectF, QSize, QStandardPaths, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QGuiApplication, QPainter, QPainterPath, QPixmap
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -1203,6 +1204,8 @@ class ContentPage(QWidget):
         self._card_titles: list[tuple[ContentProject, QLabel]] = []
         self._cards: list[QWidget] = []
         self._grid_columns = self.COLUMNS
+        # 当前选中的用途分类（"" = 全部）
+        self._category = ""
         self._translate_worker: TranslateWorker | None = None
         self._pending_titles: list[str] = []
         self._build()
@@ -1274,6 +1277,40 @@ class ContentPage(QWidget):
         filter_bottom.addStretch(1)
         filters.body.addLayout(filter_top)
         filters.body.addLayout(filter_bottom)
+
+        # 用途分类（PCL 风格）：一行可横向滚动的筛选按钮，点「优化」「科技」即过滤
+        category_row = QHBoxLayout()
+        category_row.setSpacing(8)
+        category_caption = QLabel("用途")
+        category_caption.setObjectName("Muted")
+        category_row.addWidget(category_caption)
+        self.category_group = QButtonGroup(self)
+        self.category_group.setExclusive(True)
+        self.category_buttons: dict[str, QPushButton] = {}
+        chip_host = QWidget()
+        chip_layout = QHBoxLayout(chip_host)
+        chip_layout.setContentsMargins(0, 0, 0, 0)
+        chip_layout.setSpacing(8)
+        for key, label in (("", "全部"), *mod_cn.CATEGORY_LABELS.items()):
+            chip = QPushButton(label)
+            chip.setObjectName("Chip")
+            chip.setCheckable(True)
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.clicked.connect(lambda checked=False, k=key: self._on_category_changed(k))
+            self.category_group.addButton(chip)
+            chip_layout.addWidget(chip)
+            self.category_buttons[key] = chip
+        chip_layout.addStretch(1)
+        chip_scroll = QScrollArea()
+        chip_scroll.setWidgetResizable(True)
+        chip_scroll.setFrameShape(QFrame.NoFrame)
+        chip_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        chip_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        chip_scroll.setFixedHeight(40)
+        chip_scroll.setWidget(chip_host)
+        category_row.addWidget(chip_scroll, 1)
+        filters.body.addLayout(category_row)
+        self.category_buttons[""].setChecked(True)
 
         search_row = QHBoxLayout()
         search_row.setSpacing(10)
@@ -1572,40 +1609,119 @@ class ContentPage(QWidget):
         if generation != self._generation:
             return
         self.search_button.setEnabled(True)
-        start = len(self._projects)
         if reset:
             self._projects = []
-            start = 0
         self._projects.extend(projects)
         columns = self._calc_columns()
         if columns != self._grid_columns:
+            self._grid_columns = columns
             self._relayout_cards()
         self._grid_columns = columns
         for column in range(self.COLUMNS):
             self.results_grid.setColumnStretch(column, 1 if column < columns else 0)
-        for offset, project in enumerate(projects):
-            index = start + offset
-            card = self._make_card(project, generation)
-            self._cards.append(card)
-            self.results_grid.addWidget(card, index // columns, index % columns)
+        visible: list = []
+        for project in projects:
+            if self._matches_category(project):
+                self._add_card(project, generation)
+                visible.append(project)
         self._offset += len(projects)
         self.more_button.setEnabled(len(projects) >= self.LIMIT)
-        self.result_count.setText(f"已显示 {len(self._projects)} 项")
+        self._update_result_status()
         if self._projects:
-            self.list_status.setText("搜索完成")
+            if self._category and not self._cards:
+                self.list_status.setText(
+                    f"已加载 {len(self._projects)} 项，其中没有「{mod_cn.category_label(self._category)}」"
+                    "分类的内容，点「加载更多」继续获取。"
+                )
+            else:
+                self.list_status.setText("搜索完成")
         elif reset:
             self.list_status.setText("没有找到内容，可更换关键词或调整筛选条件。")
-            empty = QLabel("没有找到内容\n\n换个关键词、切换来源，或放宽 Minecraft 版本与加载器筛选。")
-            empty.setObjectName("Muted")
-            empty.setAlignment(Qt.AlignCenter)
-            empty.setMinimumHeight(160)
-            self._empty_label = empty
-            self.results_grid.addWidget(empty, 0, 0, 1, columns)
+            self._show_empty(
+                "没有找到内容\n\n换个关键词、切换来源，或放宽 Minecraft 版本与加载器筛选。"
+            )
         if len(projects) < self.LIMIT:
             self.load_hint.setText("已到底部")
         else:
             self.load_hint.setText("")
-        self._start_translate(projects)
+        self._start_translate(visible)
+        self._refresh_empty_for_category()
+
+    # ------------------------------------------------------------------
+    # 用途分类
+    def _matches_category(self, project) -> bool:
+        if not self._category:
+            return True
+        return self._category in mod_cn.categories_for(
+            project.title,
+            project.description,
+            project.categories,
+            project.project_type,
+        )
+
+    def _add_card(self, project, generation: int) -> None:
+        """按当前列数把一张卡片追加到网格末尾。"""
+        if self._empty_label is not None:
+            self.results_grid.removeWidget(self._empty_label)
+            self._empty_label.deleteLater()
+            self._empty_label = None
+        index = len(self._cards)
+        columns = max(1, self._grid_columns)
+        card = self._make_card(project, generation)
+        self._cards.append(card)
+        self.results_grid.addWidget(card, index // columns, index % columns)
+
+    def _on_category_changed(self, key: str) -> None:
+        self._category = key
+        # 已加载的结果在本地重新过滤，不重新请求网络
+        self._clear_results()
+        columns = self._calc_columns()
+        self._grid_columns = columns
+        for column in range(self.COLUMNS):
+            self.results_grid.setColumnStretch(column, 1 if column < columns else 0)
+        visible: list = []
+        for project in self._projects:
+            if self._matches_category(project):
+                self._add_card(project, self._generation)
+                visible.append(project)
+        self._update_result_status()
+        self._start_translate(visible)
+        self._refresh_empty_for_category()
+        if self._category:
+            self.list_status.setText(
+                f"已按「{mod_cn.category_label(self._category)}」过滤，"
+                f"显示 {len(self._cards)} / 已加载 {len(self._projects)} 项"
+            )
+        else:
+            self.list_status.setText("已显示全部已加载内容" if self._projects else "输入关键词开始搜索")
+
+    def _update_result_status(self) -> None:
+        if self._category:
+            self.result_count.setText(
+                f"已显示 {len(self._cards)} 项（共加载 {len(self._projects)} 项）"
+            )
+        else:
+            self.result_count.setText(f"已显示 {len(self._cards)} 项")
+
+    def _show_empty(self, text: str) -> None:
+        empty = QLabel(text)
+        empty.setObjectName("Muted")
+        empty.setAlignment(Qt.AlignCenter)
+        empty.setMinimumHeight(160)
+        empty.setWordWrap(True)
+        self._empty_label = empty
+        self.results_grid.addWidget(empty, 0, 0, 1, max(1, self._grid_columns))
+
+    def _refresh_empty_for_category(self) -> None:
+        """有分类过滤且当前没有卡片时，给出「继续加载」的提示。"""
+        if self._cards or not self._projects or not self._category:
+            return
+        if self._empty_label is not None:
+            return
+        self._show_empty(
+            f"当前已加载的内容里没有「{mod_cn.category_label(self._category)}」分类的项目。\n\n"
+            "点下方「加载更多」可以继续拉取结果。"
+        )
 
     # ------------------------------------------------------------------
     # 在线中文译名

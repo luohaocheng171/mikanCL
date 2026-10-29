@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -48,6 +49,7 @@ from ..context import AppContext, wait_thread
 from ..i18n import SUPPORTED_LANGUAGES, t
 from ..java import detect_java_installed, download_java, java_key
 from ..net import Cancelled, apply_proxy, test_source
+from . import theme
 from .widgets import Card, card_title_row, page_header, scroll_page
 
 
@@ -232,6 +234,7 @@ class SettingsPage(QWidget):
         self.tabs = QTabWidget()
         outer.addWidget(self.tabs, 1)
         self.tabs.insertTab(0, scroll_page(self._build_general_tab()), self.tr("通用"))
+        self.tabs.insertTab(1, scroll_page(self._build_appearance_tab()), self.tr("外观"))
         self.tabs.addTab(self._build_sources_tab(), self.tr("下载源"))
         self.tabs.addTab(scroll_page(self._build_content_tab()), self.tr("内容源与镜像"))
         self.tabs.addTab(scroll_page(self._build_auth_tab()), self.tr("账号与登录"))
@@ -273,12 +276,15 @@ class SettingsPage(QWidget):
         form.addRow(self.tr("默认最大内存"), self.general_memory_spin)
 
         self.general_threads_spin = QSpinBox()
-        self.general_threads_spin.setRange(1, 64)
+        self.general_threads_spin.setRange(1, 328)
         self.general_threads_spin.setSuffix(f" {t('SettingsPage', '线程')}")
         form.addRow(self.tr("下载线程数"), self.general_threads_spin)
 
         self.general_hide_check = QCheckBox(self.tr("启动游戏后隐藏启动器（可从托盘恢复）"))
         form.addRow("", self.general_hide_check)
+
+        self.start_anim_check = QCheckBox(self.tr("启动游戏时显示启动动画"))
+        form.addRow("", self.start_anim_check)
 
         card.body.addLayout(form)
         buttons = QHBoxLayout()
@@ -322,6 +328,9 @@ class SettingsPage(QWidget):
         open_game = QPushButton(self.tr("打开游戏目录"))
         open_game.clicked.connect(lambda: self._open_directory(self.ctx.config.game_path))
         open_row.addWidget(open_game)
+        open_plugins = QPushButton(self.tr("打开插件目录"))
+        open_plugins.clicked.connect(lambda: self._open_directory(DATA_DIR / "plugins"))
+        open_row.addWidget(open_plugins)
         open_row.addStretch(1)
         paths_card.body.addLayout(open_row)
 
@@ -352,6 +361,131 @@ class SettingsPage(QWidget):
         layout.addWidget(paths_card)
         layout.addStretch(1)
         return page
+
+    def _build_appearance_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 14, 0, 0)
+        layout.setSpacing(12)
+
+        card = Card(margins=20, spacing=12)
+        card.body.addWidget(
+            card_title_row(
+                self.tr("主题色与背景"),
+                self.tr("主题色即时生效；背景图按窗口大小等比铺满并居中裁切，不会拉伸变形"),
+            )
+        )
+
+        accent_row = QHBoxLayout()
+        accent_row.setSpacing(8)
+        self.accent_buttons: dict[str, QPushButton] = {}
+        for name, color in theme.ACCENT_PRESETS.items():
+            chip = QPushButton(name)
+            chip.setObjectName("Chip")
+            chip.setCheckable(True)
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.setStyleSheet(
+                "QPushButton#Chip:checked {"
+                f" background-color: {color}; border-color: {color}; color: #08200e;"
+                " font-weight: 600; }"
+            )
+            chip.clicked.connect(lambda checked=False, c=color: self._apply_accent(c))
+            accent_row.addWidget(chip)
+            self.accent_buttons[color.lower()] = chip
+        custom = QPushButton(self.tr("自定义颜色…"))
+        custom.setObjectName("Ghost")
+        custom.clicked.connect(self._pick_accent)
+        accent_row.addWidget(custom)
+        accent_row.addStretch(1)
+        card.body.addWidget(QLabel(self.tr("主题色")))
+        card.body.addLayout(accent_row)
+
+        self.background_label = QLabel("未设置（使用默认深色背景）")
+        self.background_label.setObjectName("Tiny")
+        self.background_label.setWordWrap(True)
+        self.background_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        card.body.addWidget(QLabel(self.tr("启动器背景图")))
+        card.body.addWidget(self.background_label)
+
+        background_row = QHBoxLayout()
+        pick_bg = QPushButton(self.tr("选择图片…"))
+        pick_bg.clicked.connect(self._pick_background)
+        background_row.addWidget(pick_bg)
+        clear_bg = QPushButton(self.tr("清除背景"))
+        clear_bg.setObjectName("Ghost")
+        clear_bg.clicked.connect(self._clear_background)
+        background_row.addWidget(clear_bg)
+        background_row.addStretch(1)
+        card.body.addLayout(background_row)
+
+        hint = QLabel(
+            self.tr(
+                "背景图会随窗口缩放自动适配：窗口比例与图片不同时按「铺满 + 居中裁切」处理，"
+                "侧边栏与标题栏会自动半透明，保证文字可读。"
+            )
+        )
+        hint.setObjectName("Tiny")
+        hint.setWordWrap(True)
+        card.body.addWidget(hint)
+        layout.addWidget(card)
+        layout.addStretch(1)
+        return page
+
+    def _apply_accent(self, color: str) -> None:
+        cfg = self.ctx.config
+        cfg.accent_color = color
+        cfg.save()
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            theme.apply_theme(app, color)
+        for key, chip in self.accent_buttons.items():
+            chip.setChecked(key == color.lower())
+        self.ctx.bus.toast.emit(f"主题色已切换为 {color}")
+
+    def _pick_accent(self) -> None:
+        current = self.ctx.config.accent_color or theme.ACCENT
+        color = QColorDialog.getColor(current, self, self.tr("选择主题色"))
+        if color.isValid():
+            self._apply_accent(color.name())
+
+    def _pick_background(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            self.tr("选择启动器背景图"),
+            str(DATA_DIR),
+            "图片文件 (*.png *.jpg *.jpeg *.bmp *.webp)",
+        )
+        if not path:
+            return
+        cfg = self.ctx.config
+        cfg.background_image = path
+        cfg.save()
+        self._sync_appearance()
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit("背景图已更新。")
+
+    def _clear_background(self) -> None:
+        cfg = self.ctx.config
+        if not cfg.background_image:
+            return
+        cfg.background_image = ""
+        cfg.save()
+        self._sync_appearance()
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit("已恢复默认背景。")
+
+    def _sync_appearance(self) -> None:
+        cfg = self.ctx.config
+        accent = (cfg.accent_color or theme.ACCENT).lower()
+        for key, chip in self.accent_buttons.items():
+            chip.setChecked(key == accent)
+        image = cfg.background_image
+        if image and Path(image).exists():
+            self.background_label.setText(image)
+        elif image:
+            self.background_label.setText(f"{image}（文件不存在）")
+        else:
+            self.background_label.setText("未设置（使用默认深色背景）")
 
     def _build_sources_tab(self) -> QWidget:
         page = QWidget()
@@ -435,7 +569,7 @@ class SettingsPage(QWidget):
             self.tr("留空使用官方 CDN；如 https://mediafilez.forgecdn.net")
         )
         self.threads_spin = QSpinBox()
-        self.threads_spin.setRange(1, 64)
+        self.threads_spin.setRange(1, 328)
         self.threads_spin.setSuffix(f" {t('SettingsPage', '线程')}")
         form.addRow("Modrinth API", self.modrinth_edit)
         form.addRow(self.tr("Modrinth CDN 镜像"), self.modrinth_mirror_edit)
@@ -942,11 +1076,12 @@ class SettingsPage(QWidget):
             widget.setText(str(value or ""))
             widget.blockSignals(False)
         self.threads_spin.blockSignals(True)
-        self.threads_spin.setValue(max(1, min(64, int(cfg.download_threads))))
+        self.threads_spin.setValue(max(1, min(328, int(cfg.download_threads))))
         self.threads_spin.blockSignals(False)
         for check, value in (
             (self.tray_check, cfg.close_to_tray),
             (self.general_hide_check, cfg.after_launch_action == "hide"),
+            (self.start_anim_check, cfg.start_animation),
         ):
             check.blockSignals(True)
             check.setChecked(bool(value))
@@ -955,12 +1090,13 @@ class SettingsPage(QWidget):
         self.general_memory_spin.setValue(max(512, int(cfg.memory_mb)))
         self.general_memory_spin.blockSignals(False)
         self.general_threads_spin.blockSignals(True)
-        self.general_threads_spin.setValue(max(1, min(64, int(cfg.download_threads))))
+        self.general_threads_spin.setValue(max(1, min(328, int(cfg.download_threads))))
         self.general_threads_spin.blockSignals(False)
         self.language_combo.blockSignals(True)
         index = self.language_combo.findData(cfg.language)
         self.language_combo.setCurrentIndex(index if index >= 0 else 0)
         self.language_combo.blockSignals(False)
+        self._sync_appearance()
         self.authlib_path_label.setText(self._authlib_path_text())
 
     def _authlib_path_text(self) -> str:
@@ -1013,6 +1149,7 @@ class SettingsPage(QWidget):
     def _save_general_settings(self) -> None:
         cfg = self.ctx.config
         cfg.close_to_tray = self.tray_check.isChecked()
+        cfg.start_animation = self.start_anim_check.isChecked()
         cfg.memory_mb = int(self.general_memory_spin.value())
         cfg.download_threads = int(self.general_threads_spin.value())
         if self.general_hide_check.isChecked():
