@@ -959,6 +959,10 @@
         <source>退出启动器</source>
         <translation>退出启动器</translation>
     </message>
+    <message>
+        <source>教程中心</source>
+        <translation>教程中心</translation>
+    </message>
 </context>
 <context>
     <name>MultiplayerPage</name>
@@ -1769,6 +1773,33 @@
     <message>
         <source>不重写（仅用于清单）</source>
         <translation>不重写（仅用于清单）</translation>
+    </message>
+</context>
+<context>
+    <name>WikiPage</name>
+    <message>
+        <source>教程中心</source>
+        <translation>教程中心</translation>
+    </message>
+    <message>
+        <source>内置攻略 Wiki：安装、排错与 NBT 编辑说明</source>
+        <translation>内置攻略 Wiki：安装、排错与 NBT 编辑说明</translation>
+    </message>
+    <message>
+        <source>🔧 打开 NBT 编辑器</source>
+        <translation>🔧 打开 NBT 编辑器</translation>
+    </message>
+    <message>
+        <source>搜索教程标题或内容…</source>
+        <translation>搜索教程标题或内容…</translation>
+    </message>
+    <message>
+        <source>{0} / {1} 篇</source>
+        <translation>{0} / {1} 篇</translation>
+    </message>
+    <message>
+        <source>没有匹配的教程</source>
+        <translation>没有匹配的教程</translation>
     </message>
 </context>
 </TS>

@@ -959,6 +959,10 @@ L'enregistrer comme skin local pour « {2} » ?</translation>
         <source>退出启动器</source>
         <translation>Quitter le lanceur</translation>
     </message>
+    <message>
+        <source>教程中心</source>
+        <translation>Centre de guides</translation>
+    </message>
 </context>
 <context>
     <name>MultiplayerPage</name>
@@ -1769,6 +1773,33 @@ Les salons utilisent le P2P : gratuit, sans redirection de port ; la qualité d�
     <message>
         <source>不重写（仅用于清单）</source>
         <translation>Sans réécriture (manifeste uniquement)</translation>
+    </message>
+</context>
+<context>
+    <name>WikiPage</name>
+    <message>
+        <source>教程中心</source>
+        <translation>Centre de guides</translation>
+    </message>
+    <message>
+        <source>内置攻略 Wiki：安装、排错与 NBT 编辑说明</source>
+        <translation>Wiki intégré : installation, dépannage et édition NBT</translation>
+    </message>
+    <message>
+        <source>🔧 打开 NBT 编辑器</source>
+        <translation>🔧 Ouvrir l'éditeur NBT</translation>
+    </message>
+    <message>
+        <source>搜索教程标题或内容…</source>
+        <translation>Rechercher dans les titres ou le contenu…</translation>
+    </message>
+    <message>
+        <source>{0} / {1} 篇</source>
+        <translation>{0} / {1} guides</translation>
+    </message>
+    <message>
+        <source>没有匹配的教程</source>
+        <translation>Aucun guide correspondant</translation>
     </message>
 </context>
 </TS>

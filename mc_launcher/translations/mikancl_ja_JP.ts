@@ -959,6 +959,10 @@
         <source>退出启动器</source>
         <translation>ランチャーを終了</translation>
     </message>
+    <message>
+        <source>教程中心</source>
+        <translation>チュートリアル</translation>
+    </message>
 </context>
 <context>
     <name>MultiplayerPage</name>
@@ -1769,6 +1773,33 @@
     <message>
         <source>不重写（仅用于清单）</source>
         <translation>書き換えなし（マニフェストのみ）</translation>
+    </message>
+</context>
+<context>
+    <name>WikiPage</name>
+    <message>
+        <source>教程中心</source>
+        <translation>チュートリアル</translation>
+    </message>
+    <message>
+        <source>内置攻略 Wiki：安装、排错与 NBT 编辑说明</source>
+        <translation>内蔵ガイド Wiki：インストール・トラブル対応・NBT 編集</translation>
+    </message>
+    <message>
+        <source>🔧 打开 NBT 编辑器</source>
+        <translation>🔧 NBT エディターを開く</translation>
+    </message>
+    <message>
+        <source>搜索教程标题或内容…</source>
+        <translation>タイトルまたは本文を検索…</translation>
+    </message>
+    <message>
+        <source>{0} / {1} 篇</source>
+        <translation>{0} / {1} 件</translation>
+    </message>
+    <message>
+        <source>没有匹配的教程</source>
+        <translation>該当するチュートリアルがありません</translation>
     </message>
 </context>
 </TS>

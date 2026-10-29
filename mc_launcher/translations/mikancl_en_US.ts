@@ -959,6 +959,10 @@ Save it as a local skin for “{2}”?</translation>
         <source>退出启动器</source>
         <translation>Quit Launcher</translation>
     </message>
+    <message>
+        <source>教程中心</source>
+        <translation>Guide Center</translation>
+    </message>
 </context>
 <context>
     <name>MultiplayerPage</name>
@@ -1769,6 +1773,33 @@ Rooms use P2P networking: free, no port forwarding; quality depends on both side
     <message>
         <source>不重写（仅用于清单）</source>
         <translation>No rewrite (manifest only)</translation>
+    </message>
+</context>
+<context>
+    <name>WikiPage</name>
+    <message>
+        <source>教程中心</source>
+        <translation>Guide Center</translation>
+    </message>
+    <message>
+        <source>内置攻略 Wiki：安装、排错与 NBT 编辑说明</source>
+        <translation>Built-in wiki: installation, troubleshooting and NBT editing</translation>
+    </message>
+    <message>
+        <source>🔧 打开 NBT 编辑器</source>
+        <translation>🔧 Open NBT editor</translation>
+    </message>
+    <message>
+        <source>搜索教程标题或内容…</source>
+        <translation>Search guide titles or content…</translation>
+    </message>
+    <message>
+        <source>{0} / {1} 篇</source>
+        <translation>{0} / {1} guides</translation>
+    </message>
+    <message>
+        <source>没有匹配的教程</source>
+        <translation>No matching guides</translation>
     </message>
 </context>
 </TS>

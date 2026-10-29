@@ -113,7 +113,7 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
     `data/plugins/` 下放一个 `.py` 文件即可新增侧边栏页面，通过 `setup(api)` 使用启动器 API（版本、实例、内容搜索、下载、安装、后台线程等），无需改源码或重新打包；单个插件出错只记录日志，不影响启动器运行。
 
 18. **内置教程 Wiki**
-    启动器自带 8 篇 Markdown 教程（安装 Forge / Fabric、装光影、内存不足、Mod 冲突、Java 版本、NBT 编辑器、离线皮肤），首次运行自动写入 `data/wiki/`，可直接改文件扩充；教程中心支持按标题与正文搜索，外链交给系统浏览器，站内锚点就地跳转。
+    启动器自带 8 篇 Markdown 教程（安装 Forge / Fabric、装光影、内存不足、Mod 冲突、Java 版本、NBT 编辑器、离线皮肤），中 / 英 / 俄 / 法 / 日五种语言各一套，首次运行按界面语言自动写入 `data/wiki/<语言代码>/`，可直接改文件扩充；教程中心支持按标题与正文搜索，外链交给系统浏览器，站内锚点就地跳转。
 
 19. **启动动画**
     点启动后主页覆盖一层半透明遮罩，256×256 草方块按真实下载进度逐格填满，下方显示阶段文字与百分比，并从 255 条彩蛋启动词中随机挑一条固定展示（每次启动不重复轮播），进度完成或失败时 400ms 淡出；可在设置里关闭。
@@ -411,7 +411,7 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | 内置浏览器 | `BrowserPage` | QtWebEngine 浏览页、Cookie 登录态持久化、系统浏览器回退 |
 | Forbric | `ForbricPage` | 版本兼容拦截、安装器下载与 GUI 启动、结果监控 |
 | Java 中心 | `JavaCenterPage` | 六大 Java 发行版下载与安装 |
-| 教程中心 | `WikiPage` | 内置 8 篇 Markdown 教程、目录浏览、标题与正文搜索、NBT 编辑器入口 |
+| 教程中心 | `WikiPage` | 内置 8 篇 Markdown 教程（中/英/俄/法/日）、目录浏览、标题与正文搜索、NBT 编辑器入口 |
 | 设置 | `SettingsPage` | 数据目录、下载源、线程数（1–328）、代理、API Key、镜像、界面选项（含启动动画开关）、主题色与背景、插件目录 |
 
 > 注意区分两个加载器页：`LoaderPage`（`page_loader.py`）是「下载安装」页里的**表单式**加载器安装区（手动填 MC 版本 + 加载器版本）；`LoadersPage`（`page_loaders.py`）是导航栏独立入口「Mod 加载器」，按 MC 版本**浏览列表**后选择安装。两者共用同一套安装 worker 与 `modloader.install_loader()`。
@@ -431,7 +431,7 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | `data/config.json` | 全部设置项、下载源列表、数据目录列表、实例列表、版本设置、服务器列表 |
 | `data/accounts.json` | 账号列表与当前选中账号（含刷新令牌） |
 | `data/instances/<实例>/instance.json` | 实例元数据（名称、MC 版本、加载器、来源整合包、创建时间） |
-| `data/wiki/*.md` | 内置教程 Markdown（首次运行自动写入，可自行修改 / 扩充） |
+| `data/wiki/<语言代码>/*.md` | 内置教程 Markdown（首次运行按当前界面语言自动写入，可自行修改 / 扩充） |
 
 ---
 
@@ -497,7 +497,7 @@ MikanCL/
 │   ├── libs/                   # authlib-injector 等运行库
 │   ├── logs/                   # launcher.log、install_error.log
 │   ├── skins/                  # 皮肤缓存
-│   ├── wiki/                   # 内置教程 Markdown（首次运行自动生成）
+│   ├── wiki/                   # 内置教程 Markdown（按语言分目录，首次运行自动生成）
 │   └── browser/                # QtWebEngine profile（Cookie / 登录态）
 └── dist/                       # 打包产物（MikanCL.exe）
 ```

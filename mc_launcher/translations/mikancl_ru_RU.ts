@@ -959,6 +959,10 @@
         <source>退出启动器</source>
         <translation>Выйти из лаунчера</translation>
     </message>
+    <message>
+        <source>教程中心</source>
+        <translation>Центр руководств</translation>
+    </message>
 </context>
 <context>
     <name>MultiplayerPage</name>
@@ -1769,6 +1773,33 @@
     <message>
         <source>不重写（仅用于清单）</source>
         <translation>Без перезаписи (только манифест)</translation>
+    </message>
+</context>
+<context>
+    <name>WikiPage</name>
+    <message>
+        <source>教程中心</source>
+        <translation>Центр руководств</translation>
+    </message>
+    <message>
+        <source>内置攻略 Wiki：安装、排错与 NBT 编辑说明</source>
+        <translation>Встроенная вики: установка, диагностика и работа с NBT</translation>
+    </message>
+    <message>
+        <source>🔧 打开 NBT 编辑器</source>
+        <translation>🔧 Открыть редактор NBT</translation>
+    </message>
+    <message>
+        <source>搜索教程标题或内容…</source>
+        <translation>Поиск по заголовкам и тексту руководств…</translation>
+    </message>
+    <message>
+        <source>{0} / {1} 篇</source>
+        <translation>{0} / {1} руководств</translation>
+    </message>
+    <message>
+        <source>没有匹配的教程</source>
+        <translation>Нет подходящих руководств</translation>
     </message>
 </context>
 </TS>
