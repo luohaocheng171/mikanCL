@@ -83,9 +83,24 @@ class LoaderInstallWorker(QThread):
         self.loader_version = loader_version
         self.java_path = java_path
         self.cancel_event = threading.Event()
+        self._last_percent = 0.0
+        self._loader_phase = False
 
     def _emit(self, value: float, detail: str) -> None:
-        self.progress.emit(max(0.0, min(1.0, value)), detail)
+        # 加载器阶段会二次触发 install_version 的进度回调，这里只保证进度条不回退
+        value = max(self._last_percent, max(0.0, min(1.0, value)))
+        self._last_percent = value
+        self.progress.emit(value, detail)
+
+    def _on_progress(self, p) -> None:
+        percent = float(getattr(p, "percent", 0.0))
+        if self._loader_phase:
+            # 0.42 ~ 0.98：加载器本身及其依赖库
+            value = 0.42 + percent * 0.56
+        else:
+            # 0.05 ~ 0.40：基础原版版本
+            value = 0.05 + percent * 0.35
+        self._emit(value, str(getattr(p, "detail", "") or ""))
 
     def run(self) -> None:
         try:
@@ -94,7 +109,7 @@ class LoaderInstallWorker(QThread):
             installer = GameInstaller(
                 clone,
                 self.ctx.sources,
-                progress_cb=lambda p: self._emit(0.05 + p.percent * 0.35, p.detail),
+                progress_cb=self._on_progress,
                 log_cb=self.log.emit,
                 cancel=self.cancel_event,
             )
@@ -109,6 +124,7 @@ class LoaderInstallWorker(QThread):
                 if entry is None:
                     raise RuntimeError(f"版本清单中找不到 Minecraft {self.mc_version}。")
                 installer.install_version(entry)
+            self._loader_phase = True
             self._emit(0.42, f"准备安装 {LOADER_LABELS[self.kind]}…")
             version_id = install_loader(
                 installer,

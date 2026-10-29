@@ -1,15 +1,15 @@
-"""Java 中心：主流发行版一键下载安装，任务统一登记到下载中心（kind="Java"）。"""
+"""Java 中心：从各家官方渠道动态获取可用版本，下载任务统一登记到下载中心（kind="Java"）。"""
 
 from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -23,189 +23,58 @@ from PySide6.QtWidgets import (
 
 from ..config import DATA_DIR
 from ..context import AppContext, wait_thread
-from ..java import adoptium_asset, detect_java_installed, download_java, find_java_in
-from ..net import Cancelled, DownloadError, Http
-from .widgets import Card, Badge, page_header
+from ..java import (
+    detect_java_installed,
+    download_java,
+    fetch_distribution_versions,
+    find_java_in,
+    java_key,
+    java_runtime_name,
+    list_java_distributions,
+)
+from ..net import Cancelled
+from .widgets import Card, page_header
 
 # 与设置页的 Java 下载目录保持一致
 JAVA_ROOT = DATA_DIR / "runtime"
 
 
-@dataclass
-class JavaOffer:
-    vendor: str
-    version: int
-    arch: str = "x64"
-    source: str = ""
-    resolver: str = ""
-
-
-def _offers() -> list[JavaOffer]:
-    specs = [
-        ("Adoptium Temurin", (17, 21), "Adoptium 官方 API", "adoptium"),
-        ("Microsoft OpenJDK", (17, 21), "Microsoft 官方 / aka.ms", "microsoft"),
-        ("Azul Zulu", (8, 17, 21), "Azul 元数据 API", "azul"),
-        ("Amazon Corretto", (8, 17, 21), "GitHub Releases", "corretto"),
-        ("Alibaba Dragonwell", (11, 17), "GitHub Releases", "dragonwell"),
-        ("Tencent Kona", (8, 17), "GitHub Releases", "kona"),
-    ]
-    result: list[JavaOffer] = []
-    for vendor, versions, source, key in specs:
-        for version in versions:
-            result.append(
-                JavaOffer(vendor=vendor, version=version, source=source, resolver=key)
-            )
-    return result
+def _fmt_size(value: object) -> str:
+    try:
+        size = int(value or 0)
+    except (TypeError, ValueError):
+        size = 0
+    if size <= 0:
+        return "未知"
+    if size >= 1024 ** 3:
+        return f"{size / 1024 ** 3:.2f} GB"
+    return f"{size / 1024 ** 2:.1f} MB"
 
 
 # ---------------------------------------------------------------------------
-# 下载地址解析（每个厂商独立实现；失败时由页面提示并禁用该行，不阻塞整体）
-# ---------------------------------------------------------------------------
-def _resolve_adoptium(offer: JavaOffer) -> dict:
-    asset = adoptium_asset(offer.version)
-    return {"url": asset["url"], "size": asset.get("size") or 0, "name": asset["name"]}
-
-
-def _scan_ms_rows(data, major: int) -> str:
-    rows = data if isinstance(data, list) else (
-        (data.get("data") or data.get("downloads") or []) if isinstance(data, dict) else []
-    )
-    if not isinstance(rows, list):
-        return ""
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        url = str(row.get("url") or row.get("download_url") or "")
-        version = str(row.get("version") or "")
-        os_name = str(row.get("os") or "")
-        arch = str(row.get("arch") or "")
-        if url.startswith("http") and ".zip" in url:
-            if version.startswith(f"{major}.") or (
-                "windows" in url.lower() or os_name.lower() == "windows"
-            ) and (arch in ("x64", "") or f"-{major}-" in url):
-                return url
-    return ""
-
-
-def _resolve_microsoft(offer: JavaOffer) -> dict:
-    http = Http(timeout=30)
-    template = f"https://aka.ms/download-jdk/microsoft-jdk-{offer.version}-windows-x64.zip"
-    try:
-        http.request(template, "HEAD", timeout=20)
-        return {
-            "url": template,
-            "size": 0,
-            "name": f"microsoft-jdk-{offer.version}-windows-x64.zip",
-        }
-    except DownloadError:
-        pass
-    # 兜底：尝试解析下载列表 JSON（结构变化时提示不可用）
-    try:
-        data = http.get_json_url("https://api.microsoft.com/software/openjdk", timeout=20)
-    except DownloadError:
-        data = None
-    if data is not None:
-        url = _scan_ms_rows(data, offer.version)
-        if url:
-            return {"url": url, "size": 0, "name": url.rsplit("/", 1)[-1] or "openjdk.zip"}
-    raise DownloadError(
-        f"未能获取 Microsoft OpenJDK {offer.version} 的下载地址（服务不可用）。"
-    )
-
-
-def _resolve_azul(offer: JavaOffer) -> dict:
-    url = (
-        "https://api.azul.com/metadata/v1/zulu/packages/"
-        f"?java_version={offer.version}&os=windows&arch=x64&archive_type=zip"
-        "&java_package_type=jre&latest=true&release_status=ga&availability_types=CA"
-    )
-    data = Http(timeout=30).get_json_url(url)
-    if not isinstance(data, list) or not data:
-        raise DownloadError(f"Azul 未返回 Java {offer.version} 的 Windows JRE 包")
-    for row in data:
-        if isinstance(row, dict) and row.get("download_url"):
-            return {
-                "url": str(row["download_url"]),
-                "size": int(row.get("size") or 0),
-                "name": str(row.get("name") or ""),
-            }
-    raise DownloadError(f"Azul 返回的 Java {offer.version} 下载地址为空")
-
-
-def _resolve_github(offer: JavaOffer, repo: str, keywords: tuple[str, ...]) -> dict:
-    data = Http(timeout=30).get_json_url(
-        f"https://api.github.com/repos/{repo}/releases/latest",
-        headers={"Accept": "application/vnd.github+json"},
-    )
-    assets = data.get("assets") if isinstance(data, dict) else []
-    if not isinstance(assets, list):
-        raise DownloadError(f"{repo} 发布信息格式异常")
-    zips = [
-        item
-        for item in assets
-        if isinstance(item, dict)
-        and str(item.get("browser_download_url") or "").lower().endswith(".zip")
-        and all(key in str(item.get("name") or "").lower() for key in keywords)
-    ]
-    if not zips:
-        raise DownloadError(f"{repo} 未找到 Windows x64 的 zip 安装包")
-    first = zips[0]
-    return {
-        "url": str(first["browser_download_url"]),
-        "size": int(first.get("size") or 0),
-        "name": str(first.get("name") or ""),
-    }
-
-
-def _resolve_corretto(offer: JavaOffer) -> dict:
-    return _resolve_github(offer, f"corretto/corretto-{offer.version}", ("windows", "x64"))
-
-
-def _resolve_dragonwell(offer: JavaOffer) -> dict:
-    return _resolve_github(
-        offer, f"alibaba/dragonwell{offer.version}", ("windows", "x64")
-    )
-
-
-def _resolve_kona(offer: JavaOffer) -> dict:
-    return _resolve_github(
-        offer, f"Tencent/TencentKona-{offer.version}", ("windows", "x64")
-    )
-
-
-def resolve_offer(offer: JavaOffer) -> dict:
-    """解析某个发行版的下载地址，返回 {"url","size","name"}；失败抛 DownloadError。"""
-    if offer.resolver == "adoptium":
-        return _resolve_adoptium(offer)
-    if offer.resolver == "microsoft":
-        return _resolve_microsoft(offer)
-    if offer.resolver == "azul":
-        return _resolve_azul(offer)
-    if offer.resolver == "corretto":
-        return _resolve_corretto(offer)
-    if offer.resolver == "dragonwell":
-        return _resolve_dragonwell(offer)
-    if offer.resolver == "kona":
-        return _resolve_kona(offer)
-    raise DownloadError(f"未知的发行版解析器：{offer.resolver}")
-
-
+# 版本查询 / 下载 worker
 # ---------------------------------------------------------------------------
 class ResolveWorker(QThread):
-    done = Signal(int, dict)  # (row, {url,size,name})
-    failed = Signal(int, str)  # (row, message)
+    """异步获取某发行版某主版本的可用版本列表（联网，不阻塞界面）。"""
 
-    def __init__(self, offer: JavaOffer, row: int, parent=None):
+    done = Signal(str, object)  # (请求 key, 版本列表)
+    failed = Signal(str, str)  # (请求 key, 错误信息)
+
+    def __init__(self, dist_id: str, major: int, force: bool = False, parent=None):
         super().__init__(parent)
-        self.offer = offer
-        self.row = row
+        self.dist_id = dist_id
+        self.major = int(major)
+        self.force = force
 
     def run(self) -> None:
+        key = f"{self.dist_id}:{self.major}"
         try:
-            result = resolve_offer(self.offer)
-            self.done.emit(self.row, result)
+            versions = fetch_distribution_versions(
+                self.dist_id, self.major, force=self.force
+            )
+            self.done.emit(key, versions)
         except Exception as exc:  # noqa: BLE001
-            self.failed.emit(self.row, str(exc))
+            self.failed.emit(key, str(exc))
 
 
 class JavaCenterInstallWorker(QThread):
@@ -221,6 +90,8 @@ class JavaCenterInstallWorker(QThread):
         cancel_event: threading.Event | None = None,
         pause_event: threading.Event | None = None,
         url: str = "",
+        target_name: str = "",
+        size: int = 0,
         parent=None,
     ):
         super().__init__(parent)
@@ -230,6 +101,8 @@ class JavaCenterInstallWorker(QThread):
         self.cancel_event = cancel_event or threading.Event()
         self.pause_event = pause_event or threading.Event()
         self.url = url
+        self.target_name = target_name
+        self.size = int(size or 0)
 
     def run(self) -> None:
         state = {"total": 0, "bytes": 0, "last_t": time.time(), "last_b": 0}
@@ -259,6 +132,8 @@ class JavaCenterInstallWorker(QThread):
                 pause=self.pause_event,
                 on_total=on_total,
                 url=self.url,
+                target_name=self.target_name,
+                size=self.size,
             )
             self.done.emit(info)
         except Cancelled:
@@ -269,18 +144,14 @@ class JavaCenterInstallWorker(QThread):
 
 # ---------------------------------------------------------------------------
 class JavaCenterPage(QWidget):
-    """Java 中心页：表格式列出主流发行版，支持检查可用与一键安装。"""
+    """Java 中心页：按发行版 + 主版本筛选，列出官方渠道的真实版本并提供下载。"""
 
     def __init__(self, ctx: AppContext, parent: QWidget | None = None):
         super().__init__(parent)
         self.ctx = ctx
-        self._offers = _offers()
-        self._resolved: dict[int, dict] = {}
-        self._failed: dict[int, str] = {}
-        self._busy_rows: set[int] = set()
-        self._check_buttons: dict[int, QPushButton] = {}
-        self._install_buttons: dict[int, QPushButton] = {}
-        self._status_items: dict[int, QTableWidgetItem] = {}
+        self._distributions = list_java_distributions()
+        self._versions: list[dict] = []
+        self._request_key = ""
         self._workers: list[QThread] = []
         self._build()
         self.refresh()
@@ -290,102 +161,138 @@ class JavaCenterPage(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 18, 24, 18)
         outer.setSpacing(14)
-        header, _ = page_header("Java 中心", "常用发行版一键下载安装到本地运行时目录（data/runtime）")
+        header, _ = page_header(
+            "Java 中心", "从各家官方渠道获取可用版本，下载安装到本地运行时目录（data/runtime）"
+        )
         outer.addWidget(header)
 
         card = Card(margins=14, spacing=10)
         tip = QLabel(
-            "点击“检查可用”联网解析下载地址；解析失败的行会禁用安装按钮，不影响其他行。"
-            "安装任务统一登记到下载中心，可暂停 / 取消 / 重试。"
+            "版本列表来自各发行版官方 API / 官方下载页；查询失败时自动回退到官方最新版稳定链接。"
+            "下载任务统一登记到下载中心，可暂停 / 取消 / 重试。"
         )
         tip.setObjectName("Tiny")
         tip.setWordWrap(True)
         card.body.addWidget(tip)
 
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+        dist_label = QLabel("发行版")
+        dist_label.setObjectName("Tiny")
+        toolbar.addWidget(dist_label)
+
+        self._dist_combo = QComboBox()
+        self._dist_combo.setMinimumWidth(230)
+        for dist in self._distributions:
+            self._dist_combo.addItem(f"{dist['name']}（{dist['vendor']}）", dist["id"])
+        toolbar.addWidget(self._dist_combo)
+
+        major_label = QLabel("主版本")
+        major_label.setObjectName("Tiny")
+        toolbar.addWidget(major_label)
+
+        self._major_combo = QComboBox()
+        self._major_combo.setMinimumWidth(110)
+        toolbar.addWidget(self._major_combo)
+        self._populate_majors(default=21)
+
+        self._refresh_btn = QPushButton("重新获取")
+        self._refresh_btn.setObjectName("Ghost")
+        self._refresh_btn.setFixedHeight(28)
+        self._refresh_btn.clicked.connect(lambda: self.refresh(force=True))
+        toolbar.addWidget(self._refresh_btn)
+
+        self._status_label = QLabel("")
+        self._status_label.setObjectName("Tiny")
+        self._status_label.setWordWrap(True)
+        toolbar.addWidget(self._status_label, 1)
+        card.body.addLayout(toolbar)
+
+        # 选择变化只触发一次查询（构造完成后再接线，避免初始化期重复请求）
+        self._dist_combo.currentIndexChanged.connect(self._on_distribution_changed)
+        self._major_combo.currentIndexChanged.connect(self._on_major_changed)
+
         table = QTableWidget(0, 5)
-        table.setHorizontalHeaderLabels(["发行版 / 版本", "架构", "来源", "状态", "操作"])
+        table.setHorizontalHeaderLabels(["版本", "大小", "来源", "状态", "操作"])
         table.verticalHeader().setVisible(False)
         table.setSelectionMode(QAbstractItemView.NoSelection)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.horizontalHeader().setStretchLastSection(False)
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        table.setColumnWidth(1, 64)
-        table.setColumnWidth(3, 130)
-        table.setColumnWidth(4, 210)
+        table.setColumnWidth(1, 100)
+        table.setColumnWidth(3, 110)
+        table.setColumnWidth(4, 130)
         table.verticalHeader().setDefaultSectionSize(38)
         card.body.addWidget(table, 1)
         self._table = table
+
+        hint = QLabel(f"安装目录：{JAVA_ROOT}（按发行版与版本分目录，互不覆盖）")
+        hint.setObjectName("Tiny")
+        hint.setWordWrap(True)
+        card.body.addWidget(hint)
         outer.addWidget(card, 1)
 
-        for row, offer in enumerate(self._offers):
-            table.insertRow(row)
-            name_item = QTableWidgetItem(f"{offer.vendor} · Java {offer.version}")
-            table.setItem(row, 0, name_item)
-            arch_badge = Badge(offer.arch, "blue")
-            arch_wrap = QWidget()
-            arch_layout = QHBoxLayout(arch_wrap)
-            arch_layout.setContentsMargins(0, 0, 0, 0)
-            arch_layout.addWidget(arch_badge, 0, Qt.AlignCenter)
-            table.setCellWidget(row, 1, arch_wrap)
-            table.setItem(row, 2, QTableWidgetItem(offer.source))
-            status_item = QTableWidgetItem("待检查")
-            status_item.setTextAlignment(Qt.AlignCenter)
-            table.setItem(row, 3, status_item)
-            self._status_items[row] = status_item
+    # ------------------------------------------------------------------
+    def _current_distribution(self) -> dict | None:
+        dist_id = self._dist_combo.currentData()
+        for dist in self._distributions:
+            if dist["id"] == dist_id:
+                return dist
+        return self._distributions[0] if self._distributions else None
 
-            actions = QWidget()
-            action_layout = QHBoxLayout(actions)
-            action_layout.setContentsMargins(6, 2, 6, 2)
-            action_layout.setSpacing(6)
-            check_btn = QPushButton("检查可用")
-            check_btn.setObjectName("Ghost")
-            check_btn.setFixedHeight(26)
-            check_btn.clicked.connect(lambda _checked=False, r=row: self._check_available(r))
-            action_layout.addWidget(check_btn)
-            install_btn = QPushButton("安装")
-            install_btn.setObjectName("Primary")
-            install_btn.setFixedHeight(26)
-            install_btn.clicked.connect(lambda _checked=False, r=row: self._install_offer(r))
-            action_layout.addWidget(install_btn)
-            action_layout.addStretch(1)
-            self._check_buttons[row] = check_btn
-            self._install_buttons[row] = install_btn
-            table.setCellWidget(row, 4, actions)
+    def _current_major(self) -> int | None:
+        value = self._major_combo.currentData()
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
 
-    def refresh(self) -> None:
-        """刷新各行状态：已安装 / 已解析 / 可直接安装 / 待检查。"""
-        for row, offer in enumerate(self._offers):
-            if row in self._busy_rows:
-                continue
-            status = self._status_items[row]
-            installed = bool(find_java_in(JAVA_ROOT / f"jre-{offer.version}"))
-            if installed:
-                status.setText("已安装 ✓")
-                status.setForeground(Qt.GlobalColor.green)
-                self._install_buttons[row].setEnabled(True)
-            elif row in self._resolved:
-                status.setText("已解析，可安装")
-                status.setForeground(Qt.GlobalColor.cyan)
-                self._install_buttons[row].setEnabled(True)
-            elif row in self._failed:
-                status.setText("不可用")
-                status.setForeground(Qt.GlobalColor.red)
-                status.setToolTip(self._failed[row])
-                self._install_buttons[row].setEnabled(False)
-            elif offer.resolver == "adoptium":
-                # Adoptium 走内置 API，无需预先解析
-                status.setText("可直接安装")
-                status.setForeground(Qt.GlobalColor.green)
-                self._install_buttons[row].setEnabled(True)
-            else:
-                status.setText("待检查")
-                status.setForeground(Qt.GlobalColor.gray)
-                status.setToolTip("")
-                self._install_buttons[row].setEnabled(False)
+    def _populate_majors(self, default: int = 21) -> None:
+        dist = self._current_distribution()
+        if dist is None:
+            return
+        majors = list(dist.get("majors") or [8, 11, 17, 21])
+        previous = self._major_combo.currentData()
+        target = previous if previous in majors else (
+            default if default in majors else majors[-1]
+        )
+        self._major_combo.blockSignals(True)
+        self._major_combo.clear()
+        for major in majors:
+            self._major_combo.addItem(f"Java {major}", int(major))
+        index = self._major_combo.findData(target)
+        self._major_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._major_combo.blockSignals(False)
+
+    def _on_distribution_changed(self, _index: int = -1) -> None:
+        self._populate_majors()
+        self.refresh()
+
+    def _on_major_changed(self, _index: int = -1) -> None:
+        self.refresh()
+
+    # ------------------------------------------------------------------
+    def refresh(self, force: bool = False) -> None:
+        """按当前筛选异步获取版本列表；force=True 时忽略缓存。"""
+        dist = self._current_distribution()
+        major = self._current_major()
+        if dist is None or major is None:
+            return
+        self._request_key = f"{dist['id']}:{major}"
+        self._refresh_btn.setEnabled(False)
+        self._status_label.setText(f"正在获取 {dist['name']} Java {major} 版本…")
+        self._show_placeholder("正在获取版本…")
+
+        worker = ResolveWorker(dist["id"], major, force=force, parent=self)
+        worker.done.connect(self._on_versions)
+        worker.failed.connect(self._on_versions_failed)
+        worker.finished.connect(lambda w=worker: self._discard_worker(w))
+        self._workers.append(worker)
+        worker.start()
 
     def shutdown(self) -> None:
-        """关闭页面：取消并等待仍在运行的解析 / 下载 worker。"""
+        """关闭页面：取消并等待仍在运行的查询 / 下载 worker。"""
         for worker in list(self._workers):
             cancel_event = getattr(worker, "cancel_event", None)
             if cancel_event is not None:
@@ -401,105 +308,171 @@ class JavaCenterPage(QWidget):
             wait_thread(worker, 2000)
         self._workers.clear()
 
-    # ------------------------------------------------------------------
     def _discard_worker(self, worker: QThread) -> None:
         if worker in self._workers:
             self._workers.remove(worker)
         worker.deleteLater()
 
-    def _check_available(self, row: int) -> None:
-        if row in self._busy_rows:
+    # ------------------------------------------------------------------
+    def _show_placeholder(self, text: str) -> None:
+        self._versions = []
+        table = self._table
+        table.setRowCount(0)
+        table.insertRow(0)
+        item = QTableWidgetItem(text)
+        item.setForeground(Qt.GlobalColor.gray)
+        table.setItem(0, 0, item)
+
+    def _on_versions(self, key: str, versions: object) -> None:
+        if key != self._request_key:
+            return  # 已经切换到其他发行版 / 主版本，丢弃旧结果
+        self._refresh_btn.setEnabled(True)
+        rows = [
+            dict(item)
+            for item in (versions or [])
+            if isinstance(item, dict) and str(item.get("url") or "")
+        ] if isinstance(versions, list) else []
+        if not rows:
+            self._status_label.setText("获取失败，暂无可用版本，请检查网络后重试")
+            self._show_placeholder("获取失败，请检查网络后重试")
             return
-        offer = self._offers[row]
-        self._busy_rows.add(row)
-        self._check_buttons[row].setEnabled(False)
-        status = self._status_items[row]
-        status.setText("解析中…")
-        status.setForeground(Qt.GlobalColor.yellow)
-        status.setToolTip("")
-        worker = ResolveWorker(offer, row, self)
-        worker.done.connect(self._on_resolve_done)
-        worker.failed.connect(self._on_resolve_failed)
-        worker.finished.connect(lambda w=worker: self._discard_worker(w))
-        self._workers.append(worker)
-        worker.start()
+        self._versions = rows
+        if all(bool(row.get("fallback")) for row in rows):
+            self._status_label.setText("获取失败，已回退到默认下载（官方最新版）")
+        else:
+            channel = str(rows[0].get("channel") or "")
+            self._status_label.setText(f"已获取 {len(rows)} 个版本" + (f" · {channel}" if channel else ""))
+        self._populate(rows)
 
-    def _on_resolve_done(self, row: int, result: dict) -> None:
-        self._busy_rows.discard(row)
-        self._resolved[row] = result
-        self._failed.pop(row, None)
-        self._check_buttons[row].setEnabled(True)
-        self._install_buttons[row].setEnabled(True)
-        status = self._status_items[row]
-        status.setText("已解析，可安装")
-        status.setForeground(Qt.GlobalColor.cyan)
-        status.setToolTip(result.get("name") or result.get("url") or "")
-        self.ctx.bus.toast.emit(
-            f"{self._offers[row].vendor} Java {self._offers[row].version}：已获取下载地址。"
+    def _on_versions_failed(self, key: str, message: str) -> None:
+        if key != self._request_key:
+            return
+        self._refresh_btn.setEnabled(True)
+        self._status_label.setText("获取失败，已回退到默认下载")
+        self._show_placeholder("获取失败，已回退到默认下载")
+        self.ctx.bus.log.emit(f"[Java 中心] 获取版本失败：{message}")
+
+    def _populate(self, rows: list[dict]) -> None:
+        table = self._table
+        table.setRowCount(0)
+        for row, item in enumerate(rows):
+            table.insertRow(row)
+            version_text = str(item.get("version") or "")
+            if item.get("latest"):
+                version_text += "（最新）"
+            version_item = QTableWidgetItem(version_text)
+            version_item.setData(Qt.UserRole, item.get("url"))
+            version_item.setToolTip(str(item.get("name") or item.get("url") or ""))
+            table.setItem(row, 0, version_item)
+
+            size_item = QTableWidgetItem(_fmt_size(item.get("size")))
+            size_item.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row, 1, size_item)
+
+            source_item = QTableWidgetItem(str(item.get("channel") or ""))
+            source_item.setToolTip(str(item.get("note") or ""))
+            table.setItem(row, 2, source_item)
+
+            installed = self._installed_path(item)
+            status_item = QTableWidgetItem("已安装" if installed else "可下载")
+            status_item.setTextAlignment(Qt.AlignCenter)
+            status_item.setForeground(
+                Qt.GlobalColor.green if installed else Qt.GlobalColor.cyan
+            )
+            status_item.setToolTip(installed)
+            table.setItem(row, 3, status_item)
+
+            actions = QWidget()
+            action_layout = QHBoxLayout(actions)
+            action_layout.setContentsMargins(4, 2, 4, 2)
+            action_layout.setSpacing(6)
+            install_btn = QPushButton("下载")
+            install_btn.setObjectName("Primary")
+            install_btn.setFixedHeight(26)
+            install_btn.clicked.connect(lambda _checked=False, data=item: self._install(data))
+            action_layout.addWidget(install_btn, 0, Qt.AlignCenter)
+            table.setCellWidget(row, 4, actions)
+
+    def _installed_path(self, item: dict) -> str:
+        major = int(item.get("major") or self._current_major() or 0)
+        name = java_runtime_name(
+            major, str(item.get("id") or ""), str(item.get("version") or "")
         )
+        return find_java_in(JAVA_ROOT / name)
 
-    def _on_resolve_failed(self, row: int, message: str) -> None:
-        self._busy_rows.discard(row)
-        self._failed[row] = message
-        self._check_buttons[row].setEnabled(True)
-        self._install_buttons[row].setEnabled(False)
-        status = self._status_items[row]
-        status.setText("不可用")
-        status.setForeground(Qt.GlobalColor.red)
-        status.setToolTip(message)
-        self.ctx.bus.log.emit(
-            f"[Java 中心] {self._offers[row].vendor} Java {self._offers[row].version} 解析失败：{message}"
+    # ------------------------------------------------------------------
+    def _install(self, item: dict) -> None:
+        if self._installed_path(item):
+            self.ctx.bus.toast.emit("该版本已安装，无需重复下载。")
+            return
+        url = str(item.get("url") or "")
+        if not url:
+            return
+        major = int(item.get("major") or self._current_major() or 0)
+        target_name = java_runtime_name(
+            major, str(item.get("id") or ""), str(item.get("version") or "")
         )
+        dist_name = str(item.get("dist_name") or "")
+        version_label = str(item.get("version") or "")
 
-    def _install_offer(self, row: int) -> None:
-        offer = self._offers[row]
-        resolved = self._resolved.get(row) or {}
-        url = str(resolved.get("url") or "")  # Adoptium 留空时由 download_java 自动解析
-        cancel_event = threading.Event()
-        pause_event = threading.Event()
-
-        def factory(_task) -> QThread:
+        def factory(task) -> QThread:
+            # 每次（含重试）都新建事件，避免取消后重试立即再次取消
+            cancel_event = threading.Event()
+            pause_event = threading.Event()
+            task.cancel = cancel_event.set
+            task.pause_event = pause_event
             worker = JavaCenterInstallWorker(
-                offer.version, JAVA_ROOT, _task.id, cancel_event, pause_event, url, self
+                major,
+                JAVA_ROOT,
+                task.id,
+                cancel_event,
+                pause_event,
+                url,
+                target_name,
+                int(item.get("size") or 0),
+                self,
             )
             worker.progress.connect(
-                lambda p, s, tid=_task.id: self.ctx.downloads.update(
-                    tid, percent=p, speed=s
+                lambda percent, speed, tid=task.id: self.ctx.downloads.update(
+                    tid,
+                    percent=percent,
+                    speed=speed,
+                    stage=f"下载 Java {major}",
                 )
             )
-            worker.done.connect(lambda info, r=row: self._on_installed(r, info))
+            worker.done.connect(lambda info, tid=task.id: self._on_installed(tid, info))
             worker.failed.connect(
-                lambda msg, tid=_task.id, r=row: self._on_install_failed(r, tid, msg)
+                lambda message, tid=task.id: self._on_install_failed(tid, message)
             )
             worker.finished.connect(lambda w=worker: self._discard_worker(w))
             self._workers.append(worker)
             return worker
 
+        detail = str(item.get("note") or item.get("channel") or "")
         self.ctx.downloads.submit(
             kind="Java",
-            name=f"{offer.vendor} Java {offer.version}",
+            name=f"{dist_name} Java {version_label}",
             factory=factory,
-            cancel=cancel_event.set,
-            pause=pause_event,
             rebuild=factory,
             target_dir=str(JAVA_ROOT),
-            detail=f"{offer.vendor} · Java {offer.version}",
+            detail=detail,
         )
-        self.ctx.bus.toast.emit(f"已加入下载中心：{offer.vendor} Java {offer.version}")
+        self.ctx.bus.toast.emit(f"已加入下载中心：{dist_name} Java {version_label}")
 
-    def _on_installed(self, row: int, info) -> None:
+    def _on_installed(self, task_id: str, info) -> None:
+        self.ctx.downloads.finish(task_id, ok=True)
         self.ctx.javas = detect_java_installed()
-        if info is not None and all(j.path != info.path for j in self.ctx.javas):
+        if info is not None and all(
+            java_key(j.path) != java_key(info.path) for j in self.ctx.javas
+        ):
             self.ctx.javas.append(info)
         self.ctx.bus.javas_changed.emit()
         self.ctx.bus.toast.emit(
-            f"{self._offers[row].vendor} Java {getattr(info, 'version', '')} 已就绪。"
+            f"Java {getattr(info, 'version', '')} 已安装完成。"
         )
         self.refresh()
 
-    def _on_install_failed(self, row: int, task_id: str, message: str) -> None:
+    def _on_install_failed(self, task_id: str, message: str) -> None:
         self.ctx.downloads.finish(task_id, ok=False, message=message)
-        self.ctx.bus.log.emit(
-            f"[Java 中心] {self._offers[row].vendor} Java {self._offers[row].version} 安装失败：{message}"
-        )
+        self.ctx.bus.log.emit(f"[Java 中心] Java 安装失败：{message}")
         QMessageBox.warning(self, "Java 安装失败", message)

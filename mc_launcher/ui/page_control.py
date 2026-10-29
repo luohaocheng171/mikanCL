@@ -38,7 +38,7 @@ from ..config import ISOLATION_LABELS, PROCESS_PRIORITIES
 from ..content import ContentError, ContentProject, ContentVersion
 from ..context import AppContext
 from ..version import InstalledVersion, VersionError, load_version, scan_installed_versions
-from .widgets import Badge, Card, card_title_row, hline, page_header
+from .widgets import Badge, Card, card_title_row, hline, page_header, scroll_page
 
 NAV_ITEMS = ("概览", "游戏设置", "模组管理", "资源包管理", "光影包管理", "版本管理")
 
@@ -318,11 +318,11 @@ class ControlPage(QWidget):
         self.stack = QStackedWidget()
         splitter.addWidget(self.stack)
 
-        self.stack.addWidget(self._build_overview_page())
-        self.stack.addWidget(self._build_game_page())
+        self.stack.addWidget(scroll_page(self._build_overview_page()))
+        self.stack.addWidget(scroll_page(self._build_game_page()))
         for key in ("mods", "resourcepacks", "shaderpacks"):
             self.stack.addWidget(self._build_files_page(key))
-        self.stack.addWidget(self._build_manage_page())
+        self.stack.addWidget(scroll_page(self._build_manage_page()))
 
         self.nav_list.currentRowChanged.connect(self._on_nav_changed)
         self.nav_list.setCurrentRow(0)

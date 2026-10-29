@@ -21,6 +21,7 @@ from .auth import AccountStore  # noqa: E402
 from .config import LOG_DIR, Config  # noqa: E402
 from .content import ContentClient  # noqa: E402
 from .context import AppBus, AppContext  # noqa: E402
+from .i18n import Translator  # noqa: E402
 from .net import SourceManager, apply_proxy  # noqa: E402
 from .ui.main_window import MainWindow  # noqa: E402
 from .ui.theme import STYLESHEET, make_block_icon  # noqa: E402
@@ -74,6 +75,9 @@ def _install_log_sink(bus: AppBus) -> None:
         pass
 
 
+_SINGLE_INSTANCE: QSharedMemory | None = None
+
+
 def _acquire_single_instance() -> QSharedMemory | None:
     """单实例保护：避免两个进程同时读写 config.json / accounts.json / 浏览器 profile。"""
     try:
@@ -84,6 +88,19 @@ def _acquire_single_instance() -> QSharedMemory | None:
         return memory if memory.create(1) else None
     except Exception:  # noqa: BLE001 - 单实例失败不应阻止启动
         return None
+
+
+def release_single_instance() -> None:
+    """释放单实例锁，供「立即重启」在拉起新进程前调用，否则新进程会误判为重复启动。"""
+    global _SINGLE_INSTANCE
+    memory = _SINGLE_INSTANCE
+    _SINGLE_INSTANCE = None
+    if memory is None:
+        return
+    try:
+        memory.detach()
+    except Exception:  # noqa: BLE001 - 释放失败只影响重启，不影响退出
+        pass
 
 
 def main() -> None:
@@ -99,7 +116,8 @@ def main() -> None:
     )
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
-    app.setApplicationDisplayName(APP_NAME_CN)
+    # 显示名用于窗口标题后缀，保持中性以免在非中文界面出现中文
+    app.setApplicationDisplayName(APP_NAME)
     app.setOrganizationName(APP_NAME)
     app.setStyle("Fusion")
     app.setPalette(_dark_palette())
@@ -107,16 +125,20 @@ def main() -> None:
     app.setStyleSheet(STYLESHEET)
     app.setWindowIcon(make_block_icon(64))
 
+    global _SINGLE_INSTANCE
     guard = _acquire_single_instance()
     if guard is None:
         QMessageBox.information(
             None,
-            APP_NAME_CN,
+            APP_NAME,
             f"{APP_NAME_CN} 已经在运行中。请切换到已打开的窗口，或先在托盘退出后再启动。",
         )
         return
+    _SINGLE_INSTANCE = guard
 
     config = Config.load()
+    # 翻译器需在 QApplication 之后、MainWindow 之前安装；Translator 自身挂到 app 上防 GC
+    Translator(app).load(config.language)
     apply_proxy(config.effective_proxy)
     context = AppContext(
         config=config,

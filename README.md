@@ -1,12 +1,12 @@
-# MikanCL v4.0.1 官方文档
+# MikanCL v4.2.0 官方文档
 
 <div align="center">
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![PySide6](https://img.shields.io/badge/PySide6-Qt6-brightgreen.svg)](https://www.qt.io/)
+[![License](https://img.shields.io/badge/License-GPL--3.0-red.svg)](https://www.gnu.org/licenses/gpl-3.0.html)
 
-
-**MikanCL** — 正版登录 + 外置登录 + 5 大加载器一键安装 + Modrinth/CurseForge 内容中心 + 整合包管理 + Java 中心 + 启动预检
+**MikanCL** — 正版登录 + 外置登录 + 5 大加载器一键安装 + Modrinth/CurseForge 内容中心（含中文译名）+ 整合包管理 + 陶瓦联机 + Java 中心 + 启动预检
 
 *AI 辅助开发工具：DeepSeek*
 
@@ -22,7 +22,7 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 
 ### 版本信息
 
-- **当前版本**：v4.0.1
+- **当前版本**：v4.2.0
 - **框架**：PySide6（Qt6，Fusion 深色主题 + 自绘标题栏）
 - **Python 要求**：3.10+
 - **运行平台**：Windows 10 / 11（x64）
@@ -30,7 +30,90 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 - **账号体系**：微软正版 / 外置登录（authlib-injector）/ 离线账号
 - **内容平台**：Modrinth、CurseForge（内置默认 API Key，可替换）
 - **下载源**：Mojang 官方源、BMCLAPI 镜像、自定义源（可增删、可排序）
-- **许可证**：待定（见[许可证](#许可证)章节）
+- **界面语言**：简体中文 / English / Русский / Français / 日本語（5 种，设置内切换）
+- **许可证**：GPL-3.0（GNU General Public License v3.0，见[许可证](#许可证)章节）
+
+---
+
+## MikanCL 能做什么
+
+它不是「只能点启动」的壳子：从装版本、装加载器、装整合包，到找 Mod、找材质包、开联机、换 Java、查崩溃原因，都在同一个窗口里完成。
+
+| 你想做的事 | MikanCL 里的做法 |
+| :--- | :--- |
+| 装一个原版游戏 | 「下载安装」选版本 → 自动下载客户端、依赖库、natives、3000+ 资源文件 → 主页双击启动 |
+| 加 Forge / Fabric / NeoForge / Quilt / LiteLoader | 同一页面选择加载器版本一键安装，自动匹配所需 Java 主版本 |
+| 装整合包 | 拖进窗口或拖进「整合包」页 → 自动装基础版本 → 装加载器 → 刷入 overrides → 注册独立实例 |
+| 找 Mod、整合包、资源包、光影包、材质包 | 「内容中心」双平台搜索，可按 MC 版本 / 加载器 / 材质分辨率过滤，一键装进实例或另存为 |
+| 用中文找 Mod | 直接搜「机械动力」「物品管理器」等中文关键词，卡片自动显示中文译名 |
+| 和朋友联机 | 「多人联机」用陶瓦（Terracotta）房间码组网，无需端口映射或公网 IP |
+| 换 Java / 装 Java | 「Java 中心」一键下载 6 家发行版；「设置」里手动指定或自动匹配 |
+| 管账号与皮肤 | 微软正版设备码登录、皮肤站外置登录、离线账号，皮肤查询 / 上传 / 本地皮肤 |
+| 排查「装上了但起不来」 | 启动预检 5 项拦截 + Mod 冲突检测 + 界面日志与 `install_error.log` 落盘 |
+| 多个版本互不干扰 | 4 种隔离模式（不隔离 / 仅模组 / 仅存档 / 全部隔离），整合包自动独立目录 |
+| 小屏幕 / 想调窗口 | 无边框窗口可拖四边四角自由缩放，默认 1080×680，内容放不下自动变滚轮滚动 |
+
+---
+
+## 独家特色
+
+以下是与常见启动器相比，MikanCL 做得更细的地方（全部为本项目自研实现）：
+
+1. **内容中文译名（在线词典 + 本地词表）**
+   卡片的英文标题会在后台逐张补上中文名（如 `Sodium → 钠`、`Iris → 虹膜光影`），译名来自 MC百科搜索结果的「中文名 (English Name)」配对，带 1 秒节流、磁盘缓存与失败负缓存；本地常用词表优先命中，缺词才联网，不阻塞搜索结果渲染。
+
+2. **中文关键词搜索**
+   直接输入中文即可检索：先查本地词表，未命中时回退在线词典把中文反查成英文项目名，再交给平台搜索接口。
+
+3. **材质包独立分类**
+   内容中心把「材质包」从「资源包」里拆出来，按 8x / 16x / 32x / 48x / 64x / 128x / 256x / 512x+ 分辨率分类检索，安装时落到实例的 `resourcepacks/`。
+
+4. **统一的下载中心**
+   原版安装、加载器、整合包、内容文件、Java 运行时、纯文件「另存为」全部是同一类任务：统一进度、速度、暂停 / 恢复 / 取消 / 重试 / 打开目录。
+
+5. **「只下载不安装」系列**
+   加载器安装器可另存为到指定目录、原版客户端 Jar 可单独下载，方便归档、离线部署或交给别的启动器使用。
+
+6. **启动前五项预检**
+   Java 主版本不匹配（可确认强启）、内存超过物理内存 70%、Mod 冲突、磁盘剩余 < 2GB、核显 + 光影组合，启动前直接说清楚问题出在哪。
+
+7. **Mod 冲突检测**
+   解析 `fabric.mod.json` / `META-INF/mods.toml` / `mcmod.info`，检测重复 modid、前置缺失、版本范围不满足，在 Mod 表格里标红并给出处理建议。
+
+8. **整合包「直装包」兜底**
+   没有清单但含 `mods/` 或 `config/` 的压缩包按直装包处理并推断 MC 版本；安装失败的部分 Mod 会写入 `missing_mods.txt`，不中断整体流程。
+
+9. **双格式整合包备份**
+   CurseForge 分享格式（`manifest.json` + `overrides`）与私有 `.mikan` 格式（`instance.json` + 内容）双向导入导出。
+
+10. **多选启动队列**
+    主页勾选多个版本按顺序依次启动，可中途停止，适合一次开多个客户端场景。
+
+11. **界面适配小屏幕**
+    无边框窗口可拖边缩放（默认 1080×680，最小 900×540），页面统一包在滚动容器里，窗口变矮就出滚轮而不是把内容压扁；筛选条件分两行、内容卡片按宽度自动 4 → 3 → 2 列重排。
+
+12. **内置陶瓦联机**
+    自动下载并校验官方发行包，房主创建房间、朋友输房间码加入，结束后一键关闭联机进程。
+
+13. **五语言界面**
+    简中 / 英 / 俄 / 法 / 日随设置切换；界面文案通过 Qt 翻译机制（`tr()` + `.qm`）加载，缺失翻译条目或 `.qm` 文件不存在时回退简体中文。
+
+14. **单文件免安装**
+    一个 `MikanCL.exe`，双击即用，配置与缓存写在 exe 同目录的 `data/`，换机直接拷走。
+
+---
+
+## 设计参考
+
+MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器（**仅借鉴产品形态与流程思路，未复制其代码**）：
+
+| 参考对象 | 借鉴的部分 |
+| :--- | :--- |
+| **PCL2（Plain Craft Launcher 2）** | 左侧导航 + 右侧卡片的整体布局、版本卡片与启动按钮的交互、整合包「先装版本再装加载器最后刷内容」的安装顺序、下载页的信息密度 |
+| **HMCL（Hello Minecraft! Launcher）** | 实例 / 版本隔离目录的组织方式、Java 自动匹配策略、外置登录（authlib-injector）集成思路、下载源与镜像的概念、陶瓦联机的使用方式 |
+| **Prism Launcher / MultiMC** | 「一个实例 = 一套独立目录」的实例模型、实例级 Java 与内存覆盖配置的概念 |
+| **Minecraft 官方启动器** | 版本 JSON、资源索引（asset index）、natives 解压等官方安装规范 |
+| **Modrinth App** | 内容中心的搜索 / 筛选 / 一键安装到实例的交互形态 |
 
 ---
 
@@ -89,6 +172,15 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 - **内置浏览器**：QtWebEngine 内置页面，便于查看 MC 百科、Mod 页面、皮肤站
 - **Java 中心**：Adoptium Temurin、Microsoft OpenJDK、Azul Zulu、Amazon Corretto、Alibaba Dragonwell、Tencent Kona 六大发行版，按主版本（8 / 11 / 17 / 21）下载安装，自动解压到 `data/` 并在设置中选中
 - **Forbric 引导式安装**：实验性 Fabric/Forge/NeoForge 三合一加载器，通过 GitHub Releases 自动获取最新安装器与 `Forbric-Installer.bat`，用 Java 21 拉起官方 GUI，后台轮询 `versions/26.2-forbric/26.2-forbric.json`，生成后自动注册实例
+
+### 界面与联机
+
+- **多语言界面**：简体中文 / English / Русский / Français / 日本語，设置内即时切换
+- **自由缩放窗口**：无边框窗口支持拖四边四角改大小（默认 1080×680，最小 900×540），小屏按可用区域自动收缩
+- **滚轮自适应版面**：所有页面包在滚动容器中，窗口变矮时纵向滚动而不是压扁内容；侧边栏导航、筛选条件、内容卡片列数都会随宽度调整
+- **陶瓦联机**：内置 Terracotta（房间码 P2P 组网），自动下载 / 校验官方发行包，创建房间、加入房间、复制房间码、结束联机
+- **中文内容检索**：本地词表 + MC百科在线词典，支持中文名展示与中文关键词搜索
+- **系统托盘与单实例**：可最小化到托盘，重复启动会提示而不是开两个进程
 
 ---
 
@@ -184,6 +276,20 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 - 打包版启动时将工作目录重定向到 exe 所在目录，`data/` 在同目录自动生成
 - 退出阶段跳过 Qt/Python 析构，避免后台线程尚未收尾时崩溃
 
+### 9. 内容中文译名与中文搜索
+
+数据来源为 MC百科（`search.mcmod.cn`）的搜索结果，标题形如 `[缩写] 中文名 (English Name)`，解析后得到「英文名 → 中文名」配对。
+
+| 环节 | 实现 |
+| :--- | :--- |
+| 请求 | 浏览器 UA + `Referer: https://www.mcmod.cn/`（应用 UA 会被拦截返回空页），单次超时 8 秒 |
+| 节流 | 进程内串行，两次请求间隔 ≥ 1 秒；并发抓取会触发站点限流 |
+| 解析 | 按 `class="result-item"` 分块，取 `<div class="body">` 之前的标题链接，去掉 `[XX]` 缩写前缀 |
+| 匹配 | 只接受英文名归一化后**完全一致**的条目，避免把「XX GTNH 版」误当成本体 |
+| 缓存 | `data/cache/cn_names.json`（`names` + `queries` 两段），原子写入；未命中 / 失败分别写入 30 分钟与 10 分钟负缓存 |
+| 展示 | 搜索结果返回后由 `TranslateWorker` 后台逐张补名，命中即刷新卡片，不阻塞列表渲染 |
+| 搜索 | `translate_query()` 本地词表优先，未命中再走在线词典，把中文反查为英文项目名 |
+
 ---
 
 ## 内部接口参考
@@ -202,6 +308,10 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | `mc_launcher/downloads.py` | 下载中心任务模型与调度（并发上限、暂停 / 恢复 / 取消 / 重试） |
 | `mc_launcher/java.py` | Java 探测、版本匹配、Java 下载与解压 |
 | `mc_launcher/forbric.py` | Forbric 安装器获取 / 下载 / 启动、版本结果轮询 |
+| `mc_launcher/terracotta.py` | 陶瓦联机发行包下载校验、进程管理与本地 HTTP API |
+| `mc_launcher/cn_source.py` | MC百科译名查询、节流与 `cn_names.json` 缓存（可选在线词典） |
+| `mc_launcher/mod_cn.py` | 本地中文词表、标题归一化、`cn_name()` / `translate_query()` |
+| `mc_launcher/i18n.py` | 五语言翻译表加载与运行时切换 |
 | `mc_launcher/context.py` | `AppContext`（配置 / 源 / 账号 / 内容 / 下载中心）与 `AppBus`（日志、提示、事件） |
 | `mc_launcher/version.py` | 版本清单缓存与版本列表筛选 |
 | `mc_launcher/ui/*` | 各功能页面、公共控件、主题与图标绘制 |
@@ -213,14 +323,18 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | 启动游戏 | `HomePage` | 版本列表、双击 / 多选启动、启动预检、拖拽导入、整合包快速入口 |
 | 下载安装 | `DownloadPage` | 原版版本安装、加载器安装、加载器源文件另存为、仅下载客户端 Jar |
 | 下载中心 | `DownloadCenterPage` | 任务表格、进度 / 速度 / 状态、暂停 / 恢复 / 取消 / 重试 / 打开目录 |
-| 内容中心 | `ContentPage` | Modrinth / CurseForge 搜索、详情、安装到实例、另存为 |
+| 内容中心 | `ContentPage` | Modrinth / CurseForge 搜索、详情、安装到实例、另存为、中文译名与材质包分类 |
 | 整合包 | `ModpackPage` | 已装整合包列表、导入、导出（CF 格式 / `.mikan`）、删除 |
 | 账号管理 | `AccountsPage` | 三种登录方式、账号切换、皮肤管理 |
 | 版本设置 | `ControlPage` | 单版本 Java / 内存 / 参数 / 隔离、Mod 管理、资源包、光影、存档、日志 |
+| Mod 加载器 | `LoadersPage` | 左侧按 MC 版本浏览，右侧列出该版本可用的加载器版本（最多 12 行），一键安装 |
+| 多人联机 | `MultiplayerPage` | 陶瓦联机安装、创建 / 加入房间、房间码复制、联机日志 |
 | 内置浏览器 | `BrowserPage` | QtWebEngine 浏览页 |
 | Forbric | `ForbricPage` | 版本兼容拦截、安装器下载与 GUI 启动、结果监控 |
 | Java 中心 | `JavaCenterPage` | 六大 Java 发行版下载与安装 |
 | 设置 | `SettingsPage` | 数据目录、下载源、线程数、代理、API Key、镜像、界面选项 |
+
+> 注意区分两个加载器页：`LoaderPage`（`page_loader.py`）是「下载安装」页里的**表单式**加载器安装区（手动填 MC 版本 + 加载器版本）；`LoadersPage`（`page_loaders.py`）是导航栏独立入口「Mod 加载器」，按 MC 版本**浏览列表**后选择安装。两者共用同一套安装 worker 与 `modloader.install_loader()`。
 
 ### 页面开发约定
 
@@ -263,6 +377,10 @@ MikanCL/
 │   ├── downloads.py            # 下载中心
 │   ├── java.py                  # Java 探测与下载
 │   ├── forbric.py              # Forbric
+│   ├── terracotta.py           # 陶瓦联机
+│   ├── cn_source.py            # MC百科译名词典（在线 + 缓存）
+│   ├── mod_cn.py               # 本地中文词表与中文检索
+│   ├── i18n.py                 # 五语言翻译
 │   ├── context.py              # 应用上下文
 │   ├── version.py              # 版本清单
 │   └── ui/                     # 界面层
@@ -276,11 +394,13 @@ MikanCL/
 │       ├── page_modpack.py     # 整合包
 │       ├── page_accounts.py    # 账号与皮肤
 │       ├── page_control.py     # 版本设置 / Mod 管理
+│       ├── page_multiplayer.py # 多人联机（陶瓦）
 │       ├── page_browser.py     # 内置浏览器
 │       ├── page_forbric.py     # Forbric（+ forbric_worker.py）
 │       ├── page_java_center.py # Java 中心
 │       ├── page_settings.py    # 设置
-│       ├── page_loader.py      # 页面懒加载
+│       ├── page_loader.py      # 加载器安装（表单式：手动选 MC 版本 + 加载器版本）
+│       ├── page_loaders.py     # 加载器安装（按 MC 版本浏览，LoadersPage）
 │       ├── dropinstall.py      # 拖拽导入 / 直装包
 │       ├── covers.py           # 封面与缓存
 │       └── skin_view.py        # 皮肤预览
@@ -310,6 +430,8 @@ MikanCL/
 
 `urllib`（HTTP / Range 下载）、`zipfile` / `tarfile`（整合包与安装器解压）、`concurrent.futures`（多线程下载）、`threading`（暂停 / 取消）、`subprocess` + `ctypes`（安装器与内存检测）、`json`（全部配置持久化）。
 
+> 解压带路径穿越防护：Python 3.12+ 使用 `tarfile.extractall(filter="data")`，3.10 / 3.11 自动降级为普通 `extractall()`（见 `terracotta.py`），因此最低 Python 版本仍为 3.10。
+
 ### 运行时依赖
 
 | 依赖 | 说明 |
@@ -324,7 +446,7 @@ MikanCL/
 
 ### 方式一：已打包 exe（推荐）
 
-1. 下载 `MikanCL.exe` 放到任意目录
+1. 从 [Releases](https://github.com/luohaocheng171/mikanCL/releases) 下载 `MikanCL.exe` 放到任意目录
 2. 双击运行，程序会在 exe 同目录自动创建 `data/` 保存配置与缓存
 3. 首次运行可能触发 SmartScreen 提示，点击「更多信息」→「仍要运行」
 4. 如被杀毒软件误报，请将程序所在目录加入白名单
@@ -413,7 +535,19 @@ pyinstaller --noconfirm --clean --onefile --windowed --name MikanCL \
 
 ## 许可证
 
-本项目尚未指定开源许可证。如需开源发布，请自行添加 `LICENSE` 文件（例如 GPL-3.0 或 MIT）并更新本章节与顶部徽章。
+MikanCL 以 **GNU General Public License v3.0（GPL-3.0）** 发布。完整许可文本见 [gnu.org/licenses/gpl-3.0](https://www.gnu.org/licenses/gpl-3.0.html)（正式发布时请在仓库内附上 `LICENSE` 文件）。
+
+简单来说：
+
+| 你可以 | 你必须 |
+| :--- | :--- |
+| 自由运行、复制、分发本程序 | 分发时保留版权声明与许可声明 |
+| 阅读、修改源码 | 修改后的版本同样以 GPL-3.0 开源 |
+| 基于本程序发布衍生作品 | 不得追加限制他人行使 GPL 权利的条款 |
+
+本程序按「现状」提供，不附带任何明示或暗示的担保（详见许可证第 15、16 条）。
+
+> **许可边界**：GPL-3.0 只覆盖 MikanCL 自身的代码。Minecraft 游戏本体、Mod、整合包、资源包、光影包、材质包、Java 运行时，以及第三方组件（如陶瓦联机 Terracotta，其自身为 AGPL-3.0）均适用各自的权利与许可，请分别遵守。
 
 **法律声明**：MikanCL 仅提供版本下载、启动与内容管理的客户端功能，不包含任何 Minecraft 游戏本体、Mod 二进制文件或账号凭据。Minecraft 为 Mojang / Microsoft 的商标与版权作品，请通过正版渠道购买与使用；Mod、整合包、资源包、光影包的版权归各自作者所有，请遵守其授权协议。
 
@@ -421,20 +555,50 @@ pyinstaller --noconfirm --clean --onefile --windowed --name MikanCL \
 
 ## 项目地址
 
-`https://github.com/<your-name>/MikanCL`（请替换为实际仓库地址）
+- 仓库主页：<https://github.com/luohaocheng171/mikanCL>
+- 问题反馈 / 功能建议：<https://github.com/luohaocheng171/mikanCL/issues>
+- 版本发布（下载 `MikanCL.exe`）：<https://github.com/luohaocheng171/mikanCL/releases>
 
 ---
 
-## 致谢
+## 鸣谢
 
-- **DeepSeek** — AI 辅助开发工具
-- **PySide6 / Qt6** — 跨平台 GUI 框架
-- **Mojang / Microsoft** — Minecraft 版本清单与官方下载源
-- **BMCLAPI** — 国内下载镜像加速
-- **HMCL / PCL2** — 功能设计与交互参考
-- **Modrinth / CurseForge** — 内容平台与整合包生态
-- **Forge / NeoForge / Fabric / Quilt / LiteLoader** — Mod 加载器
-- **Forbric** — 实验性三合一加载器
-- **Adoptium / Microsoft / Azul / Amazon / Alibaba / Tencent** — Java 运行时发行版
-- **CustomSkinLoader** — 离线皮肤加载
-- **authlib-injector** — 外置登录
+MikanCL 能跑起来，靠的是下面这些人和项目。排名不分先后，如有遗漏请联系补充。
+
+### 参考的启动器
+
+- **PCL2（Plain Craft Launcher 2）** — 界面布局、版本卡片交互、整合包安装顺序的重要参考
+- **HMCL（Hello Minecraft! Launcher）** — 实例隔离、Java 匹配、外置登录与下载源的思路来源
+- **Prism Launcher / MultiMC** — 「实例 = 独立目录」模型的参考
+- **Modrinth App** — 内容中心搜索与一键安装的交互参考
+
+### 框架与工具
+
+- **DeepSeek** — 全程 AI 辅助开发
+- **PySide6 / Qt 6** — 界面框架（含 QtWebEngine 内置浏览器）
+- **PyInstaller** — 单文件打包
+
+### 数据与服务
+
+- **Mojang / Microsoft** — 版本清单、资源索引与官方下载源
+- **BMCLAPI（bangbang93）** — 国内下载镜像加速
+- **MC百科（mcmod.cn）** — Mod / 整合包中文译名与中文检索词典
+- **Modrinth** — 内容平台 API 与 CDN
+- **CurseForge / Overwolf** — 内容平台 API 与 CDN
+
+### Mod 生态
+
+- **Forge / NeoForge / Fabric / Quilt / LiteLoader** — 各加载器及其安装器
+- **Forbric（Ray-T-r）** — 实验性三合一加载器
+- **authlib-injector（yushijinhun）** — 外置登录 / 皮肤站支持
+- **CustomSkinLoader** — 离线皮肤在游戏内生效
+- **Terracotta / 陶瓦联机（Burning_TNT，HMCL 团队）** — P2P 房间码联机组件（AGPL-3.0）
+
+### Java 运行时
+
+- **Adoptium（Eclipse Temurin）**、**Microsoft OpenJDK**、**Azul Zulu**、**Amazon Corretto**、**Alibaba Dragonwell**、**Tencent Kona**
+
+### 开源社区
+
+- 所有在 Issue、讨论区反馈问题与提出建议的玩家
+- 所有坚持开源 Mod 加载器、工具链与内容平台的作者

@@ -36,6 +36,8 @@ class Progress:
     detail: str = ""
     percent: float = 0.0
     speed: float = 0.0
+    files_done: int = 0
+    files_total: int = 0
 
 
 @dataclass
@@ -71,9 +73,26 @@ class GameInstaller:
         if self.log_cb:
             self.log_cb(message)
 
-    def report(self, stage: str, percent: float, detail: str = "", speed: float = 0.0) -> None:
+    def report(
+        self,
+        stage: str,
+        percent: float,
+        detail: str = "",
+        speed: float = 0.0,
+        files_done: int = 0,
+        files_total: int = 0,
+    ) -> None:
         if self.progress_cb:
-            self.progress_cb(Progress(stage, detail, max(0.0, min(percent, 1.0)), speed))
+            self.progress_cb(
+                Progress(
+                    stage,
+                    detail,
+                    max(0.0, min(percent, 1.0)),
+                    speed,
+                    files_done,
+                    files_total,
+                )
+            )
 
     def _check_cancel(self) -> None:
         if self.cancel.is_set():
@@ -394,6 +413,7 @@ class GameInstaller:
         unknown_count = sum(1 for task in tasks if task.size <= 0)
         total_units = max(total_bytes, len(tasks))
         done_units = [0]
+        done_files = [0]
         missing: list[DownloadTask] = []
         lock = threading.Lock()
         started_at = time.time()
@@ -406,15 +426,17 @@ class GameInstaller:
             emitted[0] = now
             with lock:
                 done = done_units[0]
+                files = done_files[0]
             fraction = min(1.0, done / total_units)
             elapsed = max(0.001, now - started_at)
             speed = done / elapsed if done else 0.0
-            detail = f"{done / 1048576:.1f} / {total_units / 1048576:.1f} MB"
+            total_files = len(tasks)
+            detail = f"{files}/{total_files} 文件 · {done / 1048576:.1f} / {total_units / 1048576:.1f} MB"
             if unknown_count:
                 detail += f" · {unknown_count} 个未知大小"
-            self.report(stage, base + span * fraction, detail, speed)
+            self.report(stage, base + span * fraction, detail, speed, files, total_files)
 
-        self.report(stage, base, f"检查 {len(tasks)} 个文件…")
+        self.report(stage, base, f"检查 {len(tasks)} 个文件…", files_total=len(tasks))
         for task in tasks:
             if self.cancel.is_set():
                 raise Cancelled()
@@ -423,12 +445,19 @@ class GameInstaller:
             if self.http.is_valid(task.dest, size, sha1):
                 with lock:
                     done_units[0] += task.size if task.size > 0 else 1
+                    done_files[0] += 1
                 continue
             missing.append(task)
         emit(force=True)
 
         if not missing:
-            self.report(stage, base + span, "全部文件已就绪")
+            self.report(
+                stage,
+                base + span,
+                "全部文件已就绪",
+                files_done=len(tasks),
+                files_total=len(tasks),
+            )
             return
 
         self.log(f"[下载] {stage}：需要下载 {len(missing)} 个文件")
@@ -463,8 +492,9 @@ class GameInstaller:
                         try:
                             future.result()
                             # on_bytes 已按实际下载字节累加；未知大小只按文件数计 1 个单位
-                            if task.size <= 0:
-                                with lock:
+                            with lock:
+                                done_files[0] += 1
+                                if task.size <= 0:
                                     done_units[0] += 1
                         except Cancelled:
                             for pending in future_map:
@@ -492,4 +522,10 @@ class GameInstaller:
                 )
 
         emit(force=True)
-        self.report(stage, base + span, "完成")
+        self.report(
+            stage,
+            base + span,
+            f"{len(tasks)}/{len(tasks)} 文件 · {total_units / 1048576:.1f} MB",
+            files_done=len(tasks),
+            files_total=len(tasks),
+        )

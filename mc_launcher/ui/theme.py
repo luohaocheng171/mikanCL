@@ -37,6 +37,8 @@ QPushButton#NavButton:hover { background-color: #142018; color: #dfeee3; }
 QPushButton#NavButton:checked { background-color: #1a2f22; color: #86e88f; font-weight: 600; }
 QFrame#Card { background-color: #121d16; border: 1px solid #1f2f25; border-radius: 14px; }
 QLabel#CardTitle { font-size: 15px; font-weight: 600; color: #eaf4ec; }
+QLabel#TaskStage { color: #9fe0ab; font-size: 13px; font-weight: 600; }
+QLabel#StatValue { color: #f1f8f3; font-size: 19px; font-weight: 700; }
 QLabel#Muted { color: #8aa192; font-size: 12px; }
 QLabel#Tiny { color: #6e8778; font-size: 11px; }
 QLabel#PageTitle { font-size: 24px; font-weight: 700; color: #f1f8f3; }

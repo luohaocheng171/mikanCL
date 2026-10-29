@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
 
 from .theme import make_dot
 
@@ -68,6 +75,21 @@ def card_title_row(title: str, subtitle: str = "", extra: QWidget | None = None)
     if extra is not None:
         layout.addWidget(extra)
     return row
+
+
+def scroll_page(page: QWidget) -> QWidget:
+    """把整页内容包进滚动容器。
+
+    窗口高度不足时改为鼠标滚轮上下滚动，避免布局把卡片、表单硬压成薄片导致文字重叠。
+    """
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.NoFrame)
+    # 纵向始终允许滚轮；横向仅在页面比窗口更宽时出现，避免内容被硬裁切
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+    scroll.setWidget(page)
+    return scroll
 
 
 def page_header(title: str, subtitle: str) -> tuple[QWidget, QHBoxLayout]:

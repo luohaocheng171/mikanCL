@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -34,7 +35,7 @@ from ..config import (
 from ..context import AppContext
 from ..content import ContentError, mc_version_key
 from ..installer import GameInstaller
-from ..java import pick_java
+from ..java import detect_java_installed, pick_java
 from ..launcher import prepare_isolated_dir
 from ..modloader import install_loader, java_for_mc
 from ..net import Cancelled
@@ -240,10 +241,32 @@ class FileDropWorker(QThread):
             self.failed.emit(f"导入失败：{exc}")
 
 
+def _pack_slug(name: str, path: Path, fallback: str = "modpack") -> str:
+    """稳定的实例目录名：同一文件重复导入会复用同一目录，可续传、不重复下载。"""
+    base = re.sub(r"[^\w\-]+", "-", (name or path.stem).lower()).strip("-")[:36]
+    digest = hashlib.sha1(str(path).encode("utf-8")).hexdigest()[:4]
+    return f"{base or fallback}-{digest}"
+
+
+def _find_installed_loader(target: Path, mc_version: str, loader: str) -> str:
+    """查找已经安装好的加载器版本目录（Forge/NeoForge/LiteLoader 以 MC 版本开头，
+    Fabric/Quilt 以 <loader>-loader- 开头）。"""
+    versions = target / "versions"
+    if not versions.is_dir():
+        return ""
+    prefixes = (f"{mc_version}-{loader}", f"{loader}-loader")
+    for entry in versions.iterdir():
+        if not entry.is_dir() or not entry.name.startswith(prefixes):
+            continue
+        if (entry / f"{entry.name}.json").is_file():
+            return entry.name
+    return ""
+
+
 class ModpackDropWorker(QThread):
     """拖入的整合包：创建/恢复独立实例，安装基础版本、加载器与整合包内容。"""
 
-    progress = Signal(float, str)
+    progress = Signal(float, str, str, float, int, int)
     log = Signal(str)
     done = Signal(str)
     failed = Signal(str)
@@ -262,8 +285,18 @@ class ModpackDropWorker(QThread):
         self.log.emit("[取消] 导入已取消，已下载的文件会保留，稍后重新导入可继续。")
         self.cancelled.emit("整合包导入已取消。")
 
-    def _emit(self, value: float, detail: str = "") -> None:
-        self.progress.emit(max(0.0, min(1.0, value)), detail)
+    def _emit(
+        self,
+        value: float,
+        detail: str = "",
+        stage: str = "",
+        speed: float = 0.0,
+        files_done: int = 0,
+        files_total: int = 0,
+    ) -> None:
+        self.progress.emit(
+            max(0.0, min(1.0, value)), stage, detail, speed, files_done, files_total
+        )
 
     def _fail(self, message: str, exc: BaseException | None = None) -> None:
         detail = traceback.format_exc() if exc is not None else ""
@@ -294,7 +327,14 @@ class ModpackDropWorker(QThread):
         return GameInstaller(
             self.ctx.config.with_game_dir(target),
             self.ctx.sources,
-            progress_cb=lambda p: self._emit(base + p.percent * span, p.detail),
+            progress_cb=lambda p: self._emit(
+                base + p.percent * span,
+                p.detail,
+                stage=p.stage,
+                speed=p.speed,
+                files_done=p.files_done,
+                files_total=p.files_total,
+            ),
             log_cb=self.log.emit,
             cancel=self.cancel_event,
             pause=self.pause_event,
@@ -343,10 +383,15 @@ class ModpackDropWorker(QThread):
     ) -> str:
         if not loader:
             return version_id
-        if (target / "versions" / version_id / f"{version_id}.json").is_file():
-            return version_id
-        self._emit(0.47, f"安装 {loader} 加载器…")
-        java, warning = pick_java(self.ctx.javas, java_for_mc(mc_version))
+        existing = _find_installed_loader(target, mc_version, loader)
+        if existing:
+            return existing
+        self._emit(0.47, f"安装 {loader} 加载器…", stage=f"安装 {loader} 加载器")
+        javas = self.ctx.javas or detect_java_installed()
+        if javas and not self.ctx.javas:
+            # 启动扫描尚未完成时兜底，避免误报“未找到可用 Java”
+            self.ctx.javas = javas
+        java, warning = pick_java(javas, java_for_mc(mc_version))
         if java is None:
             raise ContentError(
                 f"整合包需要 Java {java_for_mc(mc_version)}，未找到可用 Java。{warning}"
@@ -400,8 +445,7 @@ class ModpackDropWorker(QThread):
 
     # ------------------------------------------------------------------
     def _install_pack(self, meta) -> None:
-        slug_base = re.sub(r"[^\w\-]+", "-", (meta.name or self.path.stem).lower()).strip("-")[:36]
-        slug = f"{slug_base or 'modpack'}-{abs(hash(str(self.path))) % 10000:04d}"
+        slug = _pack_slug(meta.name or self.path.stem, self.path)
         target = INSTANCES_DIR / slug
         target.mkdir(parents=True, exist_ok=True)
         installer = self._make_installer(target, 0.05, 0.4)
@@ -435,15 +479,29 @@ class ModpackDropWorker(QThread):
                     )
 
             # ④ 版本完整安装成功后，才刷入整合包内容（overrides + mods 下载）
-            self._emit(0.6, "下载整合包内容…")
+            self._emit(0.6, "准备下载整合包文件…", stage="下载整合包内容")
+
+            def _files_progress(done: int, total: int) -> None:
+                ratio = (done / total) if total else 0.0
+                self._emit(
+                    0.6 + ratio * 0.3,
+                    f"{done}/{total} 文件",
+                    stage="下载整合包内容",
+                    files_done=done,
+                    files_total=total,
+                )
+
             self.ctx.content.install_modpack_files(
                 self.path,
                 meta,
                 target,
                 log=self.log.emit,
                 cancel=self.cancel_event,
-                progress=lambda value, detail: self._emit(0.6 + value * 0.35, detail),
+                progress=lambda value, detail: self._emit(
+                    0.6 + value * 0.35, detail, stage="下载整合包内容"
+                ),
                 pause=self.pause_event,
+                files_progress=_files_progress,
             )
             instance = self.ctx.config.add_instance(
                 meta.name or self.path.stem,
@@ -501,8 +559,7 @@ class ModpackDropWorker(QThread):
         """直装包：整包解压到独立实例，并尽力补装推断出的原版版本。"""
         try:
             name = self.path.stem
-            slug_base = re.sub(r"[^\w\-]+", "-", name.lower()).strip("-")[:36]
-            slug = f"{slug_base or 'modpack'}-{abs(hash(str(self.path))) % 10000:04d}"
+            slug = _pack_slug(name, self.path)
             target = INSTANCES_DIR / slug
             target.mkdir(parents=True, exist_ok=True)
             self._emit(0.1, "解压直装包…")
@@ -560,8 +617,7 @@ class ModpackDropWorker(QThread):
             loader = str(data.get("loader") or "")
             loader_version = str(data.get("loader_version") or "")
             version_id = str(data.get("version_id") or mc_version)
-            slug_base = re.sub(r"[^\w\-]+", "-", name.lower()).strip("-")[:36]
-            slug = f"{slug_base or 'instance'}-{abs(hash(str(self.path))) % 10000:04d}"
+            slug = _pack_slug(name, self.path, "instance")
             target = INSTANCES_DIR / slug
             target.mkdir(parents=True, exist_ok=True)
             self._emit(0.05, "恢复实例文件…")
@@ -769,8 +825,16 @@ def handle_dropped_paths(parent, ctx: AppContext, paths: list[Path]) -> None:
         if isinstance(worker, ModpackDropWorker):
             worker.log.connect(lambda message: ctx.bus.log.emit(message))
             worker.progress.connect(
-                lambda value, detail, tid=task_id: ctx.downloads.update(
-                    tid, percent=value, detail=detail
+                lambda value, stage, detail, speed, done, total, tid=task_id: (
+                    ctx.downloads.update(
+                        tid,
+                        percent=value,
+                        stage=stage,
+                        detail=detail,
+                        speed=speed,
+                        files_done=done,
+                        files_total=total,
+                    )
                 )
             )
         worker.done.connect(

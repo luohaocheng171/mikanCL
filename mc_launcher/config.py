@@ -345,6 +345,9 @@ class Config:
     selected_source_id: str = "official"
     sources: list[DownloadSource] = field(default_factory=builtin_sources)
 
+    # ---- 界面 ----
+    language: str = "zh_CN"
+
     # ---- 版本隔离与单版本设置 ----
     isolation_mode: str = "none"
     process_priority: str = "normal"
@@ -666,6 +669,7 @@ class Config:
                 "after_launch_action": self.after_launch_action,
                 "keep_launcher_on_game_exit": bool(self.keep_launcher_on_game_exit),
                 "close_to_tray": bool(self.close_to_tray),
+                "language": self.language,
                 "selected_source_id": self.selected_source_id,
                 "sources": [s.to_dict() for s in self.sources],
                 "isolation_mode": self.isolation_mode,
@@ -770,6 +774,12 @@ class Config:
         cfg.hide_after_launch = bool(data.get("hide_after_launch", False))
         cfg.keep_launcher_on_game_exit = bool(data.get("keep_launcher_on_game_exit", True))
         cfg.close_to_tray = bool(data.get("close_to_tray", False))
+        # 延迟导入，避免 config 模块在导入时就依赖 Qt
+        from .i18n import SUPPORTED_LANGUAGES
+
+        cfg.language = str(data.get("language") or "zh_CN")
+        if cfg.language not in SUPPORTED_LANGUAGES:
+            cfg.language = "zh_CN"
         cfg.after_launch_action = str(data.get("after_launch_action") or "")
         if cfg.after_launch_action not in AFTER_LAUNCH_ACTIONS:
             cfg.after_launch_action = "hide" if cfg.hide_after_launch else "nothing"

@@ -118,28 +118,166 @@ def list_loader_versions(kind: str, mc_version: str) -> list[str]:
     return []
 
 
-def _fetch_meta_text(path: str) -> str:
-    """依次尝试官方 maven 与 BMCLAPI 镜像获取文本，返回首个成功结果。"""
-    errors = []
-    for base in ("https://maven.minecraftforge.net", MAVEN_MIRROR_BASE):
-        url = f"{base}/{path}"
+def _sort_mc_versions(versions) -> list[str]:
+    return sorted({str(v) for v in versions if v}, key=_version_key, reverse=True)
+
+
+def list_loader_mc_versions(kind: str) -> list[str]:
+    """返回指定加载器支持的全部 Minecraft 版本（新 → 旧）。
+
+    单个数据源失败时返回空列表，不向界面抛异常。
+    """
+    try:
+        http = _http()
+        if kind in ("fabric", "quilt"):
+            base = FABRIC_META if kind == "fabric" else QUILT_META
+            data = http.get_json_url(f"{base}/versions/game")
+            if not isinstance(data, list):
+                return []
+            stable: list[str] = []
+            others: list[str] = []
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                version = str(item.get("version") or "")
+                if not version:
+                    continue
+                (stable if item.get("stable") else others).append(version)
+            stable_sorted = _sort_mc_versions(stable)
+            return stable_sorted + [
+                v for v in _sort_mc_versions(others) if v not in stable_sorted
+            ]
+        if kind == "forge":
+            raw = http.request(f"{FORGE_MAVEN_BASE}/maven-metadata.xml").decode(
+                "utf-8", errors="replace"
+            )
+            prefixes = []
+            for item in re.findall(r"<version>([^<]+)</version>", raw):
+                prefix = item.split("-", 1)[0].strip()
+                # 1.21.1-52.0.1 / 1.7.10-10.13.4.1614-1.7.10 → 1.21.1 / 1.7.10
+                if re.fullmatch(r"1\.\d+(?:\.\d+)?", prefix):
+                    prefixes.append(prefix)
+            return _sort_mc_versions(prefixes)
+        if kind == "neoforge":
+            return _neoforge_mc_versions()
+        if kind == "liteloader":
+            data = http.get_json_url(LITELOADER_VERSIONS_URL)
+            node = data.get("versions") if isinstance(data, dict) else None
+            if not isinstance(node, dict):
+                return []
+            return _sort_mc_versions(node.keys())
+    except Exception:  # noqa: BLE001 - 单个源失败不应影响页面
+        return []
+    return []
+
+
+def _fetch_race(candidates: list[tuple[str, int]]) -> str:
+    """并发请求多个候选地址，返回最先成功的内容；全部失败时抛出 DownloadError。
+
+    NeoForge 官方 maven 在国内常超时，BMCLAPI 镜像偶尔证书链异常，
+    两边同时发起（官方给更长超时），避免串行等待导致界面报「获取失败」。
+    """
+    results: queue.Queue = queue.Queue()
+    errors: list[str] = []
+    lock = threading.Lock()
+
+    def worker(url: str, timeout: int) -> None:
         try:
-            return Http(timeout=15).request(url).decode("utf-8", errors="replace")
-        except DownloadError as exc:
-            errors.append(f"{url}：{exc}")
+            text = Http(timeout=timeout).request(url).decode("utf-8", errors="replace")
+        except Exception as exc:  # noqa: BLE001 - 单个地址失败交给其余候选
+            with lock:
+                errors.append(f"{url}：{exc}")
+            results.put(None)
+        else:
+            results.put(text)
+
+    for url, timeout in candidates:
+        threading.Thread(target=worker, args=(url, timeout), daemon=True).start()
+    for _ in candidates:
+        text = results.get()
+        if text:
+            return text
     raise DownloadError("；".join(errors))
+
+
+def _fetch_neoforge_text(path: str) -> str:
+    """NeoForge 官方 maven 与 BMCLAPI 镜像并发获取，取最先成功的结果。"""
+    return _fetch_race(
+        [
+            (f"{NEOFORGE_MAVEN_BASE}/{path}", 30),
+            (f"{MAVEN_MIRROR_BASE}/net/neoforged/{path}", 20),
+        ]
+    )
+
+
+def _neoforge_mc_prefix(version: str) -> str:
+    """把 NeoForge 版本号映射到 Minecraft 版本号。
+
+    旧 scheme：21.1.172 → 1.21.1，20.2.88 → 1.20.2，21.0.x → 1.21；
+    1.20.1-47.1.106 → 1.20.1（带 MC 前缀的旧产物）；
+    新 scheme（年份版本）：26.1.2.124 → 26.1.2，26.3.0.99 → 26.3。
+    """
+    text = version.strip()
+    if "-" in text and text.startswith("1."):
+        return text.split("-", 1)[0]
+    parts = re.split(r"[.\-+]", text)
+    numbers: list[int] = []
+    for part in parts:
+        if not part.isdigit():
+            break
+        numbers.append(int(part))
+    if len(numbers) < 2:
+        return ""
+    major, minor = numbers[0], numbers[1]
+    patch = numbers[2] if len(numbers) >= 3 else 0
+    if major >= 25:  # 年份式版本号（26.x），直接对应 MC 版本
+        return f"{major}.{minor}" if patch == 0 else f"{major}.{minor}.{patch}"
+    return f"1.{major}" if minor == 0 else f"1.{major}.{minor}"
+
+
+def _neoforge_mc_versions() -> list[str]:
+    """从 NeoForge maven 元数据反推支持的 Minecraft 版本。"""
+    prefixes: list[str] = []
+    try:
+        raw = _fetch_neoforge_text("neoforge/maven-metadata.xml")
+        for item in re.findall(r"<version>([^<]+)</version>", raw):
+            prefix = _neoforge_mc_prefix(item)
+            if prefix:
+                prefixes.append(prefix)
+    except DownloadError:
+        pass
+    # 1.20.1 的 NeoForge 产物位于 net/neoforged/forge 下
+    try:
+        raw = _fetch_neoforge_text("forge/maven-metadata.xml")
+        for item in re.findall(r"<version>([^<]+)</version>", raw):
+            prefix = item.split("-", 1)[0].strip()
+            if re.fullmatch(r"1\.\d+(?:\.\d+)?", prefix):
+                prefixes.append(prefix)
+    except DownloadError:
+        pass
+    return _sort_mc_versions(prefixes)
 
 
 def _neoforge_versions(mc_version: str) -> list[str]:
     parts = mc_version.split(".")
+    # 年份式 MC 版本（26.x）的 NeoForge 产物直接以 MC 版本为前缀
+    if len(parts) >= 2 and parts[0].isdigit() and int(parts[0]) >= 25:
+        prefix = re.escape(mc_version)
+        raw = _fetch_neoforge_text("neoforge/maven-metadata.xml")
+        versions = [
+            v
+            for v in re.findall(r"<version>([^<]+)</version>", raw)
+            if re.fullmatch(prefix + r"(?:\.0)?\.\d+", v)
+        ]
+        return sorted(set(versions), key=_version_key, reverse=True)
     if len(parts) < 3 or parts[0] != "1":
         return []
     minor, patch = int(parts[1]), int(parts[2])
     if minor == 20 and patch <= 1:
-        raw = _fetch_meta_text("net/neoforged/forge/maven-metadata.xml")
+        raw = _fetch_neoforge_text("forge/maven-metadata.xml")
         return _parse_maven_versions(raw, mc_version + "-")
     prefix = f"{minor}.{patch}"
-    raw = _fetch_meta_text("net/neoforged/neoforge/maven-metadata.xml")
+    raw = _fetch_neoforge_text("neoforge/maven-metadata.xml")
     versions = [
         v
         for v in re.findall(r"<version>([^<]+)</version>", raw)
@@ -257,6 +395,17 @@ def _install_profile(
     return version_id
 
 
+def _ensure_launcher_profiles(game_dir: Path) -> None:
+    """Forge/NeoForge 安装器要求目录里存在启动器档案，缺失时会直接退出。"""
+    profiles = game_dir / "launcher_profiles.json"
+    if not profiles.is_file():
+        payload = {"profiles": {}, "settings": {"language": "zh_cn"}, "version": 3}
+        profiles.write_text(json.dumps(payload), encoding="utf-8")
+    store = game_dir / "launcher_profiles_microsoft_store.json"
+    if not store.is_file():
+        store.write_text(json.dumps({"profiles": {}}), encoding="utf-8")
+
+
 def _install_installer(
     installer,
     kind: str,
@@ -324,6 +473,7 @@ def _install_installer(
         raise LoaderError("未找到可用的 Java，无法运行安装器。请在设置中选择 Java。")
     game_dir = installer.config.game_path
     game_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_launcher_profiles(game_dir)
     command = [java, "-jar", str(jar), "--installClient", str(game_dir)]
     if log:
         log("[加载器] 执行：" + " ".join(command))

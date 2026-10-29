@@ -24,14 +24,17 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from .. import APP_NAME, USER_AGENT
+from .. import APP_NAME, USER_AGENT, mod_cn
 from ..config import INSTANCES_DIR, write_instance_manifest
 from ..content import (
+    DEPENDENCY_OPTIONAL,
+    DEPENDENCY_REQUIRED,
     PROJECT_TYPES,
     SOURCE_LABELS,
     ContentClient,
@@ -56,6 +59,7 @@ TYPE_BADGE_KIND = {
     "mod": "blue",
     "modpack": "orange",
     "resourcepack": "green",
+    "texturepack": "green",
     "shader": "gray",
 }
 
@@ -86,7 +90,12 @@ INSTALLED_LOADER_KEYS = {
     "损坏": "",
 }
 
-_TYPE_FOLDERS = {"mod": "mods", "resourcepack": "resourcepacks", "shader": "shaderpacks"}
+_TYPE_FOLDERS = {
+    "mod": "mods",
+    "resourcepack": "resourcepacks",
+    "texturepack": "resourcepacks",
+    "shader": "shaderpacks",
+}
 
 _LOADER_WORDS = {
     "forge",
@@ -319,6 +328,32 @@ class SearchWorker(QThread):
             self.failed.emit(f"搜索失败：{exc}")
 
 
+class TranslateWorker(QThread):
+    """后台向 MC百科补齐中文译名，每完成一个项目就通知界面刷新。"""
+
+    translated = Signal(str)  # 已拿到中文名的英文项目名
+
+    def __init__(self, titles: list[str], parent=None):
+        super().__init__(parent)
+        self.titles = titles
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def run(self) -> None:
+        from .. import cn_source
+
+        for title in self.titles:
+            if self._stop.is_set():
+                return
+            try:
+                if cn_source.lookup_name(title):
+                    self.translated.emit(title)
+            except Exception:  # noqa: BLE001 - 单个项目失败不影响其余项目
+                continue
+
+
 class VersionsWorker(QThread):
     """获取项目文件列表，可按 Minecraft 版本过滤（懒加载）。"""
 
@@ -369,6 +404,31 @@ class ProjectVersionsWorker(QThread):
             self.failed.emit(str(exc))
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(f"获取支持的版本失败：{exc}")
+
+
+class DependenciesWorker(QThread):
+    """异步解析当前版本的前置 Mod，失败时直接降级（不打断详情页）。"""
+
+    ok = Signal(list)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        client: ContentClient,
+        source: str,
+        ids: list[str],
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.client = client
+        self.source = source
+        self.ids = list(ids)
+
+    def run(self) -> None:
+        try:
+            self.ok.emit(self.client.fetch_projects_by_ids(self.source, self.ids))
+        except Exception as exc:  # noqa: BLE001 - 前置解析失败不应影响详情页
+            self.failed.emit(f"解析前置资源失败：{exc}")
 
 
 class ManifestWorker(QThread):
@@ -722,15 +782,29 @@ class ContentInstallWorker(QThread):
                 )
 
         # ④ 版本完整安装成功后，才刷入整合包内容（overrides + mods 下载）
-        self._emit(0.6, "下载整合包内容…")
+        self._emit(0.6, "准备下载整合包文件…", stage="下载整合包内容")
+
+        def _files_progress(done: int, total: int) -> None:
+            ratio = (done / total) if total else 0.0
+            self._emit(
+                0.6 + ratio * 0.3,
+                f"{done}/{total} 文件",
+                stage="下载整合包内容",
+                files_done=done,
+                files_total=total,
+            )
+
         self.ctx.content.install_modpack_files(
             zip_path,
             meta,
             target,
             log=self.log.emit,
             cancel=self.cancel_event,
-            progress=lambda value, detail: self._emit(0.6 + value * 0.35, detail),
+            progress=lambda value, detail: self._emit(
+                0.6 + value * 0.35, detail, stage="下载整合包内容"
+            ),
             pause=self.pause_event,
+            files_progress=_files_progress,
         )
         instance = self.ctx.config.add_instance(
             meta.name or self.project.title,
@@ -767,6 +841,90 @@ class ProjectCard(QFrame):
         super().mouseReleaseEvent(event)
 
 
+class ContentVersionRow(QFrame):
+    """详情页版本行：点击选中该版本，用于查看它需要的前置资源。"""
+
+    clicked = Signal(str)
+
+    def __init__(self, version: ContentVersion, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.version = version
+        self.setObjectName("VersionRow")
+        self.setProperty("selected", False)
+        self.setAttribute(Qt.WA_Hover, True)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def set_selected(self, value: bool) -> None:
+        self.setProperty("selected", bool(value))
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit(self.version.id)
+        super().mouseReleaseEvent(event)
+
+
+class DependencyRow(QFrame):
+    """前置资源条目：点击直接打开该前置 Mod 的详情。"""
+
+    clicked = Signal()
+
+    def __init__(
+        self,
+        project: ContentProject,
+        optional: bool = False,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.project = project
+        self.setObjectName("VersionRow")
+        self.setAttribute(Qt.WA_Hover, True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(project.display_description or project.title)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(10)
+
+        texts = QVBoxLayout()
+        texts.setSpacing(2)
+        title = QLabel()
+        title.setText(
+            title.fontMetrics().elidedText(project.display_title, Qt.ElideRight, 420)
+        )
+        title.setStyleSheet("font-weight: 600; color: #dfece3;")
+        texts.addWidget(title)
+        desc = QLabel()
+        desc.setObjectName("Tiny")
+        desc.setText(
+            desc.fontMetrics().elidedText(
+                project.display_description or "（暂无说明）", Qt.ElideRight, 520
+            )
+        )
+        texts.addWidget(desc)
+        layout.addLayout(texts, 1)
+
+        layout.addWidget(
+            Badge(
+                project.source_label,
+                "blue" if project.source == "modrinth" else "orange",
+            ),
+            0,
+            Qt.AlignVCenter,
+        )
+        if optional:
+            layout.addWidget(Badge("可选", "gray"), 0, Qt.AlignVCenter)
+        arrow = QLabel("›")
+        arrow.setObjectName("Muted")
+        layout.addWidget(arrow, 0, Qt.AlignVCenter)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+
 class InstallDialog(QDialog):
     """安装确认：选择目标版本并自动匹配文件，可手动更换。"""
 
@@ -792,7 +950,7 @@ class InstallDialog(QDialog):
         self._version_by_id = {v.id: v for v in self.versions}
 
         self.setObjectName("Root")
-        self.setWindowTitle(f"安装 {project.title}")
+        self.setWindowTitle(f"安装 {project.display_title}")
         self.setModal(True)
         self.setMinimumWidth(580)
         self._build()
@@ -806,9 +964,11 @@ class InstallDialog(QDialog):
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(12)
 
-        title = QLabel(self.project.title)
+        title = QLabel(self.project.display_title)
         title.setObjectName("CardTitle")
         title.setWordWrap(True)
+        if self.project.display_title != self.project.title:
+            title.setToolTip(self.project.title)
         layout.addWidget(title)
 
         badges = QHBoxLayout()
@@ -1018,6 +1178,10 @@ class ContentPage(QWidget):
         self._active_mc = ""
         self._targets: list[dict] = []
         self._detail_project: ContentProject | None = None
+        self._selected_version: ContentVersion | None = None
+        self._version_rows: dict[str, ContentVersionRow] = {}
+        self._dependency_generation = 0
+        self._dependency_requested: list[dict] = []
         self._offset = 0
         self._generation = 0
         self._detail_generation = 0
@@ -1036,6 +1200,11 @@ class ContentPage(QWidget):
         self._render_index = 0
         self._render_gen = -1
         self._progress_views: list[dict] = []
+        self._card_titles: list[tuple[ContentProject, QLabel]] = []
+        self._cards: list[QWidget] = []
+        self._grid_columns = self.COLUMNS
+        self._translate_worker: TranslateWorker | None = None
+        self._pending_titles: list[str] = []
         self._build()
         self._start_manifest()
         self._search(reset=True)
@@ -1061,13 +1230,10 @@ class ContentPage(QWidget):
         layout.setSpacing(14)
 
         header, _header_layout = page_header(
-            "内容中心", "Modrinth / CurseForge 的 Mod、整合包、资源包、光影包"
+            "内容中心", "Modrinth / CurseForge 的 Mod、整合包、资源包、材质包与光影包"
         )
         layout.addWidget(header)
 
-        filters = Card(margins=14, spacing=10)
-        filter_row = QHBoxLayout()
-        filter_row.setSpacing(10)
         self.source_combo = QComboBox()
         for key, label in SOURCE_LABELS.items():
             self.source_combo.addItem(label, key)
@@ -1085,24 +1251,34 @@ class ContentPage(QWidget):
             ("quilt", "Quilt"),
         ):
             self.loader_combo.addItem(label, key)
-        for caption_text, widget, width in (
-            ("来源", self.source_combo, 120),
-            ("类型", self.type_combo, 110),
-            ("Minecraft 版本", self.version_combo, 150),
-            ("加载器", self.loader_combo, 120),
+
+        filters = Card(margins=14, spacing=10)
+        # 筛选条件分两行排列，窗口变窄时不会把右侧下拉框挤出卡片
+        filter_top = QHBoxLayout()
+        filter_top.setSpacing(10)
+        filter_bottom = QHBoxLayout()
+        filter_bottom.setSpacing(10)
+        for caption_text, widget, width, row in (
+            ("来源", self.source_combo, 120, filter_top),
+            ("类型", self.type_combo, 110, filter_top),
+            ("Minecraft 版本", self.version_combo, 150, filter_bottom),
+            ("加载器", self.loader_combo, 120, filter_bottom),
         ):
             caption = QLabel(caption_text)
             caption.setObjectName("Muted")
-            filter_row.addWidget(caption)
-            widget.setFixedWidth(width)
-            filter_row.addWidget(widget)
-        filter_row.addStretch(1)
-        filters.body.addLayout(filter_row)
+            row.addWidget(caption)
+            widget.setMinimumWidth(width)
+            widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            row.addWidget(widget, 1)
+        filter_top.addStretch(1)
+        filter_bottom.addStretch(1)
+        filters.body.addLayout(filter_top)
+        filters.body.addLayout(filter_bottom)
 
         search_row = QHBoxLayout()
         search_row.setSpacing(10)
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("搜索名称、关键词…")
+        self.search_edit.setPlaceholderText("搜索名称、关键词（支持中文，如「物品管理器」「机械动力」）…")
         self.search_edit.returnPressed.connect(lambda: self._search(reset=True))
         search_row.addWidget(self.search_edit, 1)
         self.search_button = QPushButton("搜索")
@@ -1125,6 +1301,7 @@ class ContentPage(QWidget):
         result_card.body.addLayout(status_row)
 
         self.results_scroll = QScrollArea()
+        self.results_scroll.setMinimumHeight(220)
         self.results_scroll.setWidgetResizable(True)
         self.results_host = QWidget()
         host_layout = QVBoxLayout(self.results_host)
@@ -1208,6 +1385,26 @@ class ContentPage(QWidget):
         top.addWidget(self.detail_site, 0, Qt.AlignTop)
         head.body.addLayout(top)
         layout.addWidget(head)
+
+        self.dep_card = Card(margins=14, spacing=8)
+        dep_head = QHBoxLayout()
+        dep_head.setSpacing(8)
+        dep_title = QLabel("前置资源")
+        dep_title.setObjectName("CardTitle")
+        dep_head.addWidget(dep_title)
+        dep_head.addStretch(1)
+        self.dep_hint = QLabel("")
+        self.dep_hint.setObjectName("Tiny")
+        dep_head.addWidget(self.dep_hint)
+        self.dep_card.body.addLayout(dep_head)
+        self.dep_status = QLabel("正在解析前置…")
+        self.dep_status.setObjectName("Muted")
+        self.dep_card.body.addWidget(self.dep_status)
+        self.dep_rows = QVBoxLayout()
+        self.dep_rows.setSpacing(6)
+        self.dep_card.body.addLayout(self.dep_rows)
+        self.dep_card.setVisible(False)
+        layout.addWidget(self.dep_card)
 
         self.detail_scroll = QScrollArea()
         self.detail_scroll.setWidgetResizable(True)
@@ -1326,11 +1523,50 @@ class ContentPage(QWidget):
         worker.start()
 
     def _clear_results(self) -> None:
+        self._stop_translate()
+        self._card_titles.clear()
+        self._cards.clear()
+        self._empty_label = None
         while self.results_grid.count():
             item = self.results_grid.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+
+    def _calc_columns(self) -> int:
+        """按结果区实际宽度决定列数，窗口变窄时自动减少列数而不是出现横向滚动。"""
+        card_width = self.COVER_SIZE + 22
+        gap = 14
+        viewport = self.results_scroll.viewport().width() if hasattr(self, "results_scroll") else 0
+        if viewport <= 0:
+            return self.COLUMNS
+        columns = (viewport + gap) // (card_width + gap)
+        return max(2, min(self.COLUMNS, int(columns)))
+
+    def _relayout_cards(self) -> None:
+        columns = self._calc_columns()
+        if columns == self._grid_columns and self._cards:
+            return
+        self._grid_columns = columns
+        for column in range(self.COLUMNS):
+            self.results_grid.setColumnStretch(column, 0)
+        for column in range(columns):
+            self.results_grid.setColumnStretch(column, 1)
+        while self.results_grid.count():
+            item = self.results_grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+        for index, card in enumerate(self._cards):
+            self.results_grid.addWidget(card, index // columns, index % columns)
+        empty = getattr(self, "_empty_label", None)
+        if empty is not None and not self._cards:
+            self.results_grid.addWidget(empty, 0, 0, 1, columns)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if hasattr(self, "stack") and self.stack.currentWidget() is self.list_page:
+            self._relayout_cards()
 
     def _on_search_result(self, generation: int, projects: list, reset: bool) -> None:
         if generation != self._generation:
@@ -1341,10 +1577,17 @@ class ContentPage(QWidget):
             self._projects = []
             start = 0
         self._projects.extend(projects)
+        columns = self._calc_columns()
+        if columns != self._grid_columns:
+            self._relayout_cards()
+        self._grid_columns = columns
+        for column in range(self.COLUMNS):
+            self.results_grid.setColumnStretch(column, 1 if column < columns else 0)
         for offset, project in enumerate(projects):
             index = start + offset
             card = self._make_card(project, generation)
-            self.results_grid.addWidget(card, index // self.COLUMNS, index % self.COLUMNS)
+            self._cards.append(card)
+            self.results_grid.addWidget(card, index // columns, index % columns)
         self._offset += len(projects)
         self.more_button.setEnabled(len(projects) >= self.LIMIT)
         self.result_count.setText(f"已显示 {len(self._projects)} 项")
@@ -1356,11 +1599,67 @@ class ContentPage(QWidget):
             empty.setObjectName("Muted")
             empty.setAlignment(Qt.AlignCenter)
             empty.setMinimumHeight(160)
-            self.results_grid.addWidget(empty, 0, 0, 1, self.COLUMNS)
+            self._empty_label = empty
+            self.results_grid.addWidget(empty, 0, 0, 1, columns)
         if len(projects) < self.LIMIT:
             self.load_hint.setText("已到底部")
         else:
             self.load_hint.setText("")
+        self._start_translate(projects)
+
+    # ------------------------------------------------------------------
+    # 在线中文译名
+    def _start_translate(self, projects: list) -> None:
+        """为还没有中文名的项目后台补全译名（MC百科），完成后逐个刷新卡片。"""
+        pending: list[str] = []
+        for project in projects:
+            if mod_cn.has_chinese(project.title):
+                continue
+            if project.display_title != project.title:
+                continue
+            if project.title not in pending:
+                pending.append(project.title)
+        if pending:
+            self._queue_translate(pending[:12])
+
+    def _queue_translate(self, titles: list[str]) -> None:
+        worker = self._translate_worker
+        if worker is not None and worker.isRunning():
+            # 已有任务在跑：排队，等当前任务结束后继续
+            for title in titles:
+                if title not in self._pending_titles:
+                    self._pending_titles.append(title)
+            return
+        worker = TranslateWorker(titles, self)
+        worker.translated.connect(self._on_translated)
+        worker.finished.connect(self._on_translate_finished)
+        self._translate_worker = worker
+        self._track(worker)
+        worker.start()
+
+    def _on_translate_finished(self) -> None:
+        self._translate_worker = None
+        pending = self._pending_titles[:12]
+        self._pending_titles = []
+        if pending:
+            self._queue_translate(pending)
+
+    def _stop_translate(self) -> None:
+        worker = self._translate_worker
+        self._translate_worker = None
+        self._pending_titles = []
+        if worker is not None:
+            worker.stop()
+
+    def _on_translated(self, title: str) -> None:
+        for project, label in self._card_titles:
+            if project.title != title:
+                continue
+            display = project.display_title
+            label.setText(
+                label.fontMetrics().elidedText(display, Qt.ElideRight, self.COVER_SIZE)
+            )
+            label.setToolTip(title if display != title else display)
 
     def _on_search_failed(self, generation: int, message: str) -> None:
         if generation != self._generation:
@@ -1390,9 +1689,14 @@ class ContentPage(QWidget):
         title.setMinimumWidth(self.COVER_SIZE)
         title.setMaximumWidth(self.COVER_SIZE)
         title.setStyleSheet("font-weight: 700; font-size: 13px; color: #eaf4ec;")
-        title.setText(title.fontMetrics().elidedText(project.title, Qt.ElideRight, self.COVER_SIZE))
-        title.setToolTip(project.title)
+        title.setText(
+            title.fontMetrics().elidedText(project.display_title, Qt.ElideRight, self.COVER_SIZE)
+        )
+        title.setToolTip(
+            project.title if project.display_title != project.title else project.display_title
+        )
         body.addWidget(title, 0, Qt.AlignHCenter)
+        self._card_titles.append((project, title))
 
         stat_text = f"{project.author or '未知作者'} · {_fmt_count(project.downloads)} 次下载"
         stat = QLabel()
@@ -1450,9 +1754,10 @@ class ContentPage(QWidget):
         generation = self._detail_generation
         self._render_gen = -1
 
-        self.detail_title.setText(project.title)
-        self.detail_desc.setText(project.description or "（暂无简介）")
-        self.detail_desc.setToolTip(project.description or "")
+        self.detail_title.setText(project.display_title)
+        self.detail_title.setToolTip(project.title)
+        self.detail_desc.setText(project.display_description or "（暂无简介）")
+        self.detail_desc.setToolTip(project.display_description or "")
         self.detail_count.setText("正在获取文件列表…")
         self.detail_site.setEnabled(bool(project.page_url))
         self._set_detail_badges(project)
@@ -1464,6 +1769,7 @@ class ContentPage(QWidget):
             project=project,
         )
         self._clear_versions()
+        self._reset_dependencies()
         self._active_mc = ""
         self._project_mc_versions = []
         status = QLabel("正在获取支持的 Minecraft 版本…")
@@ -1502,6 +1808,131 @@ class ContentPage(QWidget):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+        self._version_rows = {}
+
+    def _reset_dependencies(self) -> None:
+        """切换项目/版本时作废旧的前置解析结果，并隐藏前置区块。"""
+        self._dependency_generation += 1
+        self._dependency_requested = []
+        self._selected_version = None
+        self._clear_dependency_rows()
+        self.dep_hint.setText("")
+        self.dep_card.setVisible(False)
+        for row in self._version_rows.values():
+            row.set_selected(False)
+
+    def _clear_dependency_rows(self) -> None:
+        while self.dep_rows.count():
+            item = self.dep_rows.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _select_version(self, version: ContentVersion | None) -> None:
+        self._selected_version = version
+        for version_id, row in self._version_rows.items():
+            row.set_selected(version is not None and version_id == version.id)
+        self._load_dependencies(version)
+
+    def _on_version_row_clicked(self, version_id: str) -> None:
+        version = next((item for item in self._versions if item.id == version_id), None)
+        if version is not None:
+            self._select_version(version)
+
+    @staticmethod
+    def _dependency_entries(version: ContentVersion) -> list[dict]:
+        """取出可展示的前置依赖（兼容归一化前后的字段）。"""
+        entries: list[dict] = []
+        for dep in version.dependencies or []:
+            if not isinstance(dep, dict):
+                continue
+            raw_type = str(dep.get("dependency_type") or "")
+            if raw_type == "3":
+                dep_type = DEPENDENCY_REQUIRED
+            elif raw_type in (DEPENDENCY_REQUIRED, DEPENDENCY_OPTIONAL):
+                dep_type = raw_type
+            elif raw_type == "" and str(dep.get("relationType") or "") in ("2", "3"):
+                # 兼容未归一化的 CurseForge 原始依赖（relationType 3=必装，2=可选）
+                dep_type = (
+                    DEPENDENCY_REQUIRED
+                    if str(dep.get("relationType")) == "3"
+                    else DEPENDENCY_OPTIONAL
+                )
+            else:
+                continue
+            project_id = str(dep.get("project_id") or dep.get("modId") or "")
+            if not project_id:
+                continue
+            entries.append({"project_id": project_id, "dependency_type": dep_type})
+        return entries
+
+    def _load_dependencies(self, version: ContentVersion | None) -> None:
+        """解析所选版本的前置 Mod；无依赖、非 Mod 或失败时整块隐藏。"""
+        project = self._detail_project
+        self._dependency_generation += 1
+        generation = self._dependency_generation
+        self._dependency_requested = []
+        self._clear_dependency_rows()
+        if project is None or version is None or project.project_type != "mod":
+            self.dep_card.setVisible(False)
+            return
+        unique: list[dict] = []
+        seen: set[str] = set()
+        for entry in self._dependency_entries(version):
+            if entry["project_id"] in seen:
+                continue
+            seen.add(entry["project_id"])
+            unique.append(entry)
+        if not unique:
+            self.dep_card.setVisible(False)
+            return
+        self._dependency_requested = unique
+        self.dep_hint.setText(version.name or version.version_number or version.id)
+        self.dep_status.setText("正在解析前置…")
+        self.dep_status.setVisible(True)
+        self.dep_card.setVisible(True)
+        worker = DependenciesWorker(
+            self.client,
+            project.source,
+            [entry["project_id"] for entry in unique],
+            self,
+        )
+        worker.ok.connect(
+            lambda projects, g=generation: self._on_dependencies(g, projects)
+        )
+        worker.failed.connect(
+            lambda message, g=generation: self._on_dependencies_failed(g, message)
+        )
+        self._track(worker)
+        worker.start()
+
+    def _on_dependencies(self, generation: int, projects: list) -> None:
+        if generation != self._dependency_generation:
+            return
+        by_id = {str(project.id): project for project in projects}
+        self._clear_dependency_rows()
+        found: list[tuple[ContentProject, bool]] = []
+        for entry in self._dependency_requested:
+            project = by_id.get(entry["project_id"])
+            if project is not None:
+                found.append((project, entry["dependency_type"] == DEPENDENCY_OPTIONAL))
+        if not found:
+            self.dep_card.setVisible(False)
+            return
+        self.dep_status.setVisible(False)
+        self.dep_hint.setText(f"{self.dep_hint.text()} · {len(found)} 个")
+        for project, optional in found:
+            row = DependencyRow(project, optional)
+            row.clicked.connect(lambda p=project: self._open_detail(p))
+            self.dep_rows.addWidget(row)
+        self.dep_card.setVisible(True)
+
+    def _on_dependencies_failed(self, generation: int, message: str) -> None:
+        if generation != self._dependency_generation:
+            return
+        self._clear_dependency_rows()
+        self.dep_card.setVisible(False)
+        self.ctx.bus.log.emit(f"[提示] {message}")
 
     def _on_project_versions(self, generation: int, mc_versions: list) -> None:
         if generation != self._detail_generation:
@@ -1522,6 +1953,7 @@ class ContentPage(QWidget):
         self._versions = []
         self._render_gen = -1
         self._clear_versions()
+        self._reset_dependencies()
         versions = self._project_mc_versions
         if versions:
             self.detail_count.setText(
@@ -1565,6 +1997,7 @@ class ContentPage(QWidget):
         generation = self._detail_generation
         self._render_gen = -1
         self._clear_versions()
+        self._reset_dependencies()
         self.detail_count.setText(
             f"正在加载 Minecraft {mc_version} 的文件…" if mc_version else "正在加载全部文件…"
         )
@@ -1582,6 +2015,7 @@ class ContentPage(QWidget):
             return
         self._versions = list(versions)
         self._clear_versions()
+        self._selected_version = None
         mc_label = f"Minecraft {self._active_mc}" if self._active_mc else "全部版本"
         self.detail_count.setText(f"{mc_label} · 共 {len(self._versions)} 个文件")
         if self._project_mc_versions:
@@ -1590,10 +2024,16 @@ class ContentPage(QWidget):
             back.clicked.connect(lambda: self._render_chooser())
             self.versions_layout.addWidget(back, 0, Qt.AlignLeft)
         if not self._versions:
+            self._load_dependencies(None)
             label = QLabel("该版本下暂时没有可用文件。")
             label.setObjectName("Muted")
             self.versions_layout.addWidget(label)
             return
+
+        # 默认选中与当前 Minecraft 版本/加载器最匹配的文件，用于展示前置资源
+        loader = str(self.loader_combo.currentData() or "")
+        self._selected_version = pick_best_version(self._versions, self._active_mc, loader)
+        self._load_dependencies(self._selected_version)
 
         groups: dict[str, list[ContentVersion]] = {}
         for version in self._versions:
@@ -1638,9 +2078,11 @@ class ContentPage(QWidget):
             self.versions_layout.addStretch(1)
 
     def _make_version_row(self, version: ContentVersion) -> QFrame:
-        row = QFrame()
-        row.setObjectName("VersionRow")
-        row.setAttribute(Qt.WA_Hover, True)
+        row = ContentVersionRow(version)
+        row.clicked.connect(self._on_version_row_clicked)
+        if self._selected_version is not None and self._selected_version.id == version.id:
+            row.set_selected(True)
+        self._version_rows[version.id] = row
         layout = QHBoxLayout(row)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(12)
@@ -1691,6 +2133,7 @@ class ContentPage(QWidget):
         if generation != self._detail_generation:
             return
         self._clear_versions()
+        self._reset_dependencies()
         self.detail_count.setText("获取文件列表失败")
         if self._project_mc_versions:
             back = QPushButton("← 返回 Minecraft 版本选择")
@@ -1708,6 +2151,7 @@ class ContentPage(QWidget):
         self._render_gen = -1
         self._render_actions = []
         self._render_index = -1
+        self._reset_dependencies()
         self.stack.setCurrentIndex(0)
 
     def _open_project_page(self) -> None:
@@ -2099,6 +2543,7 @@ class ContentPage(QWidget):
     def shutdown(self) -> None:
         self._generation += 1
         self._detail_generation += 1
+        self._dependency_generation += 1
         self._render_gen = -1
         worker = self._install_worker
         if worker is not None and worker.isRunning():

@@ -49,6 +49,7 @@ from .. import APP_NAME
 from ..auth import AuthError, MicrosoftAuth, apply_local_skin, apply_skin_resourcepack, ensure_authlib_injector
 from ..config import DATA_DIR, ISOLATION_LABELS, ServerEntry
 from ..context import AppContext, wait_thread
+from ..i18n import t
 from ..installer import GameInstaller, Progress
 from ..java import pick_java, probe_java
 from ..launcher import (
@@ -250,7 +251,7 @@ class VersionRow(QFrame):
         loader_badge = Badge(version.loader, _loader_kind(version.loader))
         title_row.addWidget(loader_badge)
         if version.error:
-            broken = Badge("损坏", "orange")
+            broken = Badge(t("HomePage", "损坏"), "orange")
             broken.setToolTip(version.error)
             title_row.addWidget(broken)
         title_row.addStretch(1)
@@ -259,17 +260,17 @@ class VersionRow(QFrame):
         date = (
             datetime.fromtimestamp(version.modified).strftime("%Y-%m-%d %H:%M")
             if version.modified
-            else "未知时间"
+            else t("HomePage", "未知时间")
         )
         meta_text = f"{version.display_type} · {date}"
         if version.base_version:
-            meta_text += f" · 基于 {version.base_version}"
+            meta_text += t("HomePage", "· 基于 {0}", version.base_version)
         meta = QLabel(meta_text)
         meta.setObjectName("Tiny")
         texts.addWidget(meta)
         layout.addLayout(texts, 1)
 
-        launch_button = QPushButton("启动")
+        launch_button = QPushButton(t("HomePage", "启动"))
         launch_button.setFixedWidth(66)
         launch_button.setEnabled(not version.error)
         launch_button.clicked.connect(lambda: self.activated.emit(self.version.id))
@@ -404,14 +405,21 @@ class ServerDialog(QDialog):
         super().__init__(parent)
         self.ctx = ctx
         self._ping_worker: ServerPingWorker | None = None
-        self.setWindowTitle("服务器列表")
+        self.setWindowTitle(t("HomePage", "服务器列表"))
         self.resize(660, 440)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(10)
 
         self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["名称", "地址", "状态", "备注"])
+        self.table.setHorizontalHeaderLabels(
+            [
+                t("HomePage", "名称"),
+                t("HomePage", "地址"),
+                t("HomePage", "状态"),
+                t("HomePage", "备注"),
+            ]
+        )
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setColumnWidth(0, 160)
         self.table.setColumnWidth(1, 210)
@@ -423,13 +431,13 @@ class ServerDialog(QDialog):
         form = QHBoxLayout()
         form.setSpacing(8)
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("名称（可留空）")
+        self.name_edit.setPlaceholderText(t("HomePage", "名称（可留空）"))
         self.host_edit = QLineEdit()
-        self.host_edit.setPlaceholderText("服务器地址，例如 play.example.com")
+        self.host_edit.setPlaceholderText(t("HomePage", "服务器地址，例如 play.example.com"))
         self.port_spin = QSpinBox()
         self.port_spin.setRange(1, 65535)
         self.port_spin.setValue(25565)
-        add_button = QPushButton("添加")
+        add_button = QPushButton(t("HomePage", "添加"))
         add_button.setObjectName("Primary")
         add_button.clicked.connect(self._add_server)
         form.addWidget(self.name_edit)
@@ -439,12 +447,12 @@ class ServerDialog(QDialog):
         layout.addLayout(form)
 
         buttons = QHBoxLayout()
-        ping_button = QPushButton("测试延迟")
+        ping_button = QPushButton(t("HomePage", "测试延迟"))
         ping_button.clicked.connect(self._ping_all)
-        remove_button = QPushButton("删除选中")
+        remove_button = QPushButton(t("HomePage", "删除选中"))
         remove_button.setObjectName("Danger")
         remove_button.clicked.connect(self._remove_selected)
-        close_button = QPushButton("关闭")
+        close_button = QPushButton(t("HomePage", "关闭"))
         close_button.clicked.connect(self.accept)
         buttons.addWidget(ping_button)
         buttons.addWidget(remove_button)
@@ -516,7 +524,7 @@ class ServerDialog(QDialog):
                 if players:
                     text += f" · {players}"
             else:
-                text = players or "无法连接"
+                text = players or t("HomePage", "无法连接")
             self.table.setItem(row, 2, QTableWidgetItem(text))
             break
 
@@ -803,15 +811,17 @@ class HomePage(QWidget):
     # ------------------------------------------------------------------
     def _build(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(26, 20, 26, 20)
-        outer.setSpacing(16)
+        outer.setContentsMargins(20, 18, 20, 18)
+        outer.setSpacing(14)
 
-        header, header_layout = page_header("启动游戏", "选择已安装的版本，一键进入 Minecraft")
-        self.dir_button = QPushButton("打开游戏目录")
+        header, header_layout = page_header(
+            self.tr("启动游戏"), self.tr("选择已安装的版本，一键进入 Minecraft")
+        )
+        self.dir_button = QPushButton(self.tr("打开游戏目录"))
         self.dir_button.setObjectName("Chip")
         self.dir_button.clicked.connect(self._open_game_dir)
         header_layout.addWidget(self.dir_button)
-        settings_button = QPushButton("游戏设置")
+        settings_button = QPushButton(self.tr("游戏设置"))
         settings_button.setObjectName("Chip")
         settings_button.clicked.connect(lambda: self.ctx.bus.navigate.emit("settings"))
         header_layout.addWidget(settings_button)
@@ -822,7 +832,7 @@ class HomePage(QWidget):
         outer.addLayout(body, 1)
 
         left = QWidget()
-        left.setFixedWidth(344)
+        left.setFixedWidth(320)
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(14)
@@ -830,24 +840,28 @@ class HomePage(QWidget):
 
         # 账号卡片
         account = Card()
-        self.account_badge = Badge("离线模式", "green")
-        manage_button = QPushButton("管理账号")
+        self.account_badge = Badge(self.tr("离线模式"), "green")
+        manage_button = QPushButton(self.tr("管理账号"))
         manage_button.setObjectName("Ghost")
         manage_button.clicked.connect(lambda: self.ctx.bus.navigate.emit("accounts"))
-        title_widget = self._card_title("当前账号", "支持离线 / 微软正版 / 外置登录", self.account_badge)
+        title_widget = self._card_title(
+            self.tr("当前账号"),
+            self.tr("支持离线 / 微软正版 / 外置登录"),
+            self.account_badge,
+        )
         account.body.addWidget(title_widget)
         account_row = QHBoxLayout()
         account_row.setSpacing(12)
         self.avatar_label = QLabel()
         self.avatar_label.setFixedSize(56, 56)
         self.avatar_label.setCursor(Qt.PointingHandCursor)
-        self.avatar_label.setToolTip("点击切换账号")
+        self.avatar_label.setToolTip(self.tr("点击切换账号"))
         self.avatar_label.installEventFilter(self)
         account_row.addWidget(self.avatar_label)
         name_box = QVBoxLayout()
         name_box.setSpacing(6)
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("输入玩家昵称")
+        self.name_edit.setPlaceholderText(self.tr("输入玩家昵称"))
         self.name_edit.setMaxLength(16)
         name_box.addWidget(self.name_edit)
         self.uuid_label = QLabel()
@@ -860,9 +874,9 @@ class HomePage(QWidget):
 
         # 启动配置
         config_card = Card()
-        config_card.body.addWidget(self._card_title("启动配置", "Java、内存与窗口"))
+        config_card.body.addWidget(self._card_title(self.tr("启动配置"), self.tr("Java、内存与窗口")))
         java_head = QHBoxLayout()
-        java_label = QLabel("Java 运行时")
+        java_label = QLabel(self.tr("Java 运行时"))
         java_label.setObjectName("Muted")
         java_head.addWidget(java_label)
         java_head.addStretch(1)
@@ -874,7 +888,7 @@ class HomePage(QWidget):
         config_card.body.addWidget(self.java_combo)
 
         memory_head = QHBoxLayout()
-        memory_label = QLabel("分配内存")
+        memory_label = QLabel(self.tr("分配内存"))
         memory_label.setObjectName("Muted")
         memory_head.addWidget(memory_label)
         memory_head.addStretch(1)
@@ -889,8 +903,8 @@ class HomePage(QWidget):
         config_card.body.addWidget(self.memory_slider)
 
         resolution_row = QHBoxLayout()
-        self.resolution_check = QCheckBox("自定义分辨率")
-        self.resolution_check.setToolTip("勾选后使用下方宽高启动游戏")
+        self.resolution_check = QCheckBox(self.tr("自定义分辨率"))
+        self.resolution_check.setToolTip(self.tr("勾选后使用下方宽高启动游戏"))
         resolution_row.addWidget(self.resolution_check)
         resolution_row.addStretch(1)
         self.width_spin = QSpinBox()
@@ -910,27 +924,29 @@ class HomePage(QWidget):
         launch_layout = QVBoxLayout(launch_box)
         launch_layout.setContentsMargins(0, 2, 0, 0)
         launch_layout.setSpacing(8)
-        self.launch_info = QLabel("未选择版本")
+        self.launch_info = QLabel(self.tr("未选择版本"))
         self.launch_info.setObjectName("Muted")
         launch_layout.addWidget(self.launch_info)
 
         server_row = QHBoxLayout()
         server_row.setSpacing(6)
-        server_caption = QLabel("连接服务器")
+        server_caption = QLabel(self.tr("连接服务器"))
         server_caption.setObjectName("Muted")
         server_row.addWidget(server_caption)
         self.server_combo = QComboBox()
-        self.server_combo.setToolTip("选择后在启动时自动进入该服务器（单人游戏不受影响）")
+        self.server_combo.setToolTip(
+            self.tr("选择后在启动时自动进入该服务器（单人游戏不受影响）")
+        )
         self.server_combo.currentIndexChanged.connect(self._on_server_changed)
         server_row.addWidget(self.server_combo, 1)
-        self.server_manage_button = QPushButton("管理")
+        self.server_manage_button = QPushButton(self.tr("管理"))
         self.server_manage_button.setObjectName("Ghost")
         self.server_manage_button.setFixedWidth(56)
         self.server_manage_button.clicked.connect(self._open_server_dialog)
         server_row.addWidget(self.server_manage_button)
         launch_layout.addLayout(server_row)
 
-        self.launch_button = QPushButton("启动游戏")
+        self.launch_button = QPushButton(self.tr("启动游戏"))
         self.launch_button.setObjectName("Primary")
         self.launch_button.setMinimumHeight(48)
         self.launch_button.clicked.connect(self._on_launch_clicked)
@@ -939,7 +955,7 @@ class HomePage(QWidget):
 
         # 进度卡片
         self.progress_card = Card(margins=14, spacing=8)
-        self.progress_stage = QLabel("准备启动")
+        self.progress_stage = QLabel(self.tr("准备启动"))
         self.progress_stage.setStyleSheet("font-weight: 600;")
         self.progress_card.body.addWidget(self.progress_stage)
         self.progress_bar = QProgressBar()
@@ -950,7 +966,7 @@ class HomePage(QWidget):
         self.progress_detail = QLabel("")
         self.progress_detail.setObjectName("Tiny")
         detail_row.addWidget(self.progress_detail, 1)
-        self.cancel_button = QPushButton("取消")
+        self.cancel_button = QPushButton(self.tr("取消"))
         self.cancel_button.setObjectName("Ghost")
         self.cancel_button.clicked.connect(self._cancel_launch)
         detail_row.addWidget(self.cancel_button)
@@ -966,44 +982,55 @@ class HomePage(QWidget):
 
         versions_card = Card()
         versions_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        versions_head = QHBoxLayout()
+        versions_head = QVBoxLayout()
+        versions_head.setSpacing(8)
+        head_row = QHBoxLayout()
+        head_row.setSpacing(8)
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
-        title_label = QLabel("已安装版本")
+        title_label = QLabel(self.tr("已安装版本"))
         title_label.setObjectName("CardTitle")
         title_box.addWidget(title_label)
-        self.version_count = QLabel("0 个版本")
+        self.version_count = QLabel(self.tr("0 个版本"))
         self.version_count.setObjectName("Tiny")
         title_box.addWidget(self.version_count)
-        versions_head.addLayout(title_box)
-        versions_head.addStretch(1)
-        instance_label = QLabel("实例")
-        instance_label.setObjectName("Muted")
-        versions_head.addWidget(instance_label)
-        self.instance_combo = QComboBox()
-        self.instance_combo.setFixedWidth(168)
-        self.instance_combo.setToolTip("切换默认实例或整合包独立实例")
-        versions_head.addWidget(self.instance_combo)
+        head_row.addLayout(title_box)
+        head_row.addStretch(1)
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("搜索版本…")
-        self.search_edit.setFixedWidth(140)
-        versions_head.addWidget(self.search_edit)
-        refresh_button = QPushButton("刷新")
+        self.search_edit.setPlaceholderText(self.tr("搜索版本…"))
+        self.search_edit.setMinimumWidth(96)
+        self.search_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        head_row.addWidget(self.search_edit, 1)
+
+        # 实例切换与操作按钮放到第二行，窗口变窄时不会把右侧内容挤出卡片
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        instance_label = QLabel(self.tr("实例"))
+        instance_label.setObjectName("Muted")
+        action_row.addWidget(instance_label)
+        self.instance_combo = QComboBox()
+        self.instance_combo.setMinimumWidth(110)
+        self.instance_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.instance_combo.setToolTip(self.tr("切换默认实例或整合包独立实例"))
+        action_row.addWidget(self.instance_combo, 1)
+        refresh_button = QPushButton(self.tr("刷新"))
         refresh_button.setObjectName("Ghost")
         refresh_button.clicked.connect(self.refresh_versions)
-        versions_head.addWidget(refresh_button)
-        self.queue_launch_button = QPushButton("多选启动")
+        action_row.addWidget(refresh_button)
+        self.queue_launch_button = QPushButton(self.tr("多选启动"))
         self.queue_launch_button.setObjectName("Ghost")
         self.queue_launch_button.clicked.connect(self._open_queue_dialog)
-        versions_head.addWidget(self.queue_launch_button)
-        self.queue_stop_button = QPushButton("停止队列")
+        action_row.addWidget(self.queue_launch_button)
+        self.queue_stop_button = QPushButton(self.tr("停止队列"))
         self.queue_stop_button.setObjectName("Ghost")
         self.queue_stop_button.setVisible(False)
         self.queue_stop_button.clicked.connect(self._stop_queue)
-        versions_head.addWidget(self.queue_stop_button)
-        download_button = QPushButton("安装新版本")
+        action_row.addWidget(self.queue_stop_button)
+        download_button = QPushButton(self.tr("安装新版本"))
         download_button.clicked.connect(lambda: self.ctx.bus.navigate.emit("download"))
-        versions_head.addWidget(download_button)
+        action_row.addWidget(download_button)
+        versions_head.addLayout(head_row)
+        versions_head.addLayout(action_row)
         versions_card.body.addLayout(versions_head)
 
         self.scroll = QScrollArea()
@@ -1021,21 +1048,21 @@ class HomePage(QWidget):
         console_card = Card()
         console_card.setFixedHeight(210)
         console_head = QHBoxLayout()
-        console_title = QLabel("运行日志")
+        console_title = QLabel(self.tr("运行日志"))
         console_title.setObjectName("CardTitle")
         console_head.addWidget(console_title)
         console_head.addStretch(1)
         self.console_filter = QComboBox()
-        self.console_filter.addItem("全部日志", "all")
-        self.console_filter.addItem("仅错误与警告", "problems")
+        self.console_filter.addItem(self.tr("全部日志"), "all")
+        self.console_filter.addItem(self.tr("仅错误与警告"), "problems")
         self.console_filter.setFixedWidth(130)
         self.console_filter.currentIndexChanged.connect(lambda _index: self._rebuild_console())
         console_head.addWidget(self.console_filter)
-        clear_button = QPushButton("清空")
+        clear_button = QPushButton(self.tr("清空"))
         clear_button.setObjectName("Ghost")
         clear_button.clicked.connect(self._clear_console)
         console_head.addWidget(clear_button)
-        open_log_button = QPushButton("日志目录")
+        open_log_button = QPushButton(self.tr("日志目录"))
         open_log_button.setObjectName("Ghost")
         open_log_button.clicked.connect(self._open_log_dir)
         console_head.addWidget(open_log_button)
@@ -1099,23 +1126,25 @@ class HomePage(QWidget):
             icon.setPixmap(make_avatar("Alex", 48))
             icon.setAlignment(Qt.AlignCenter)
             empty_layout.addWidget(icon)
-            label = QLabel("还没有安装任何版本")
+            label = QLabel(self.tr("还没有安装任何版本"))
             label.setAlignment(Qt.AlignCenter)
             label.setStyleSheet("font-size: 15px; font-weight: 600;")
             empty_layout.addWidget(label)
-            hint = QLabel("前往下载页安装一个正式版，或用 HMCL 安装后指向同一个游戏目录。")
+            hint = QLabel(
+                self.tr("前往下载页安装一个正式版，或用 HMCL 安装后指向同一个游戏目录。")
+            )
             hint.setObjectName("Muted")
             hint.setAlignment(Qt.AlignCenter)
             hint.setWordWrap(True)
             empty_layout.addWidget(hint)
-            button = QPushButton("安装 Minecraft")
+            button = QPushButton(self.tr("安装 Minecraft"))
             button.setObjectName("Primary")
             button.setMaximumWidth(180)
             button.clicked.connect(lambda: self.ctx.bus.navigate.emit("download"))
             empty_layout.addWidget(button, alignment=Qt.AlignHCenter)
             self.version_layout.addWidget(empty)
             self.version_layout.addStretch(1)
-            self.version_count.setText("0 个版本")
+            self.version_count.setText(self.tr("0 个版本"))
             self._select_version("")
             return
 
@@ -1127,7 +1156,7 @@ class HomePage(QWidget):
             self.version_layout.insertWidget(self.version_layout.count() - 1, row)
             self._rows[version.id] = row
 
-        self.version_count.setText(f"{len(versions)} 个版本")
+        self.version_count.setText(t("HomePage", "{0} 个版本", len(versions)))
         self._apply_search(self.search_edit.text())
         instance = self.ctx.config.selected_instance()
         if self._selected_id in self._rows:
@@ -1148,13 +1177,15 @@ class HomePage(QWidget):
         for rid, row in self._rows.items():
             row.set_selected(rid == version_id)
         if not version_id:
-            self.launch_info.setText("未选择版本")
+            self.launch_info.setText(self.tr("未选择版本"))
             self.launch_button.setEnabled(False)
             self.java_hint.setText("")
             return
         row = self._rows.get(version_id)
         loader = row.version.loader if row else ""
-        self.launch_info.setText(f"将启动：{version_id}" + (f" · {loader}" if loader else ""))
+        self.launch_info.setText(
+            t("HomePage", "将启动：{0}", version_id) + (f" · {loader}" if loader else "")
+        )
         self.launch_button.setEnabled(bool(row and not row.version.error))
         self._update_java_hint(version_id)
 
@@ -1162,10 +1193,10 @@ class HomePage(QWidget):
         try:
             merged = load_version(self._instance_dir(), version_id)
             self._required_java = merged.java_major or 21
-            self.java_hint.setText(f"需要 Java {self._required_java}")
+            self.java_hint.setText(t("HomePage", "需要 Java {0}", self._required_java))
         except (VersionError, OSError) as exc:
             self._required_java = 21
-            self.java_hint.setText("版本文件异常")
+            self.java_hint.setText(self.tr("版本文件异常"))
             self.java_hint.setToolTip(str(exc))
 
     # ------------------------------------------------------------------
@@ -1201,7 +1232,7 @@ class HomePage(QWidget):
         config = self.ctx.config
         self.server_combo.blockSignals(True)
         self.server_combo.clear()
-        self.server_combo.addItem("不自动连接", "")
+        self.server_combo.addItem(t("HomePage", "不自动连接"), "")
         now = time.time()
         for entry in config.servers:
             label = f"{entry.name} · {entry.host}:{entry.port}"
@@ -1209,9 +1240,9 @@ class HomePage(QWidget):
             if cached is not None and now - cached[0] < 300:
                 _age, latency, players = cached
                 if latency < 0:
-                    label += " · 无法连接"
+                    label += f" · {t('HomePage', '无法连接')}"
                 else:
-                    label += f" · {players or '可连接'} · {latency}ms"
+                    label += f" · {players or t('HomePage', '可连接')} · {latency}ms"
             self.server_combo.addItem(label, entry.id)
         index = self.server_combo.findData(config.active_server_id)
         self.server_combo.setCurrentIndex(index if index >= 0 else 0)
@@ -1252,9 +1283,9 @@ class HomePage(QWidget):
             return
         label = f"{entry.name} · {entry.host}:{entry.port}"
         if latency < 0:
-            label += " · 无法连接"
+            label += f" · {t('HomePage', '无法连接')}"
         else:
-            label += f" · {players or '可连接'} · {latency}ms"
+            label += f" · {players or t('HomePage', '可连接')} · {latency}ms"
         self.server_combo.setItemText(index, label)
 
     def _on_server_ping_finished(self) -> None:
@@ -1328,7 +1359,9 @@ class HomePage(QWidget):
         current = self.ctx.current_account()
         current_id = current.id if current is not None else ""
         for account in list(self.ctx.accounts.accounts):
-            action = menu.addAction(f"{account.name} · {account.type_label}")
+            action = menu.addAction(
+                f"{account.name} · {t('HomePage', account.type_label)}"
+            )
             action.setCheckable(True)
             action.setChecked(account.id == current_id)
             action.triggered.connect(
@@ -1352,7 +1385,7 @@ class HomePage(QWidget):
         if account is None:
             return
         kinds = {"offline": "gray", "microsoft": "blue", "authlib": "orange"}
-        self.account_badge.setText(account.type_label)
+        self.account_badge.setText(t("HomePage", account.type_label))
         self.account_badge.set_kind(kinds.get(account.type, "gray"))
         self.avatar_label.setPixmap(make_avatar(account.name or "Steve", 56))
         if not self.name_edit.hasFocus():
@@ -1363,8 +1396,8 @@ class HomePage(QWidget):
         if account.uuid:
             self.uuid_label.setText(f"UUID: {account.uuid[:18]}…")
         else:
-            self.uuid_label.setText("尚未完成登录")
-        tip = account.note or account.type_label
+            self.uuid_label.setText(t("HomePage", "尚未完成登录"))
+        tip = account.note or t("HomePage", account.type_label)
         if account.auth_server:
             tip += f" · {account.auth_server}"
         self.name_edit.setToolTip(tip)
@@ -1373,7 +1406,7 @@ class HomePage(QWidget):
         current = self.ctx.config.java_path
         self.java_combo.blockSignals(True)
         self.java_combo.clear()
-        self.java_combo.addItem("自动选择（按版本匹配）", "")
+        self.java_combo.addItem(t("HomePage", "自动选择（按版本匹配）"), "")
         for java in self.ctx.javas:
             self.java_combo.addItem(f"{java.label}", java.path)
             self.java_combo.setItemData(
@@ -1387,7 +1420,9 @@ class HomePage(QWidget):
                     self.java_combo.addItem(info.label, info.path)
                     index = self.java_combo.count() - 1
                 else:
-                    self.java_combo.addItem(f"无效的 Java：{Path(current).name}", current)
+                    self.java_combo.addItem(
+                        t("HomePage", "无效的 Java：{0}", Path(current).name), current
+                    )
                     index = self.java_combo.count() - 1
             self.java_combo.setCurrentIndex(index)
         else:
@@ -1517,10 +1552,10 @@ class HomePage(QWidget):
 
         self._session = None
         self.progress_card.setVisible(True)
-        self.progress_stage.setText("准备启动")
+        self.progress_stage.setText(self.tr("准备启动"))
         self.progress_detail.setText("")
         self.progress_bar.setValue(0)
-        self.launch_button.setText("取消")
+        self.launch_button.setText(self.tr("取消"))
 
         self._worker = LaunchWorker(
             self.ctx,
@@ -1594,9 +1629,9 @@ class HomePage(QWidget):
     def _on_started(self, session) -> None:
         self._session = session
         self.progress_card.setVisible(False)
-        self.launch_button.setText("停止游戏")
+        self.launch_button.setText(self.tr("停止游戏"))
         self.launch_button.setEnabled(True)
-        self.launch_info.setText(f"游戏运行中：{self._selected_id}")
+        self.launch_info.setText(t("HomePage", "游戏运行中：{0}", self._selected_id))
         self._append_log("[启动] 游戏进程已启动。")
         action = self.ctx.config.after_launch_action
         if action == "hide":
@@ -1645,16 +1680,17 @@ class HomePage(QWidget):
 
     def _reset_launch_ui(self) -> None:
         self.progress_card.setVisible(False)
-        self.launch_button.setText("启动游戏")
+        self.launch_button.setText(self.tr("启动游戏"))
         self.launch_button.setEnabled(bool(self._selected_id))
         if self._selected_id:
             row = self._rows.get(self._selected_id)
             loader = row.version.loader if row else ""
             self.launch_info.setText(
-                f"将启动：{self._selected_id}" + (f" · {loader}" if loader else "")
+                t("HomePage", "将启动：{0}", self._selected_id)
+                + (f" · {loader}" if loader else "")
             )
         else:
-            self.launch_info.setText("未选择版本")
+            self.launch_info.setText(self.tr("未选择版本"))
 
     def _on_worker_finished(self) -> None:
         # 进程仍在运行时保留 worker 引用，直到 exited 信号到达。
@@ -1701,10 +1737,12 @@ class HomePage(QWidget):
             return
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("多选启动")
+        dialog.setWindowTitle(t("HomePage", "多选启动"))
         dialog.setMinimumSize(360, 420)
         layout = QVBoxLayout(dialog)
-        tip = QLabel("按选择顺序依次启动；同一实例目录不能并行，需等前一个游戏退出。")
+        tip = QLabel(
+            self.tr("按选择顺序依次启动；同一实例目录不能并行，需等前一个游戏退出。")
+        )
         tip.setObjectName("Muted")
         tip.setWordWrap(True)
         layout.addWidget(tip)
@@ -1714,9 +1752,9 @@ class HomePage(QWidget):
             list_widget.addItem(version_id)
         layout.addWidget(list_widget, 1)
         buttons = QHBoxLayout()
-        cancel_btn = QPushButton("取消")
+        cancel_btn = QPushButton(self.tr("取消"))
         cancel_btn.clicked.connect(dialog.reject)
-        launch_btn = QPushButton("启动")
+        launch_btn = QPushButton(self.tr("启动"))
         launch_btn.setObjectName("Primary")
         launch_btn.clicked.connect(dialog.accept)
         buttons.addWidget(cancel_btn)

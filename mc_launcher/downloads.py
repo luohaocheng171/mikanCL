@@ -23,6 +23,9 @@ class DownloadTask:
     percent: float = 0.0
     speed: float = 0.0
     detail: str = ""
+    stage: str = ""
+    files_done: int = 0
+    files_total: int = 0
     message: str = ""
     target_dir: str = ""
     worker: QThread | None = None
@@ -139,6 +142,9 @@ class DownloadManager(QObject):
         status: str | None = None,
         detail: str | None = None,
         speed: float | None = None,
+        stage: str | None = None,
+        files_done: int | None = None,
+        files_total: int | None = None,
     ) -> None:
         task = self.find(task_id)
         if task is None or task.finished:
@@ -151,6 +157,12 @@ class DownloadManager(QObject):
             task.detail = detail
         if speed is not None:
             task.speed = max(0.0, float(speed))
+        if stage is not None:
+            task.stage = stage
+        if files_done is not None:
+            task.files_done = max(0, int(files_done))
+        if files_total is not None:
+            task.files_total = max(0, int(files_total))
         self.changed.emit()
 
     def finish(self, task_id: str, ok: bool = True, message: str = "") -> None:
@@ -208,6 +220,9 @@ class DownloadManager(QObject):
         task.percent = 0.0
         task.speed = 0.0
         task.detail = ""
+        task.stage = ""
+        task.files_done = 0
+        task.files_total = 0
         task.message = ""
         task.finished_at = 0.0
         task.started_at = 0.0

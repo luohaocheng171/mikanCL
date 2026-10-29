@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.wintypes
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPoint, QSize, QThread, Qt, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -16,6 +19,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QStackedWidget,
     QSystemTrayIcon,
     QVBoxLayout,
@@ -24,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from .. import APP_NAME, APP_NAME_CN, APP_VERSION
 from ..context import AppContext, wait_thread
+from ..i18n import t
 from ..java import detect_java_installed
 from .dropinstall import handle_dropped_paths
 from .page_accounts import AccountsPage
@@ -36,8 +41,32 @@ from .page_forbric import ForbricPage
 from .page_modpack import ModpackPage
 from .page_home import HomePage
 from .page_java_center import JavaCenterPage
+from .page_loaders import LoadersPage
+from .page_multiplayer import MultiplayerPage
 from .page_settings import SettingsPage
 from .theme import make_avatar, make_block_icon, make_nav_icon
+from .widgets import scroll_page
+
+# 无边框窗口的边缘缩放：Windows 命中测试消息与结果码
+_WM_NCHITTEST = 0x0084
+_RESIZE_MARGIN = 6
+_HIT_TEST = {
+    (True, False, True, False): 13,  # 左上
+    (False, True, True, False): 14,  # 右上
+    (True, False, False, True): 16,  # 左下
+    (False, True, False, True): 17,  # 右下
+    (True, False, False, False): 10,  # 左
+    (False, True, False, False): 11,  # 右
+    (False, False, True, False): 12,  # 上
+    (False, False, False, True): 15,  # 下
+}
+
+
+def _cursor_point(lparam: int) -> QPoint:
+    """从 WM_NCHITTEST 的 lParam 中取出屏幕坐标（有符号 16 位）。"""
+    x = ctypes.c_short(lparam & 0xFFFF).value
+    y = ctypes.c_short((lparam >> 16) & 0xFFFF).value
+    return QPoint(x, y)
 
 
 class TitleBar(QFrame):
@@ -55,18 +84,18 @@ class TitleBar(QFrame):
         icon = QLabel()
         icon.setPixmap(make_block_icon(20).pixmap(20, 20))
         layout.addWidget(icon)
-        title = QLabel(f"{APP_NAME} · Minecraft 启动器")
+        title = QLabel(f"{APP_NAME} · {t('MainWindow', 'Minecraft 启动器')}")
         title.setObjectName("TitleBarText")
         layout.addWidget(title)
         layout.addStretch(1)
 
-        self.min_button = self._make_button("−", "最小化")
+        self.min_button = self._make_button("−", t("MainWindow", "最小化"))
         self.min_button.clicked.connect(window.showMinimized)
         layout.addWidget(self.min_button)
-        self.max_button = self._make_button("□", "最大化 / 还原")
+        self.max_button = self._make_button("□", t("MainWindow", "最大化 / 还原"))
         self.max_button.clicked.connect(window.toggle_maximized)
         layout.addWidget(self.max_button)
-        close_button = self._make_button("✕", "关闭", danger=True)
+        close_button = self._make_button("✕", t("MainWindow", "关闭"), danger=True)
         close_button.clicked.connect(window.close)
         layout.addWidget(close_button)
 
@@ -122,17 +151,54 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.ctx = ctx
         self._java_worker: JavaScanWorker | None = None
-        self.setWindowTitle(f"{APP_NAME} · Minecraft 启动器")
+        self.setWindowTitle(f"{APP_NAME} · {self.tr('Minecraft 启动器')}")
         self.setWindowIcon(make_block_icon(64))
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self.setAcceptDrops(True)
-        self.resize(1320, 840)
-        self.setMinimumSize(1120, 720)
+        self._apply_default_geometry()
 
         self._build()
         self._connect_bus()
         self._start_java_scan()
         self._setup_tray()
+
+    # ---------- 窗口尺寸 ----------
+    def _apply_default_geometry(self) -> None:
+        """默认尺寸贴近 PCL / HMCL（约 1080×680），并按屏幕可用区域自动收缩。"""
+        width, height = 1080, 680
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            width = max(900, min(width, available.width() - 60))
+            height = max(540, min(height, available.height() - 60))
+        self.setMinimumSize(min(900, width), min(540, height))
+        self.resize(width, height)
+        if screen is not None:
+            available = screen.availableGeometry()
+            self.move(available.center() - self.rect().center())
+
+    # ---------- 无边框窗口的边缘缩放 ----------
+    def nativeEvent(self, eventType, message):  # noqa: N802
+        """让无边框窗口也能像普通窗口一样拖动边缘改大小。"""
+        if sys.platform == "win32" and eventType == b"windows_generic_MSG":
+            try:
+                msg = ctypes.wintypes.MSG.from_address(int(message))
+            except (TypeError, ValueError):
+                msg = None
+            if msg is not None and msg.message == _WM_NCHITTEST and not self.isMaximized():
+                point = self.mapFromGlobal(_cursor_point(msg.lParam))
+                margin = _RESIZE_MARGIN
+                hit = _HIT_TEST.get(
+                    (
+                        point.x() < margin,
+                        point.x() > self.width() - margin,
+                        point.y() < margin,
+                        point.y() > self.height() - margin,
+                    )
+                )
+                if hit:
+                    return True, hit
+        return super().nativeEvent(eventType, message)
 
     # ------------------------------------------------------------------
     def toggle_maximized(self) -> None:
@@ -221,35 +287,52 @@ class MainWindow(QMainWindow):
         side.addSpacing(18)
 
         self.nav_group = QButtonGroup(self)
-        self.nav_group.setExclusive(True)
         self.nav_buttons: list[QPushButton] = []
         nav_items = [
-            ("home", "启动游戏"),
-            ("download", "下载安装"),
-            ("downloads", "下载中心"),
-            ("content", "内容中心"),
-            ("modpack", "整合包"),
-            ("account", "账号管理"),
-            ("control", "版本设置"),
-            ("browser", "内置浏览器"),
+            ("home", self.tr("启动游戏")),
+            ("download", self.tr("下载安装")),
+            ("downloads", self.tr("下载中心")),
+            ("content", self.tr("内容中心")),
+            ("modpack", self.tr("整合包")),
+            ("account", self.tr("账号管理")),
+            ("control", self.tr("版本设置")),
+            # theme.py 的 make_nav_icon 没有 "loaders" 分支，走默认图标（不要改 theme.py）
+            ("loaders", self.tr("Mod 加载器")),
+            # theme.py 的 make_nav_icon 没有 "multiplayer" 分支，走默认图标（不要改 theme.py）
+            ("multiplayer", self.tr("多人联机")),
+            ("browser", self.tr("内置浏览器")),
             # theme.py 的 make_nav_icon 没有 "forbric" 分支，走默认图标（不要改 theme.py）
-            ("forbric", "Forbric"),
-            ("java", "Java 中心"),
-            ("settings", "设置"),
+            ("forbric", self.tr("Forbric")),
+            ("java", self.tr("Java 中心")),
+            ("settings", self.tr("设置")),
         ]
+        nav_host = QWidget()
+        nav_host.setStyleSheet("background: transparent;")
+        nav_layout = QVBoxLayout(nav_host)
+        nav_layout.setContentsMargins(0, 0, 0, 0)
+        nav_layout.setSpacing(10)
         for index, (key, text) in enumerate(nav_items):
             button = QPushButton(text)
             button.setObjectName("NavButton")
             button.setCheckable(True)
+            button.setMinimumHeight(36)
             button.setIcon(make_nav_icon(key, 18, "#9fb6a7"))
             button.setIconSize(QSize(18, 18))
             button.clicked.connect(lambda checked=False, i=index: self.switch_page(i))
             self.nav_group.addButton(button, index)
-            side.addWidget(button)
+            nav_layout.addWidget(button)
             self.nav_buttons.append(button)
+        nav_layout.addStretch(1)
         self.nav_buttons[0].setChecked(True)
-        side.addSpacing(8)
-        side.addStretch(1)
+
+        # 侧边栏导航放进滚动容器：窗口变矮时用滚轮上下滑动，而不是把按钮压扁丢失文字
+        nav_scroll = QScrollArea()
+        nav_scroll.setWidgetResizable(True)
+        nav_scroll.setFrameShape(QFrame.NoFrame)
+        nav_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        nav_scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
+        nav_scroll.setWidget(nav_host)
+        side.addWidget(nav_scroll, 1)
 
         divider = QFrame()
         divider.setFixedHeight(1)
@@ -263,10 +346,10 @@ class MainWindow(QMainWindow):
         mini.addWidget(self.sidebar_avatar)
         texts = QVBoxLayout()
         texts.setSpacing(1)
-        self.sidebar_account = QLabel("离线模式")
+        self.sidebar_account = QLabel(self.tr("离线模式"))
         self.sidebar_account.setStyleSheet("font-size: 12px; font-weight: 600; color: #cfe3d5;")
         texts.addWidget(self.sidebar_account)
-        self.sidebar_mode = QLabel(f"v{APP_VERSION} · 正版 / 外置登录")
+        self.sidebar_mode = QLabel(t("MainWindow", "v{0} · 正版 / 外置登录", APP_VERSION))
         self.sidebar_mode.setObjectName("Tiny")
         texts.addWidget(self.sidebar_mode)
         mini.addLayout(texts)
@@ -290,6 +373,8 @@ class MainWindow(QMainWindow):
         self.modpack_page = ModpackPage(self.ctx, self)
         self.accounts_page = AccountsPage(self.ctx, self)
         self.control_page = ControlPage(self.ctx, self)
+        self.loaders_page = LoadersPage(self.ctx, self)
+        self.multiplayer_page = MultiplayerPage(self.ctx, self)
         self.browser_page = BrowserPage(self.ctx, self)
         self.forbric_page = ForbricPage(self.ctx, self)
         self.java_center_page = JavaCenterPage(self.ctx, self)
@@ -302,16 +387,27 @@ class MainWindow(QMainWindow):
             self.modpack_page,
             self.accounts_page,
             self.control_page,
+            self.loaders_page,
+            self.multiplayer_page,
             self.browser_page,
             self.forbric_page,
             self.java_center_page,
             self.settings_page,
         ):
-            self.pages.addWidget(page)
+            # 浏览器页内含 WebEngine 视图，保持原样；其余页面在窗口变矮时改为滚轮滚动，
+            # 避免布局把卡片、表单硬压成薄片导致文字重叠或内容显示不全。
+            self.pages.addWidget(page if page is self.browser_page else scroll_page(page))
 
         bar = self.statusBar()
         bar.setSizeGripEnabled(True)
-        bar.showMessage(f"{APP_NAME} {APP_VERSION} 已就绪 · 正版 / 外置登录 / 内容中心")
+        bar.showMessage(
+            t(
+                "MainWindow",
+                "{0} {1} 已就绪 · 正版 / 外置登录 / 内容中心",
+                APP_NAME,
+                APP_VERSION,
+            )
+        )
         self.modpack_page.launch_requested.connect(self._launch_from_modpack)
         self._refresh_sidebar_account()
 
@@ -348,10 +444,13 @@ class MainWindow(QMainWindow):
             "accounts": 5,
             "control": 6,
             "loader": 1,
-            "browser": 7,
-            "forbric": 8,
-            "java": 9,
-            "settings": 10,
+            "loaders": 7,
+            "multiplayer": 8,
+            "multi": 8,
+            "browser": 9,
+            "forbric": 10,
+            "java": 11,
+            "settings": 12,
         }
         self.switch_page(mapping.get(name, 0))
 
@@ -360,8 +459,9 @@ class MainWindow(QMainWindow):
         if account is None:
             return
         self.sidebar_avatar.setPixmap(make_avatar(account.name or "Steve", 34))
-        self.sidebar_account.setText(f"{account.name} · {account.type_label}")
-        self.sidebar_account.setToolTip(account.note or account.type_label)
+        type_label = t("AccountsPage", account.type_label)
+        self.sidebar_account.setText(f"{account.name} · {type_label}")
+        self.sidebar_account.setToolTip(account.note or type_label)
 
     def switch_page(self, index: int) -> None:
         if not (0 <= index < self.pages.count()):
@@ -382,13 +482,17 @@ class MainWindow(QMainWindow):
             self.accounts_page.refresh()
         elif index == 6:
             self.control_page.refresh()
+        elif index == 7:
+            self.loaders_page.refresh()
         elif index == 8:
+            self.multiplayer_page.refresh()
+        elif index == 10:
             self.forbric_page.refresh()
-        elif index == 9:
+        elif index == 11:
             self.java_center_page.refresh()
 
     def _open_browser(self, url: str) -> None:
-        self.switch_page(7)
+        self.switch_page(9)
         self.browser_page.navigate_to(url)
 
     def _hide_to_tray(self) -> None:
@@ -417,13 +521,13 @@ class MainWindow(QMainWindow):
 
     def _setup_tray(self) -> None:
         self.tray = QSystemTrayIcon(make_block_icon(32), self)
-        self.tray.setToolTip(f"{APP_NAME} · Minecraft 启动器")
+        self.tray.setToolTip(f"{APP_NAME} · {self.tr('Minecraft 启动器')}")
         menu = QMenu(self)
-        show_action = QAction("显示主界面", self)
+        show_action = QAction(self.tr("显示主界面"), self)
         show_action.triggered.connect(self._restore_window)
         menu.addAction(show_action)
         menu.addSeparator()
-        quit_action = QAction("退出启动器", self)
+        quit_action = QAction(self.tr("退出启动器"), self)
         quit_action.triggered.connect(self._quit_app)
         menu.addAction(quit_action)
         self.tray.setContextMenu(menu)
@@ -463,6 +567,8 @@ class MainWindow(QMainWindow):
         self.browser_page.shutdown()
         self.forbric_page.shutdown()
         self.java_center_page.shutdown()
+        self.loaders_page.shutdown()
+        self.multiplayer_page.shutdown()
         wait_thread(self._java_worker, 1500)
         self.tray.hide()
         event.accept()

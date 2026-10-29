@@ -39,6 +39,9 @@ _REWRITABLE_HOSTS = {
 }
 
 _SSL_CONTEXT = ssl.create_default_context()
+# 部分国内镜像的 CDN 节点证书链不完整（缺中间证书），校验会报 unable to get local issuer
+# certificate；这类请求在证书校验失败时回退到不校验模式，否则镜像整条链路不可用。
+_UNVERIFIED_SSL_CONTEXT: ssl.SSLContext | None = None
 
 # ---- 全局代理 ----
 _PROXY_LOCK = threading.Lock()
@@ -76,6 +79,42 @@ def proxy_opener() -> urllib.request.OpenerDirector:
                 urllib.request.HTTPSHandler(context=_SSL_CONTEXT),
             )
         return _OPENER
+
+
+def _unverified_context() -> ssl.SSLContext:
+    global _UNVERIFIED_SSL_CONTEXT
+    with _PROXY_LOCK:
+        if _UNVERIFIED_SSL_CONTEXT is None:
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            _UNVERIFIED_SSL_CONTEXT = context
+        return _UNVERIFIED_SSL_CONTEXT
+
+
+def _is_cert_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "certificate_verify_failed" in text or "certificate verify failed" in text
+
+
+def open_with_ssl_fallback(
+    request: urllib.request.Request, timeout: float
+):
+    """打开请求；仅在证书链校验失败（镜像 CDN 缺中间证书）时退回不校验重试一次。"""
+    try:
+        return proxy_opener().open(request, timeout=timeout)
+    except Exception as exc:  # noqa: BLE001
+        if not _is_cert_error(exc):
+            raise
+        proxies = {}
+        with _PROXY_LOCK:
+            if _PROXY_URL:
+                proxies = {"http": _PROXY_URL, "https": _PROXY_URL}
+        fallback = urllib.request.build_opener(
+            urllib.request.ProxyHandler(proxies),
+            urllib.request.HTTPSHandler(context=_unverified_context()),
+        )
+        return fallback.open(request, timeout=timeout)
 
 
 
@@ -242,7 +281,7 @@ class Http:
         if extra_headers:
             headers.update(extra_headers)
         request = urllib.request.Request(candidate.url, headers=headers)
-        return proxy_opener().open(request, timeout=timeout)
+        return open_with_ssl_fallback(request, timeout)
 
     def request(
         self,
@@ -263,8 +302,8 @@ class Http:
             url, data=data, headers=merged, method=method.upper()
         )
         try:
-            with proxy_opener().open(
-                request, timeout=timeout or self.timeout
+            with open_with_ssl_fallback(
+                request, timeout or self.timeout
             ) as response:
                 return response.read()
         except urllib.error.HTTPError as exc:
@@ -356,8 +395,8 @@ class Http:
     ) -> dict | list:
         request = urllib.request.Request(url, data=data, headers=headers, method="POST")
         try:
-            with proxy_opener().open(
-                request, timeout=timeout or self.timeout
+            with open_with_ssl_fallback(
+                request, timeout or self.timeout
             ) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
@@ -437,7 +476,10 @@ class Http:
                     if existing and (size is not None and existing >= size):
                         existing = 0
                     headers = {"Range": f"bytes={existing}-"} if existing > 0 else None
-                    with self._open(candidate, self.timeout, headers) as response:
+                    # 单次读取的空闲超时：连接假死（长时间读不到数据）时尽快断开重试，
+                    # 否则线程会一直挂在 response.read() 上，整批下载卡住。
+                    read_timeout = min(self.timeout, 20)
+                    with self._open(candidate, read_timeout, headers) as response:
                         status = int(getattr(response, "status", 200) or 200)
                         if existing and status != 206:
                             existing = 0  # 服务器不支持续传，从头下载

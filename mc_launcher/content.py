@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import USER_AGENT
+from . import mod_cn
 from .config import (
     CACHE_DIR,
     CURSEFORGE_CDN_HOSTS,
@@ -34,16 +35,46 @@ PROJECT_TYPES = {
     "mod": "Mod",
     "modpack": "整合包",
     "resourcepack": "资源包",
+    "texturepack": "材质包",
     "shader": "光影包",
 }
 
 SOURCE_LABELS = {"modrinth": "Modrinth", "curseforge": "CurseForge"}
 
-CF_CLASS_IDS = {"mod": 6, "modpack": 4471, "resourcepack": 12, "shader": 6552}
+CF_CLASS_IDS = {"mod": 6, "modpack": 4471, "resourcepack": 12, "shader": 6552, "texturepack": 12}
 CF_LOADER_TYPES = {"forge": 1, "liteloader": 3, "fabric": 4, "quilt": 5, "neoforge": 6}
 MODRINTH_LOADERS = {"forge", "fabric", "quilt", "neoforge"}
 
 CF_FILE_BASE = "https://mediafilez.forgecdn.net/files/{a}/{b}/{name}"
+
+DEPENDENCY_REQUIRED = "required"
+DEPENDENCY_OPTIONAL = "optional"
+
+# CurseForge 依赖关系：2 = OptionalDependency，3 = RequiredDependency
+CF_RELATION_OPTIONAL = 2
+CF_RELATION_REQUIRED = 3
+CF_RELATION_LABELS = {
+    CF_RELATION_OPTIONAL: DEPENDENCY_OPTIONAL,
+    CF_RELATION_REQUIRED: DEPENDENCY_REQUIRED,
+}
+
+# Modrinth 资源包若带分辨率分类，基本都是改材质的材质包；不带分辨率的多为
+# 数据包、字体包、语言包等。用于「材质包」这一独立搜索项。
+TEXTURE_CATEGORIES = [
+    "8x-",
+    "16x",
+    "32x",
+    "48x",
+    "64x",
+    "128x",
+    "256x",
+    "512x+",
+]
+
+_CF_PROJECT_TYPES: dict[int, str] = {}
+for _key, _value in CF_CLASS_IDS.items():
+    # 同名类别（资源包 / 材质包共用 classId 12）保留第一个，避免反向映射被覆盖
+    _CF_PROJECT_TYPES.setdefault(_value, _key)
 
 
 @dataclass
@@ -67,6 +98,16 @@ class ContentProject:
     @property
     def type_label(self) -> str:
         return PROJECT_TYPES.get(self.project_type, self.project_type)
+
+    @property
+    def display_title(self) -> str:
+        """界面展示名：词表命中时显示中文名，否则沿用英文原名。"""
+        return mod_cn.cn_name(self.title) or self.title
+
+    @property
+    def display_description(self) -> str:
+        """界面简述：优先使用中文简介，词表未收录时沿用平台原文。"""
+        return mod_cn.cn_description(self.title) or self.description
 
 
 @dataclass
@@ -98,6 +139,24 @@ class ContentVersion:
             if file.primary:
                 return file
         return self.files[0] if self.files else None
+
+    @property
+    def required_dependencies(self) -> list[dict]:
+        """必装前置（已按平台格式归一化）。"""
+        return [
+            dep
+            for dep in self.dependencies
+            if dep.get("dependency_type") == DEPENDENCY_REQUIRED
+        ]
+
+    @property
+    def optional_dependencies(self) -> list[dict]:
+        """可选前置，界面上标记为「可选」。"""
+        return [
+            dep
+            for dep in self.dependencies
+            if dep.get("dependency_type") == DEPENDENCY_OPTIONAL
+        ]
 
     @property
     def label(self) -> str:
@@ -201,7 +260,10 @@ def rewrite_download_url(url: str, source: str, config: Config) -> str:
 
 
 def _cf_file_url(file_id: int, filename: str) -> str:
-    return CF_FILE_BASE.format(a=file_id // 1000, b=file_id % 1000, name=filename)
+    # 文件名可能含空格、引号、方括号等字符，必须先转义否则 urllib 会拒绝请求
+    return CF_FILE_BASE.format(
+        a=file_id // 1000, b=file_id % 1000, name=urllib.parse.quote(filename, safe="")
+    )
 
 
 def _lower_list(values) -> list[str]:
@@ -219,6 +281,113 @@ def _guess_loaders(game_versions: list[str]) -> list[str]:
 
 def _normalize_mc_versions(values: list[str]) -> list[str]:
     return [v for v in values if re.fullmatch(r"\d+\.\d+(\.\d+)?", str(v).strip())]
+
+
+def _modrinth_dependencies(raw: dict) -> list[dict]:
+    """把 Modrinth 的 dependencies 归一化为统一结构，只保留必装/可选前置。"""
+    result: list[dict] = []
+    for item in raw.get("dependencies") or []:
+        if not isinstance(item, dict):
+            continue
+        dep_type = str(item.get("dependency_type") or DEPENDENCY_REQUIRED).lower()
+        if dep_type not in (DEPENDENCY_REQUIRED, DEPENDENCY_OPTIONAL):
+            continue
+        project_id = str(item.get("project_id") or "")
+        if not project_id:
+            continue
+        result.append(
+            {
+                "project_id": project_id,
+                "version_id": str(item.get("version_id") or ""),
+                "dependency_type": dep_type,
+            }
+        )
+    return result
+
+
+def _curseforge_dependencies(raw: dict) -> list[dict]:
+    """把 CurseForge 的 dependencies 归一化为统一结构，只保留必装/可选前置。"""
+    result: list[dict] = []
+    for item in raw.get("dependencies") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            relation = int(item.get("relationType"))
+        except (TypeError, ValueError):
+            continue
+        dep_type = CF_RELATION_LABELS.get(relation)
+        if dep_type is None:
+            continue
+        mod_id = str(item.get("modId") or "")
+        if not mod_id:
+            continue
+        result.append(
+            {
+                "project_id": mod_id,
+                # 兼容 content.py 内部安装流程沿用的字段名
+                "modId": mod_id,
+                "dependency_type": dep_type,
+                "relation_type": relation,
+            }
+        )
+    return result
+
+
+def _project_from_modrinth(raw: dict, project_type: str = "mod") -> ContentProject | None:
+    project_id = str(raw.get("id") or raw.get("project_id") or "")
+    if not project_id:
+        return None
+    slug = str(raw.get("slug") or project_id)
+    kind = str(raw.get("project_type") or project_type)
+    return ContentProject(
+        source="modrinth",
+        id=project_id,
+        title=str(raw.get("title") or slug),
+        description=str(raw.get("description") or ""),
+        project_type=kind,
+        author="",
+        downloads=int(raw.get("downloads") or 0),
+        icon_url=str(raw.get("icon_url") or ""),
+        categories=[str(c) for c in (raw.get("categories") or [])],
+        slug=slug,
+        page_url=f"https://modrinth.com/{kind}/{slug}",
+    )
+
+
+def _project_from_curseforge(raw: dict, project_type: str = "mod") -> ContentProject | None:
+    mod_id = str(raw.get("id") or "")
+    if not mod_id:
+        return None
+    links = raw.get("links") if isinstance(raw.get("links"), dict) else {}
+    logo = raw.get("logo") if isinstance(raw.get("logo"), dict) else {}
+    authors = raw.get("authors") or []
+    author = ""
+    if isinstance(authors, list) and authors and isinstance(authors[0], dict):
+        author = str(authors[0].get("name") or "")
+    try:
+        kind = _CF_PROJECT_TYPES.get(int(raw.get("classId") or 0), project_type)
+    except (TypeError, ValueError):
+        kind = project_type
+    return ContentProject(
+        source="curseforge",
+        id=mod_id,
+        title=str(raw.get("name") or mod_id),
+        description=str(raw.get("summary") or ""),
+        project_type=kind,
+        author=author,
+        downloads=int(raw.get("downloadCount") or 0),
+        icon_url=str(logo.get("thumbnailUrl") or logo.get("url") or ""),
+        categories=[
+            str(c.get("name")) for c in (raw.get("categories") or []) if isinstance(c, dict)
+        ],
+        slug=str(raw.get("slug") or mod_id),
+        page_url=str(links.get("websiteUrl") or ""),
+    )
+
+
+def _dependency_project_id(dep: dict) -> str:
+    """从归一化（或旧格式）依赖里取前置项目 id。"""
+    return str(dep.get("project_id") or dep.get("modId") or "")
 
 
 def mc_version_key(value: str) -> tuple[int, ...]:
@@ -305,6 +474,52 @@ class ContentClient:
         offset: int = 0,
         limit: int = 20,
     ) -> list[ContentProject]:
+        """平台搜索。中文关键词会先映射为常用英文项目名，再分别检索并合并去重。"""
+        queries = [query]
+        if query and mod_cn.has_chinese(query):
+            translated = mod_cn.translate_query(query)
+            if translated:
+                queries = translated
+        if len(queries) == 1:
+            return self._search_one(
+                source, project_type, queries[0], game_version, loader, offset, limit
+            )
+        merged: list[ContentProject] = []
+        seen: set[tuple[str, str]] = set()
+        first_error: ContentError | None = None
+        for item in queries:
+            try:
+                rows = self._search_one(
+                    source, project_type, item, game_version, loader, offset, limit
+                )
+            except ContentError as exc:
+                first_error = first_error or exc
+                continue
+            for project in rows:
+                key = (project.source, project.id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(project)
+        if not merged and first_error is not None:
+            raise first_error
+        if not merged:
+            # 译名没有命中时退回原始关键词，避免中文项目名被完全过滤掉
+            return self._search_one(
+                source, project_type, query, game_version, loader, offset, limit
+            )
+        return merged[: max(1, min(50, limit))]
+
+    def _search_one(
+        self,
+        source: str,
+        project_type: str,
+        query: str,
+        game_version: str,
+        loader: str,
+        offset: int,
+        limit: int,
+    ) -> list[ContentProject]:
         if source == "curseforge":
             return self._search_curseforge(project_type, query, game_version, loader, offset, limit)
         return self._search_modrinth(project_type, query, game_version, loader, offset, limit)
@@ -318,7 +533,11 @@ class ContentClient:
         offset: int,
         limit: int,
     ) -> list[ContentProject]:
-        facets: list[list[str]] = [[f"project_type:{project_type}"]]
+        # 「材质包」在 Modrinth 里仍属于 resourcepack，用分辨率分类筛掉数据包/字体包等
+        modrinth_type = "resourcepack" if project_type == "texturepack" else project_type
+        facets: list[list[str]] = [[f"project_type:{modrinth_type}"]]
+        if project_type == "texturepack":
+            facets.append([f"categories:{name}" for name in TEXTURE_CATEGORIES])
         if game_version:
             facets.append([f"versions:{game_version}"])
         if loader and loader in MODRINTH_LOADERS:
@@ -346,13 +565,17 @@ class ContentClient:
                     id=project_id,
                     title=str(hit.get("title") or slug),
                     description=str(hit.get("description") or ""),
-                    project_type=str(hit.get("project_type") or project_type),
+                    project_type=(
+                        project_type
+                        if project_type == "texturepack"
+                        else str(hit.get("project_type") or project_type)
+                    ),
                     author=str(hit.get("author") or ""),
                     downloads=int(hit.get("downloads") or 0),
                     icon_url=str(hit.get("icon_url") or ""),
                     categories=[str(c) for c in (hit.get("categories") or [])],
                     slug=slug,
-                    page_url=f"https://modrinth.com/{project_type}/{slug}",
+                    page_url=f"https://modrinth.com/{modrinth_type}/{slug}",
                 )
             )
         return projects
@@ -501,9 +724,7 @@ class ContentClient:
                     game_versions=[str(v) for v in (row.get("game_versions") or [])],
                     loaders=[str(v) for v in (row.get("loaders") or [])],
                     files=files,
-                    dependencies=[
-                        d for d in (row.get("dependencies") or []) if isinstance(d, dict)
-                    ],
+                    dependencies=_modrinth_dependencies(row),
                     date=str(row.get("date_published") or "")[:19].replace("T", " "),
                     downloads=int(row.get("downloads") or 0),
                     channel=str(row.get("version_type") or ""),
@@ -572,9 +793,7 @@ class ContentClient:
                             sha1=sha1,
                         )
                     ],
-                    dependencies=[
-                        d for d in (row.get("dependencies") or []) if isinstance(d, dict)
-                    ],
+                    dependencies=_curseforge_dependencies(row),
                     date=str(row.get("fileDate") or "")[:19].replace("T", " "),
                     downloads=int(row.get("downloadCount") or 0),
                     channel=str(row.get("releaseType") or ""),
@@ -611,10 +830,92 @@ class ContentClient:
             game_versions=[str(v) for v in (row.get("game_versions") or [])],
             loaders=[str(v) for v in (row.get("loaders") or [])],
             files=files,
-            dependencies=[d for d in (row.get("dependencies") or []) if isinstance(d, dict)],
+            dependencies=_modrinth_dependencies(row),
             date=str(row.get("date_published") or "")[:19].replace("T", " "),
             downloads=int(row.get("downloads") or 0),
         )
+
+    # ------------------------------------------------------------------
+    def fetch_projects_by_ids(
+        self,
+        source: str,
+        ids: list[str],
+        log: Callable[[str], None] | None = None,
+    ) -> list[ContentProject]:
+        """按项目 id 批量解析前置 Mod 的项目信息。
+
+        网络失败、id 非法或平台不支持时一律跳过对应条目（返回空列表而不抛异常），
+        保证详情页的前置区块可以安全降级。
+        """
+        wanted: list[str] = []
+        seen: set[str] = set()
+        for item in ids or []:
+            value = str(item or "").strip()
+            if value and value not in seen:
+                seen.add(value)
+                wanted.append(value)
+        if not wanted:
+            return []
+        if source == "curseforge":
+            return self._curseforge_projects_by_ids(wanted, log)
+        if source == "modrinth":
+            return self._modrinth_projects_by_ids(wanted, log)
+        return []
+
+    def _modrinth_projects_by_ids(
+        self, ids: list[str], log: Callable[[str], None] | None = None
+    ) -> list[ContentProject]:
+        def fetch(project_id: str) -> ContentProject | None:
+            try:
+                data = self._modrinth(f"/project/{project_id}")
+            except Exception as exc:  # noqa: BLE001 - 单个前置解析失败不应影响整块展示
+                if log:
+                    log(f"[前置] 解析 Modrinth 项目 {project_id} 失败：{exc}")
+                return None
+            return _project_from_modrinth(data, "mod") if isinstance(data, dict) else None
+
+        projects: list[ContentProject] = []
+        with ThreadPoolExecutor(max_workers=max(1, min(4, len(ids)))) as pool:
+            for project in pool.map(fetch, ids):
+                if project is not None:
+                    projects.append(project)
+        return projects
+
+    def _curseforge_projects_by_ids(
+        self, ids: list[str], log: Callable[[str], None] | None = None
+    ) -> list[ContentProject]:
+        projects: list[ContentProject] = []
+        for start in range(0, len(ids), 100):
+            chunk = ids[start:start + 100]
+            numeric: list[int] = []
+            for value in chunk:
+                try:
+                    numeric.append(int(value))
+                except (TypeError, ValueError):
+                    continue
+            rows: list[dict] = []
+            if numeric:
+                try:
+                    data = self._curseforge_post("/mods", {"modIds": numeric})
+                    page = data.get("data") if isinstance(data, dict) else None
+                    rows = [row for row in (page or []) if isinstance(row, dict)]
+                except Exception as exc:  # noqa: BLE001 - 批量失败时退回逐个查询
+                    if log:
+                        log(f"[前置] CurseForge 批量解析失败，改为逐个查询：{exc}")
+            if not rows and numeric:
+                for mod_id in numeric:
+                    try:
+                        data = self._curseforge(f"/mods/{mod_id}")
+                    except Exception:  # noqa: BLE001 - 单个前置解析失败直接跳过
+                        continue
+                    row = data.get("data") if isinstance(data, dict) else None
+                    if isinstance(row, dict):
+                        rows.append(row)
+            for row in rows:
+                project = _project_from_curseforge(row)
+                if project is not None:
+                    projects.append(project)
+        return projects
 
     # ------------------------------------------------------------------
     def check_mod_updates(
@@ -695,6 +996,20 @@ class ContentClient:
         if rewritten and rewritten != file.url:
             candidates.append(Candidate(rewritten, {"User-Agent": USER_AGENT}, source, "镜像"))
         candidates.append(Candidate(file.url, {"User-Agent": USER_AGENT}, source, source))
+        if source == "curseforge":
+            # CurseForge 两个 CDN 节点偶尔返回 403/404，互为备份可显著提升成功率
+            parsed = urllib.parse.urlsplit(file.url)
+            host = (parsed.hostname or "").lower()
+            alternate = ""
+            if host.endswith("edge.forgecdn.net"):
+                alternate = "mediafilez.forgecdn.net"
+            elif host.endswith("mediafilez.forgecdn.net"):
+                alternate = "edge.forgecdn.net"
+            if alternate:
+                alt_url = urllib.parse.urlunsplit(
+                    (parsed.scheme, alternate, parsed.path, parsed.query, "")
+                )
+                candidates.append(Candidate(alt_url, {"User-Agent": USER_AGENT}, source, "备用 CDN"))
         # 连接类异常最多重试 3 次；取消时立即退出
         last_error: Exception | None = None
         for attempt in range(3):
@@ -747,12 +1062,14 @@ class ContentClient:
         cancel: threading.Event | None = None,
         workers: int | None = None,
         pause: threading.Event | None = None,
+        progress: Callable[[int, int], None] | None = None,
     ) -> list[str]:
         """多线程下载 [(source, file, dest)]，返回失败描述列表。"""
         if not tasks:
             return []
         workers = workers or max(4, int(self.config.download_threads))
         failures: list[str] = []
+        succeeded = 0
 
         def work(task: tuple[str, ContentFile, Path]) -> str:
             source, file, dest = task
@@ -773,6 +1090,9 @@ class ContentClient:
                     failures.append(message)
                     if log:
                         log(f"[下载] {message}")
+                elif progress is not None:
+                    succeeded += 1
+                    progress(succeeded, len(tasks))
         return failures
 
     # ------------------------------------------------------------------
@@ -787,7 +1107,12 @@ class ContentClient:
         pause: threading.Event | None = None,
     ) -> list[Path]:
         """安装单个 Mod / 资源包 / 光影包到指定游戏目录。"""
-        targets = {"mod": "mods", "resourcepack": "resourcepacks", "shader": "shaderpacks"}
+        targets = {
+            "mod": "mods",
+            "resourcepack": "resourcepacks",
+            "texturepack": "resourcepacks",
+            "shader": "shaderpacks",
+        }
         folder = targets.get(project.project_type, "mods")
         file = version.primary_file
         if file is None:
@@ -1089,8 +1414,13 @@ class ContentClient:
         cancel: threading.Event | None = None,
         progress: Callable[[float, str], None] | None = None,
         pause: threading.Event | None = None,
+        files_progress: Callable[[int, int], None] | None = None,
     ) -> None:
-        """下载整合包内所有文件并解压 overrides。"""
+        """下载整合包内所有文件并解压 overrides。
+
+        progress(percent, message) 驱动总体进度；files_progress(done, total)
+        用于在下载清单上显示「已完成/总文件数」。
+        """
         instance_dir.mkdir(parents=True, exist_ok=True)
         tasks: list[tuple[str, ContentFile, Path]] = []
         for rel, file in meta.files:
@@ -1100,7 +1430,11 @@ class ContentClient:
             tasks.append(("curseforge" if meta.pack_format == "curseforge" else "modrinth", file, safe))
         if log:
             log(f"[整合包] 需要下载 {len(tasks)} 个文件，overrides：{', '.join(meta.overrides)}")
-        failures = self.download_many(tasks, log=log, cancel=cancel, pause=pause)
+        if files_progress is not None:
+            files_progress(0, len(tasks))
+        failures = self.download_many(
+            tasks, log=log, cancel=cancel, pause=pause, progress=files_progress
+        )
         if cancel is not None and cancel.is_set():
             raise Cancelled()
         missing = self._collect_missing(tasks, failures, instance_dir, log)

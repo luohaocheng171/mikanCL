@@ -45,6 +45,7 @@ from ..auth import (
     authlib_login,
 )
 from ..context import AppContext, wait_thread
+from ..i18n import t
 from .skin_view import SkinPreview3D
 from .theme import make_avatar
 from .widgets import Badge, Card, card_title_row, page_header
@@ -477,22 +478,23 @@ class AccountsPage(QWidget):
         outer.setContentsMargins(26, 20, 26, 20)
         outer.setSpacing(16)
         header, header_layout = page_header(
-            "账号管理", "离线账号、微软正版账号与第三方外置登录，登录信息仅保存在本地"
+            self.tr("账号管理"),
+            self.tr("离线账号、微软正版账号与第三方外置登录，登录信息仅保存在本地"),
         )
-        add_offline = QPushButton("添加离线账号")
+        add_offline = QPushButton(self.tr("添加离线账号"))
         add_offline.clicked.connect(self._add_offline)
         header_layout.addWidget(add_offline)
-        add_ms = QPushButton("微软正版登录")
+        add_ms = QPushButton(self.tr("微软正版登录"))
         add_ms.setObjectName("Primary")
-        add_ms.setToolTip("内置浏览器登录微软账号，兼容所有个人账号")
+        add_ms.setToolTip(self.tr("内置浏览器登录微软账号，兼容所有个人账号"))
         add_ms.clicked.connect(self._login_microsoft_browser)
         header_layout.addWidget(add_ms)
-        add_ms_code = QPushButton("设备码登录")
+        add_ms_code = QPushButton(self.tr("设备码登录"))
         add_ms_code.setObjectName("Chip")
-        add_ms_code.setToolTip("设备码流程需要可用的 Azure Client ID，可在设置中配置")
+        add_ms_code.setToolTip(self.tr("设备码流程需要可用的 Azure Client ID，可在设置中配置"))
         add_ms_code.clicked.connect(self._login_microsoft)
         header_layout.addWidget(add_ms_code)
-        add_authlib = QPushButton("第三方外置登录")
+        add_authlib = QPushButton(self.tr("第三方外置登录"))
         add_authlib.setObjectName("Chip")
         add_authlib.clicked.connect(self._login_authlib)
         header_layout.addWidget(add_authlib)
@@ -503,9 +505,13 @@ class AccountsPage(QWidget):
         outer.addLayout(body, 1)
 
         list_card = Card()
-        list_card.body.addWidget(card_title_row("账号列表", "双击账号可设为当前账号"))
+        list_card.body.addWidget(
+            card_title_row(self.tr("账号列表"), self.tr("双击账号可设为当前账号"))
+        )
         self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["账号", "类型", "状态"])
+        self.table.setHorizontalHeaderLabels(
+            [self.tr("账号"), self.tr("类型"), self.tr("状态")]
+        )
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
@@ -520,15 +526,17 @@ class AccountsPage(QWidget):
 
         detail_card = Card()
         detail_card.setFixedWidth(360)
-        detail_card.body.addWidget(card_title_row("账号详情", "当前账号将用于启动游戏"))
+        detail_card.body.addWidget(
+            card_title_row(self.tr("账号详情"), self.tr("当前账号将用于启动游戏"))
+        )
         self.avatar = QLabel()
         self.avatar.setFixedSize(72, 72)
         detail_card.body.addWidget(self.avatar, alignment=Qt.AlignHCenter)
-        self.name_label = QLabel("未选择账号")
+        self.name_label = QLabel(self.tr("未选择账号"))
         self.name_label.setAlignment(Qt.AlignHCenter)
         self.name_label.setStyleSheet("font-size: 18px; font-weight: 700;")
         detail_card.body.addWidget(self.name_label)
-        self.type_badge = Badge("离线模式", "gray")
+        self.type_badge = Badge(self.tr("离线模式"), "gray")
         detail_card.body.addWidget(self.type_badge, alignment=Qt.AlignHCenter)
         self.uuid_label = QLabel("")
         self.uuid_label.setObjectName("Tiny")
@@ -543,62 +551,68 @@ class AccountsPage(QWidget):
         detail_card.body.addWidget(self.expire_label)
         detail_card.body.addStretch(1)
 
-        self.use_button = QPushButton("设为当前账号")
+        self.use_button = QPushButton(self.tr("设为当前账号"))
         self.use_button.setObjectName("Primary")
         self.use_button.clicked.connect(self._set_current)
         detail_card.body.addWidget(self.use_button)
-        self.refresh_button = QPushButton("刷新登录令牌")
+        self.refresh_button = QPushButton(self.tr("刷新登录令牌"))
         self.refresh_button.clicked.connect(self._refresh_token)
         detail_card.body.addWidget(self.refresh_button)
-        self.delete_button = QPushButton("删除账号")
+        self.delete_button = QPushButton(self.tr("删除账号"))
         self.delete_button.setObjectName("Danger")
         self.delete_button.clicked.connect(self._delete)
         detail_card.body.addWidget(self.delete_button)
 
         skin_card = Card()
         skin_card.setFixedWidth(360)
-        skin_card.body.addWidget(card_title_row("皮肤", "微软正版账号可上传自定义皮肤"))
+        skin_card.body.addWidget(
+            card_title_row(self.tr("皮肤"), self.tr("微软正版账号可上传自定义皮肤"))
+        )
         self.skin_preview = SkinPreview3D()
         skin_card.body.addWidget(self.skin_preview, alignment=Qt.AlignHCenter)
-        self.skin_status = QLabel("未选择账号")
+        self.skin_status = QLabel(self.tr("未选择账号"))
         self.skin_status.setObjectName("Tiny")
         self.skin_status.setAlignment(Qt.AlignHCenter)
         self.skin_status.setWordWrap(True)
         skin_card.body.addWidget(self.skin_status)
-        self.skin_hint = QLabel("仅微软正版账号可上传皮肤；离线/外置账号请到对应皮肤站修改。")
+        self.skin_hint = QLabel(
+            self.tr("仅微软正版账号可上传皮肤；离线/外置账号请到对应皮肤站修改。")
+        )
         self.skin_hint.setObjectName("Muted")
         self.skin_hint.setWordWrap(True)
         skin_card.body.addWidget(self.skin_hint)
 
         model_row = QHBoxLayout()
-        model_row.addWidget(QLabel("皮肤模型"))
+        model_row.addWidget(QLabel(self.tr("皮肤模型")))
         self.skin_model_combo = QComboBox()
-        self.skin_model_combo.addItem("经典（Classic）", "classic")
-        self.skin_model_combo.addItem("纤细（Slim / Alex）", "slim")
+        self.skin_model_combo.addItem(self.tr("经典（Classic）"), "classic")
+        self.skin_model_combo.addItem(self.tr("纤细（Slim / Alex）"), "slim")
         self.skin_model_combo.currentIndexChanged.connect(self._on_skin_model_changed)
         model_row.addWidget(self.skin_model_combo, 1)
         skin_card.body.addLayout(model_row)
         self.skin_preview.set_model("classic")
 
-        self.skin_upload_button = QPushButton("上传皮肤…")
+        self.skin_upload_button = QPushButton(self.tr("上传皮肤…"))
         self.skin_upload_button.setEnabled(False)
         self.skin_upload_button.clicked.connect(self._choose_skin_file)
         skin_card.body.addWidget(self.skin_upload_button)
 
         skin_tools = QHBoxLayout()
         skin_tools.setSpacing(8)
-        self.skin_local_button = QPushButton("使用本地皮肤…")
+        self.skin_local_button = QPushButton(self.tr("使用本地皮肤…"))
         self.skin_local_button.setObjectName("Ghost")
         self.skin_local_button.clicked.connect(self._choose_local_skin)
         skin_tools.addWidget(self.skin_local_button)
-        self.skin_search_button = QPushButton("搜索正版皮肤…")
+        self.skin_search_button = QPushButton(self.tr("搜索正版皮肤…"))
         self.skin_search_button.setObjectName("Ghost")
         self.skin_search_button.clicked.connect(self._search_premium_skin)
         skin_tools.addWidget(self.skin_search_button)
         skin_card.body.addLayout(skin_tools)
         skin_note = QLabel(
-            "本地上传支持 64×64 / 64×32 PNG（≤24 KB）。离线账号的本地皮肤会写入 "
-            "CustomSkinLoader/LocalSkin，需安装该 Mod 才能在游戏内显示。"
+            self.tr(
+                "本地上传支持 64×64 / 64×32 PNG（≤24 KB）。离线账号的本地皮肤会写入 "
+                "CustomSkinLoader/LocalSkin，需安装该 Mod 才能在游戏内显示。"
+            )
         )
         skin_note.setObjectName("Tiny")
         skin_note.setWordWrap(True)
@@ -619,8 +633,10 @@ class AccountsPage(QWidget):
         body.addWidget(right_scroll)
 
         tip = QLabel(
-            "提示：微软正版登录采用设备码流程，不会接触你的密码；第三方登录需要填写服务器地址与密码，"
-            "密码不会保存，只保存登录令牌。"
+            self.tr(
+                "提示：微软正版登录采用设备码流程，不会接触你的密码；第三方登录需要填写服务器地址与密码，"
+                "密码不会保存，只保存登录令牌。"
+            )
         )
         tip.setObjectName("Muted")
         tip.setWordWrap(True)
@@ -633,17 +649,19 @@ class AccountsPage(QWidget):
         self.table.blockSignals(True)
         self.table.setRowCount(len(accounts))
         for row, account in enumerate(accounts):
-            name_item = QTableWidgetItem(account.name or "未命名")
+            name_item = QTableWidgetItem(account.name or t("AccountsPage", "未命名"))
             name_item.setData(Qt.UserRole, account.id)
             if account.id == selected_id:
                 font = name_item.font()
                 font.setBold(True)
                 name_item.setFont(font)
-                name_item.setToolTip("当前账号")
+                name_item.setToolTip(t("AccountsPage", "当前账号"))
             self.table.setItem(row, 0, name_item)
-            self.table.setItem(row, 1, QTableWidgetItem(account.type_label))
-            status = "已登录" if account.type == "offline" else (
-                "令牌有效" if account.access_token and not account.token_expired else "需要重新登录"
+            self.table.setItem(row, 1, QTableWidgetItem(t("AccountsPage", account.type_label)))
+            status = t("AccountsPage", "已登录") if account.type == "offline" else (
+                t("AccountsPage", "令牌有效")
+                if account.access_token and not account.token_expired
+                else t("AccountsPage", "需要重新登录")
             )
             self.table.setItem(row, 2, QTableWidgetItem(status))
             if account.id == selected_id:
@@ -663,7 +681,7 @@ class AccountsPage(QWidget):
     def _show_selected(self) -> None:
         account = self.ctx.accounts.get(self._current_account_id())
         if account is None:
-            self.name_label.setText("未选择账号")
+            self.name_label.setText(self.tr("未选择账号"))
             self.avatar.clear()
             self.uuid_label.setText("")
             self.server_label.setText("")
@@ -674,14 +692,22 @@ class AccountsPage(QWidget):
             self._update_skin_card(None)
             return
         self.avatar.setPixmap(make_avatar(account.name or "Steve", 72))
-        suffix = "（当前）" if account.id == self.ctx.accounts.selected_id else ""
+        suffix = t("AccountsPage", "（当前）") if account.id == self.ctx.accounts.selected_id else ""
         self.name_label.setText(account.name + suffix)
         kinds = {"offline": "gray", "microsoft": "blue", "authlib": "orange"}
-        self.type_badge.setText(account.type_label)
+        self.type_badge.setText(t("AccountsPage", account.type_label))
         self.type_badge.set_kind(kinds.get(account.type, "gray"))
-        self.uuid_label.setText(f"UUID：{account.uuid or '未绑定'}")
+        self.uuid_label.setText(
+            t(
+                "AccountsPage",
+                "UUID：{0}",
+                account.uuid or t("AccountsPage", "未绑定"),
+            )
+        )
         self.server_label.setText(
-            f"验证服务器：{account.auth_server}" if account.auth_server else ""
+            t("AccountsPage", "验证服务器：{0}", account.auth_server)
+            if account.auth_server
+            else ""
         )
         self.expire_label.setText(self._token_validity_text(account))
         self.use_button.setEnabled(account.id != self.ctx.accounts.selected_id)
@@ -696,18 +722,30 @@ class AccountsPage(QWidget):
         parts: list[str] = []
         if account.last_refresh:
             parts.append(
-                "上次刷新："
+                t("AccountsPage", "上次刷新：")
                 + time.strftime("%Y-%m-%d %H:%M", time.localtime(account.last_refresh))
             )
         if account.expires_at:
             remain = account.expires_at - time.time()
             if remain <= 0:
-                state = "已过期"
+                state = t("AccountsPage", "已过期")
             elif remain >= 3600:
-                state = f"剩余 {int(remain // 3600)} 小时 {int(remain % 3600 // 60)} 分"
+                state = t(
+                    "AccountsPage",
+                    "剩余 {0} 小时 {1} 分",
+                    int(remain // 3600),
+                    int(remain % 3600 // 60),
+                )
             else:
-                state = f"剩余 {max(1, int(remain // 60))} 分钟"
-            parts.append(f"有效期至 {time.strftime('%m-%d %H:%M', time.localtime(account.expires_at))}（{state}）")
+                state = t("AccountsPage", "剩余 {0} 分钟", max(1, int(remain // 60)))
+            parts.append(
+                t(
+                    "AccountsPage",
+                    "有效期至 {0}（{1}）",
+                    time.strftime("%m-%d %H:%M", time.localtime(account.expires_at)),
+                    state,
+                )
+            )
         return " · ".join(parts)
 
     # ------------------------------------------------------------------
@@ -727,13 +765,15 @@ class AccountsPage(QWidget):
         self.skin_model_combo.setEnabled(editable)
         self.skin_local_button.setEnabled(account is not None and not self._skin_uploading)
         self.skin_search_button.setEnabled(not self._skin_uploading)
-        self.skin_hint.setText("仅微软正版账号可上传皮肤；离线/外置账号请到对应皮肤站修改。")
+        self.skin_hint.setText(
+            self.tr("仅微软正版账号可上传皮肤；离线/外置账号请到对应皮肤站修改。")
+        )
         if account is None:
-            self.skin_status.setText("未选择账号")
+            self.skin_status.setText(self.tr("未选择账号"))
         elif account.type != "microsoft":
-            self.skin_status.setText("当前账号类型不支持上传皮肤")
+            self.skin_status.setText(self.tr("当前账号类型不支持上传皮肤"))
         elif not account.access_token:
-            self.skin_status.setText("登录状态已失效，请刷新登录令牌")
+            self.skin_status.setText(self.tr("登录状态已失效，请刷新登录令牌"))
 
     def _sync_skin_preview(self, account: Account | None, microsoft: bool) -> None:
         """只负责预览图与本地/远程皮肤状态文案。"""
@@ -751,7 +791,7 @@ class AccountsPage(QWidget):
                 self._skin_url = ""
                 self._skin_image = image
                 self.skin_preview.set_skin(image)
-                self.skin_status.setText("本地皮肤 · 启动时自动应用")
+                self.skin_status.setText(self.tr("本地皮肤 · 启动时自动应用"))
                 self.skin_hint.setText(
                     "本地皮肤会写入 CustomSkinLoader/LocalSkin，需安装 CustomSkinLoader 才能在游戏内显示。"
                 )
@@ -764,14 +804,14 @@ class AccountsPage(QWidget):
             self._skin_image = None
             self.skin_preview.clear_skin()
             if microsoft:
-                self.skin_status.setText("尚未设置自定义皮肤")
+                self.skin_status.setText(self.tr("尚未设置自定义皮肤"))
             return
         if url != self._skin_url:
             self._start_skin_preview(url)
         elif self._skin_image is not None:
             self.skin_preview.set_skin(self._skin_image)
             if microsoft:
-                self.skin_status.setText("皮肤预览已加载")
+                self.skin_status.setText(self.tr("皮肤预览已加载"))
 
     def _on_skin_model_changed(self) -> None:
         self.skin_preview.set_model(str(self.skin_model_combo.currentData() or "classic"))
@@ -788,9 +828,9 @@ class AccountsPage(QWidget):
         self._skin_url = url
         self._skin_image = None
         self.skin_preview.clear_skin()
-        self.skin_status.setText("正在加载皮肤预览…")
+        self.skin_status.setText(self.tr("正在加载皮肤预览…"))
         if not url.lower().startswith(("http://", "https://")):
-            self.skin_status.setText("皮肤地址无效")
+            self.skin_status.setText(self.tr("皮肤地址无效"))
             return
         request = QNetworkRequest(QUrl(url))
         request.setRawHeader(b"User-Agent", USER_AGENT.encode("utf-8"))
@@ -810,21 +850,23 @@ class AccountsPage(QWidget):
         if failed or not data or not image.loadFromData(data, "PNG") or image.isNull():
             self._skin_image = None
             self.skin_preview.clear_skin()
-            self.skin_status.setText("皮肤预览下载失败")
+            self.skin_status.setText(self.tr("皮肤预览下载失败"))
             return
         self._skin_image = image
         self.skin_preview.set_skin(image)
-        self.skin_status.setText("皮肤预览已加载")
+        self.skin_status.setText(self.tr("皮肤预览已加载"))
 
     def _choose_skin_file(self) -> None:
         account = self.ctx.accounts.get(self._current_account_id())
         if account is None or account.type != "microsoft" or not account.access_token:
-            QMessageBox.warning(self, APP_NAME, "只有已登录的微软正版账号可以上传皮肤。")
+            QMessageBox.warning(
+                self, APP_NAME, self.tr("只有已登录的微软正版账号可以上传皮肤。")
+            )
             return
         if self._skin_uploading:
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择皮肤文件", str(Path.home()), "PNG 图片 (*.png)"
+            self, self.tr("选择皮肤文件"), str(Path.home()), "PNG 图片 (*.png)"
         )
         if not path:
             return
@@ -832,8 +874,8 @@ class AccountsPage(QWidget):
         self._skin_uploading = True
         self.skin_upload_button.setEnabled(False)
         self.skin_model_combo.setEnabled(False)
-        self.skin_upload_button.setText("正在上传…")
-        self.skin_status.setText("正在上传皮肤，请稍候…")
+        self.skin_upload_button.setText(self.tr("正在上传…"))
+        self.skin_status.setText(self.tr("正在上传皮肤，请稍候…"))
         worker = SkinUploadWorker(account, path, slim, self.ctx.bus.log.emit, self)
         worker.ok.connect(self._on_skin_uploaded)
         worker.failed.connect(self._on_skin_upload_failed)
@@ -847,10 +889,10 @@ class AccountsPage(QWidget):
             worker.account.skin_url = skin_url
             self.ctx.accounts.update(worker.account)
             self.ctx.bus.accounts_changed.emit()
-        QMessageBox.information(self, APP_NAME, "皮肤已上传，重新进入游戏生效。")
+        QMessageBox.information(self, APP_NAME, self.tr("皮肤已上传，重新进入游戏生效。"))
 
     def _on_skin_upload_failed(self, message: str) -> None:
-        self.skin_status.setText("皮肤上传失败")
+        self.skin_status.setText(self.tr("皮肤上传失败"))
         QMessageBox.warning(self, APP_NAME, message)
 
     def _on_skin_upload_finished(self) -> None:
@@ -859,7 +901,7 @@ class AccountsPage(QWidget):
         if worker is not None:
             worker.deleteLater()
         self._skin_uploading = False
-        self.skin_upload_button.setText("上传皮肤…")
+        self.skin_upload_button.setText(self.tr("上传皮肤…"))
         self._update_skin_card(self.ctx.accounts.get(self._current_account_id()))
 
     # ---------- 本地皮肤 / 正版皮肤搜索 ----------
@@ -869,7 +911,7 @@ class AccountsPage(QWidget):
             QMessageBox.information(self, APP_NAME, "请先选择或创建一个账号。")
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择本地皮肤", str(Path.home()), "PNG 图片 (*.png)"
+            self, self.tr("选择本地皮肤"), str(Path.home()), "PNG 图片 (*.png)"
         )
         if not path:
             return
@@ -897,11 +939,15 @@ class AccountsPage(QWidget):
         account = self.ctx.accounts.get(self._current_account_id())
         default = account.name if account is not None else ""
         name, ok = QInputDialog.getText(
-            self, "搜索正版皮肤", "输入正版账号名：", QLineEdit.Normal, default
+            self,
+            self.tr("搜索正版皮肤"),
+            self.tr("输入正版账号名："),
+            QLineEdit.Normal,
+            default,
         )
         if not ok or not name.strip():
             return
-        self.skin_status.setText(f"正在查询 {name.strip()} 的皮肤…")
+        self.skin_status.setText(t("AccountsPage", "正在查询 {0} 的皮肤…", name.strip()))
         self.skin_search_button.setEnabled(False)
         worker = SkinLookupWorker(name.strip(), DATA_DIR / "skins", self)
         self._skin_lookup_worker = worker
@@ -925,8 +971,14 @@ class AccountsPage(QWidget):
             return
         answer = QMessageBox.question(
             self,
-            "应用皮肤",
-            f"已获取 {name} 的皮肤（{model}）。\n是否保存到当前账号「{account.name}」作为本地皮肤？",
+            self.tr("应用皮肤"),
+            t(
+                "AccountsPage",
+                "已获取 {0} 的皮肤（{1}）。\n是否保存到当前账号「{2}」作为本地皮肤？",
+                name,
+                model,
+                account.name,
+            ),
         )
         if answer != QMessageBox.Yes:
             return
@@ -996,7 +1048,9 @@ class AccountsPage(QWidget):
         self._sync_current()
         self.ctx.bus.accounts_changed.emit()
         account = self.ctx.accounts.selected()
-        self.ctx.bus.toast.emit(f"当前账号：{account.name}（{account.type_label}）")
+        self.ctx.bus.toast.emit(
+            f"当前账号：{account.name}（{t('AccountsPage', account.type_label)}）"
+        )
 
     def _sync_current(self) -> None:
         account = self.ctx.accounts.selected()

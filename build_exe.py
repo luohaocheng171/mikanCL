@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -60,6 +61,12 @@ def main() -> int:
     icon = ROOT / "assets" / "mikan.ico"
     if icon.exists():
         command += ["--icon", str(icon)]
+    translations = ROOT / "mc_launcher" / "translations"
+    if translations.is_dir():
+        command += [
+            "--add-data",
+            f"{translations}{os.pathsep}mc_launcher/translations",
+        ]
     command.append(str(ROOT / "run.py"))
 
     print("执行：", " ".join(command))

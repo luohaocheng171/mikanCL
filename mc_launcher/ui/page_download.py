@@ -514,7 +514,9 @@ class ChainInstallWorker(QThread):
             json_path = game_dir / "versions" / mc_version / f"{mc_version}.json"
             if json_path.exists():
                 self.log.emit(f"[安装] 原版 {mc_version} 已存在，跳过下载。")
-                self.progress.emit(Progress("检查原版", 0.05, mc_version))
+                self.progress.emit(
+                    Progress(stage="检查原版", percent=0.05, detail=mc_version)
+                )
             else:
                 self.log.emit(f"[安装] 开始安装原版 {mc_version}")
                 installer.install_version(self.entry)
@@ -536,7 +538,11 @@ class ChainInstallWorker(QThread):
                     self.log.emit(f"[加载器] {hint}")
                 label = LOADER_LABELS.get(self.kind, self.kind)
                 self.progress.emit(
-                    Progress("安装加载器", 0.6, f"{label} {self.loader_version}".strip())
+                    Progress(
+                        stage="安装加载器",
+                        percent=0.6,
+                        detail=f"{label} {self.loader_version}".strip(),
+                    )
                 )
                 final_id = install_loader(
                     installer,
@@ -550,7 +556,7 @@ class ChainInstallWorker(QThread):
                 if self.kind == "fabric":
                     self._install_fabric_api(mc_version)
 
-            self.progress.emit(Progress("安装完成", 1.0, final_id))
+            self.progress.emit(Progress(stage="安装完成", percent=1.0, detail=final_id))
             self.done.emit(final_id)
         except Cancelled:
             self.failed.emit("安装已取消。")
@@ -562,7 +568,9 @@ class ChainInstallWorker(QThread):
     def _install_fabric_api(self, mc_version: str) -> None:
         """Fabric 安装完成后自动附带 Fabric API；失败仅记录警告。"""
         try:
-            self.progress.emit(Progress("安装 Fabric API", 0.9, "正在查找项目"))
+            self.progress.emit(
+                Progress(stage="安装 Fabric API", percent=0.9, detail="正在查找项目")
+            )
             self.log.emit("[内容] 正在查找 Fabric API…")
             projects = self.ctx.content.search(
                 "modrinth", "mod", "fabric api", mc_version, "fabric", 0, 10
@@ -1451,8 +1459,11 @@ class DownloadPage(QWidget):
                 self._install_task_id,
                 percent=progress.percent,
                 status="安装中",
-                detail=f"{progress.stage} · {detail}" if detail else progress.stage,
+                stage=progress.stage,
+                detail=detail,
                 speed=progress.speed,
+                files_done=progress.files_done,
+                files_total=progress.files_total,
             )
 
     def _on_install_done(self, final_version_id: str) -> None:
