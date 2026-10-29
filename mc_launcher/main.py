@@ -154,9 +154,7 @@ def main() -> None:
     def final_save() -> None:
         """退出前兜底落盘，避免异常关闭时丢失配置与账号。"""
         # 取消尚未触发的防抖写盘，避免与同步 save() 争用同一个临时文件
-        timer = getattr(context.config, "_save_timer", None)
-        if timer is not None:
-            timer.cancel()
+        context.config.cancel_debounced_save()
         for store in (context.config, context.accounts):
             try:
                 store.save()

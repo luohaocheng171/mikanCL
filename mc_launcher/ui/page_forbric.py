@@ -180,8 +180,8 @@ class ForbricPage(QWidget):
         worker.failed.connect(self._on_failed)
         cache = CACHE_DIR / "forbric"
         task = self.ctx.downloads.submit(
-            label="Forbric 安装",
             kind="纯下载",
+            name="Forbric 安装",
             factory=lambda _t: worker,
             cancel=lambda: worker.cancel(),
             target_dir=str(cache),

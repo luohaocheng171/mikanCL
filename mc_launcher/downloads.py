@@ -227,6 +227,9 @@ class DownloadManager(QObject):
         task.finished_at = 0.0
         task.started_at = 0.0
         task.worker = None
+        # 旧的 cancel 绑定的是上一次 worker 的事件，重建时必须丢弃；
+        # rebuild 的 factory 会为新的 worker 重新创建事件并回填 task.cancel
+        task.cancel = None
         if task.pause_event is not None:
             task.pause_event.clear()
         task.factory = task.rebuild

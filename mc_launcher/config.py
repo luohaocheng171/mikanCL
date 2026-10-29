@@ -391,6 +391,11 @@ class Config:
 
     # ---- 运行时 ----
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+    # 防抖写盘：计时器与创建/取消它的锁都在这里声明，避免运行时临时挂属性
+    _save_timer: threading.Timer | None = field(default=None, repr=False, compare=False)
+    _save_guard: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
+    )
 
     def source_list(self) -> list[DownloadSource]:
         """启用中的源，按 priority 升序。"""
@@ -718,13 +723,27 @@ class Config:
 
     def save_debounced(self, delay: float = 0.4) -> None:
         """高频设置变更（输入框、滑块）合并写盘，退出时仍用同步 save()。"""
-        timer = getattr(self, "_save_timer", None)
+        with self._save_guard:
+            if self._save_timer is not None:
+                self._save_timer.cancel()
+            timer = threading.Timer(delay, self._flush_debounced_save)
+            timer.daemon = True
+            self._save_timer = timer
+            timer.start()
+
+    def cancel_debounced_save(self) -> None:
+        """取消尚未触发的防抖写盘，退出前调用以免与同步 save() 争用临时文件。"""
+        with self._save_guard:
+            timer = self._save_timer
+            self._save_timer = None
         if timer is not None:
             timer.cancel()
-        timer = threading.Timer(delay, self.save)
-        timer.daemon = True
-        self._save_timer = timer
-        timer.start()
+
+    def _flush_debounced_save(self) -> None:
+        """防抖回调：先清掉计时器引用再落盘，保证状态与 cancel_debounced_save 一致。"""
+        with self._save_guard:
+            self._save_timer = None
+        self.save()
 
     @classmethod
     def load(cls) -> "Config":

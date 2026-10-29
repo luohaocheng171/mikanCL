@@ -814,6 +814,9 @@ class LaunchWorker(QThread):
         self.game_dir = game_dir
         self.account = account
         self.cancel_event = threading.Event()
+        # 预检阻塞项等待用户确认：事件与结果在构造时声明，避免运行时临时挂属性
+        self._preflight_wait = threading.Event()
+        self._preflight_continue = False
         self.installer: GameInstaller | None = None
         self.session = None
 
@@ -824,7 +827,7 @@ class LaunchWorker(QThread):
             self.ctx, self.version_id, root_dir, int(self.memory_mb), self.log.emit
         )
         if preflight["blocked"]:
-            self._preflight_wait = threading.Event()
+            self._preflight_wait.clear()
             self._preflight_continue = False
             self.preflight_blocked.emit(preflight["blocked"])
             if not self._preflight_wait.wait(120):
