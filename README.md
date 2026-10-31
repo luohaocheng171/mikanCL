@@ -41,11 +41,11 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 
 | 皮肤工厂（像素编辑器 + 3D 预览） | 世界种子 · 3D 地形预览 |
 | :---: | :---: |
-| ![皮肤工厂](assets/screenshots/skin_factory.png) | ![地形预览](assets/screenshots/terrain_preview.png) |
+|  |
 
 | 毛玻璃（Acrylic）界面 | 主界面（深色主题） |
 | :---: | :---: |
-| ![毛玻璃界面](assets/screenshots/acrylic_ui.png) | ![Logo](assets/mikan.png) |
+|  | ![Logo](assets/mikan.png) |
 
 > 上图为功能效果示意图；皮肤工厂、种子地形、毛玻璃均可在「设置 → 外观 / 功能开关」中开启或关闭，关闭动画可进一步降低 GPU 占用。
 
