@@ -1,6 +1,8 @@
-# MikanCL v4.3.0 官方文档
+# MikanCL v4.6.2 官方文档
 
 <div align="center">
+
+<img src="assets/mikan.png" width="96" alt="MikanCL Logo" />
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![PySide6](https://img.shields.io/badge/PySide6-Qt6-brightgreen.svg)](https://www.qt.io/)
@@ -22,7 +24,7 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 
 ### 版本信息
 
-- **当前版本**：v4.3.0
+- **当前版本**：v4.6.2
 - **框架**：PySide6（Qt6，Fusion 深色主题 + 自绘标题栏）
 - **Python 要求**：3.10+
 - **运行平台**：Windows 10 / 11（x64）
@@ -35,6 +37,20 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 
 ---
 
+## 运行截图与效果图
+
+| 皮肤工厂（像素编辑器 + 3D 预览） | 世界种子 · 3D 地形预览 |
+| :---: | :---: |
+| ![皮肤工厂](assets/screenshots/skin_factory.png) | ![地形预览](assets/screenshots/terrain_preview.png) |
+
+| 毛玻璃（Acrylic）界面 | 主界面（深色主题） |
+| :---: | :---: |
+| ![毛玻璃界面](assets/screenshots/acrylic_ui.png) | ![Logo](assets/mikan.png) |
+
+> 上图为功能效果示意图；皮肤工厂、种子地形、毛玻璃均可在「设置 → 外观 / 功能开关」中开启或关闭，关闭动画可进一步降低 GPU 占用。
+
+---
+
 ## MikanCL 能做什么
 
 它不是「只能点启动」的壳子：从装版本、装加载器、装整合包，到找 Mod、找材质包、开联机、换 Java、查崩溃原因，都在同一个窗口里完成。
@@ -42,6 +58,7 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 | 你想做的事 | MikanCL 里的做法 |
 | :--- | :--- |
 | 装一个原版游戏 | 「下载安装」选版本 → 自动下载客户端、依赖库、natives、3000+ 资源文件 → 主页双击启动 |
+| 装基岩版（Bedrock） | 「基岩版」页按 MCAPPX 历史版本 / 微软商店正式版 / 预览版分类浏览，点「在浏览器下载」用内置 Edge 内核打开下载页，下载完成的 Appx 自动归档到本地，再一键安装、启动或卸载 |
 | 加 Forge / Fabric / NeoForge / Quilt / LiteLoader | 同一页面选择加载器版本一键安装，自动匹配所需 Java 主版本 |
 | 装整合包 | 拖进窗口或拖进「整合包」页 → 自动装基础版本 → 装加载器 → 刷入 overrides → 注册独立实例 |
 | 找 Mod、整合包、资源包、光影包、材质包 | 「内容中心」双平台搜索，可按 MC 版本 / 加载器 / 材质分辨率过滤，一键装进实例或另存为 |
@@ -49,11 +66,14 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 | 和朋友联机 | 「多人联机」用陶瓦（Terracotta）房间码组网，无需端口映射或公网 IP |
 | 换 Java / 装 Java | 「Java 中心」一键下载 6 家发行版；「设置」里手动指定或自动匹配 |
 | 管账号与皮肤 | 微软正版设备码登录、皮肤站外置登录、离线账号，皮肤查询 / 上传 / 本地皮肤 |
-| 排查「装上了但起不来」 | 启动预检 5 项拦截 + Mod 冲突检测 + 界面日志与 `install_error.log` 落盘 |
+| 排查「装上了但起不来」 | 启动预检 5 项拦截 + Mod 冲突检测 + 崩溃弹窗一键「去装对应 Java」「补全缺失文件」「修复版本」+ 启动卡死看门狗 + 界面日志与 `install_error.log` 落盘 |
 | 不会装 / 装崩了想查教程 | 「教程中心」内置 8 篇 Markdown 攻略（Forge / Fabric / 光影 / 内存 / Mod 冲突 / Java / NBT / 离线皮肤），支持标题与正文搜索 |
 | 想改世界种子 / 游戏模式 | 「NBT 编辑器」可视化读写 `level.dat` 与 `playerdata/*.dat`，双击改值、右键增删标签，首次保存自动备份 `.bak` |
 | 多个版本互不干扰 | 4 种隔离模式（不隔离 / 仅模组 / 仅存档 / 全部隔离），整合包自动独立目录 |
 | 小屏幕 / 想调窗口 | 无边框窗口可拖四边四角自由缩放，默认 1080×680，内容放不下自动变滚轮滚动 |
+| 自己画皮肤（含第二层遮罩） | 「皮肤工厂」像素级编辑 64×64 皮肤，画笔 / 橡皮 / 填充 / 取色 / 加亮 / 加深 / 直线 / 矩形 / 椭圆 / 喷枪十种工具，镜像对称、撤销重做、缩放与网格开关，按部位高亮 UV；最多 8 层多层绘画（新建 / 删除 / 排序 / 显隐，导出自动合并）；右侧 3D 模型支持选中部位后直接作画（底层 / 第二层可切换，左转 / 右转 / 复位视角按钮或滑块旋转、自动旋转），可保存到多皮肤库或一键应用到当前账号 |
+| 挑世界种子不想进游戏 | 「世界种子」页输入种子 → 启动器调用本机 Java 执行内嵌 TerrainGen（与 Minecraft 相同的 ImprovedNoise 柏林噪声算法与参数）生成高度图 → 内联 WebGL 把地形渲染成 Minecraft 风格方块（体素柱：平顶 + 阶梯侧面），按钮 / 拖动旋转、缩放、平移、复位与自动旋转，支持尺寸 / 起伏调节与高度图导出 |
+| 想要更炫的界面又怕卡 | 页面切换淡入淡出动画 + Windows DWM 毛玻璃背景，均在「设置 → 外观」中开关，关闭可降低 GPU / 内存占用 |
 
 ---
 
@@ -124,8 +144,26 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 21. **账号头像即皮肤头部**
     主页卡片、侧边栏与账号详情不再用随机像素头像，而是直接从皮肤文件裁出「头部 + 帽子层」生成圆角头像；本地无皮肤时异步拉取 `skin_url` 补全，失败自动回退像素头像。
 
-22. **浏览器登录态持久化**
-    内置浏览器使用命名持久化 Profile，启动时主动加载磁盘 Cookie、退出时主动落盘，B 站 / 皮肤站等站点一次登录长期有效；QtWebEngine 缺少 H.264 无法播放部分视频时，可一键「系统浏览器」打开当前页。
+22. **浏览器用 Edge 内核，视频直接能看**
+    内置浏览器默认托管系统自带的 Edge WebView2（完整 Chromium，自带 H.264/AAC），B 站视频在启动器里直接播放、支持全屏，不需要再切系统浏览器；Cookie 与登录态存在 `data/browser/webview2`，一次登录长期有效。只有系统缺失 WebView2 运行时时才回退到 QtWebEngine，并显示「视频可能无法播放」的提示条。
+
+23. **崩溃一键修复**
+    崩溃弹窗直接给修复入口：识别到 `UnsupportedClassVersionError` 时提供「去装 Java 21」（自动跳 Java 中心并预选发行版与主版本）；`libraries` / `assets` 缺失时提供「补全缺失文件」（复用 `ensure_version()` 只补缺口）；版本 JSON 损坏时在版本设置里提供「修复版本」（备份坏 JSON、从清单重拉写回，保留本地 jar 与库）。
+
+24. **启动卡死看门狗**
+    启动后 30 秒内既没检测到游戏窗口、进程又仍存活（或 CPU 时间始终为 0）时，日志写入「游戏可能卡在初始化」并弹出「强制结束并查看日志」按钮，复用窗口轮询结果，不额外开销。
+
+25. **安装前磁盘空间预估**
+    「安装所选版本」前按清单估算所需空间（客户端 + 依赖库 + 资源索引 objects 总大小），本地还没有版本 JSON 时在线估算，资源索引拉不到按 350MB 兜底；空间不足提前提示「约需 X GB，当前剩 Y GB」，而不是下到一半失败。
+
+26. **版本目录一键清理与启动脚本导出**
+    版本设置里可一键清理启动器日志（保留最近 3 个）、`versions/*/natives`、`*.tmp` / `*.part` 与 7 天前的 `crash-reports`；还能把当前版本导出为 `.bat` / `.ps1` 启动脚本（含完整命令行与工作目录），方便脱离启动器直接运行或排查是否是启动器问题。
+
+27. **首次启动强制同意用户协议**
+    未同意当前协议版本时，启动会先弹出协议确认框：全部条款以标签页并列展示（非官方声明、账号与登录、内容与下载、数据与运行风险、隐私、免责、协议变更共 7 项），确认勾选框与「同意 / 不同意」按钮固定在标签页下方，未勾选时「同意」不可点击；点「不同意」直接退出，不进入主界面。同意后把版本号与时间写入 `data/config.json`，此后不再打扰；协议文档随程序内置 5 种语言。设置 → 关于页可随时重新查看全文，也可关闭「启动前提示」（协议版本升级时会再次要求确认）。
+
+28. **更多细节**
+    NBT 编辑器顶部搜索框可按 key 跳转并高亮匹配节点；皮肤预览补上披风层（64×64 皮肤的 `(0,0,10,16)` 区域，配合皮肤站 `cape_url` 一起贴）；多人联机房间码 26px 等宽大字并支持一键复制（2 秒内显示「已复制 ✓」）；教程中心支持「新建教程」，在 `data/wiki/<语言代码>/` 下创建空 Markdown 并调用系统编辑器打开，刷新后出现在列表里。
 
 ---
 
@@ -234,6 +272,17 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 - **双格式备份**：支持 CurseForge 分享格式（manifest.json + overrides）与私有 `.mikan` 备份格式（`instance.json` + 内容），可导入、可导出；也可单独「导出整合包源文件」
 - **实例注册**：安装成功后写入 `instance.json`、自动选中实例、刷新主页版本列表
 
+### 基岩版（Bedrock）
+
+- **分类版本列表**：与 Java 版一致的卡片式页面，左侧分类下拉框提供「历史版本（MCAPPX）」「微软商店 · 正式版」「微软商店 · 预览版」三类来源，配合架构（自动 / x64 / x86 / arm）与关键字搜索过滤，表格展示版本、架构、大小、发布日期、来源与状态
+- **离线目录**：内置 `mc_launcher/data/bedrock_catalog.json`（随 exe 打包），收录 32 个主版本、82 条具体发行版（含 1.8、1.8.1 等历史版本），记录包 ID、各架构体积、SHA256 与 mcappx 直链
+- **浏览器下载**：表格中每个版本提供「在浏览器下载」，点击后切到内置浏览器（优先 Edge / WebView2 内核）打开该版本下载页，由 Edge 的下载能力完成保存（内嵌下载气泡可查看进度），不再依赖启动器内置的离线直链
+- **下载自动归档**：监听系统「下载」文件夹，新出现的 `.appx` / `.msix` / `.appxbundle` / `.msixbundle` 会延迟 1.5 秒后自动归档到基岩版下载目录，并提示可「从本地安装」
+- **一键安装**：下载完成后点击「从本地安装」选择安装包，调用 `Add-AppxPackage -ForceUpdateFromAnyVersion` 安装（微软签名包无需开发者模式），首次失败会自动补装 VCLibs 等运行库依赖后重试
+- **启动与卸载**：安装完成后页面顶部显示已安装版本、架构与安装位置，按钮「启动基岩版」通过 `explorer.exe shell:AppsFolder\<AUMID>` 拉起游戏（AUMID 由 `Get-AppxPackageManifest` 解析，失败回退官方标识），并可一键卸载；下载目录可一键打开
+- **下载中心集成**：基岩版本地安装任务统一进入下载中心，支持暂停、取消、重试与打开目录，界面按版本与架构展示当前阶段
+- **与 Java 版统一入口**：下载页顶部提供「基岩版」入口卡片；启动页版本列表把已安装基岩版作为独立条目置顶并标注「基岩版」徽标，选中后可直接启动（无需 Java），并参与版本统计与搜索
+
 ### 账号与皮肤
 
 - **微软正版登录**：设备码（Device Code）OAuth 流程，自动刷新令牌
@@ -244,7 +293,7 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 
 ### 扩展与实验性功能
 
-- **内置浏览器**：QtWebEngine 内置页面，便于查看 MC 百科、Mod 页面、皮肤站；已开启 HTML5 视频自动播放与全屏支持；使用命名持久化 Profile，启动时加载 Cookie、退出时落盘，登录状态跨会话保留；缺少 H.264 的站点可一键用「系统浏览器」打开当前页
+- **内置浏览器**：优先用 ctypes 托管系统 Edge WebView2 内核（完整 Chromium，H.264/AAC 齐全），B 站等站点视频直接在启动器内播放并支持全屏，多标签、弹窗转标签、Ctrl+T / Ctrl+W 快捷键齐备；用户数据目录固定在 `data/browser/webview2`，Cookie 与登录态自动持久化。系统缺失 WebView2 运行时（Windows 10/11 一般已预装）时自动回退到 QtWebEngine，并亮出「视频可能无法播放 / 用系统浏览器打开」提示条
 - **教程中心**：内置 8 篇 Markdown 攻略，左侧目录 + 右侧渲染，支持搜索、内部锚点与外链跳转，可从教程页直接打开 NBT 编辑器
 - **NBT 编辑器**：纯手写 NBT 读写（13 种标签、gzip 自动识别、类型完整保留），树形查看 / 编辑 `level.dat` 与 `playerdata`，右键增删标签，首次保存自动生成 `.bak`
 - **Java 中心**：Adoptium Temurin、Microsoft OpenJDK、Azul Zulu、Amazon Corretto、Alibaba Dragonwell、Tencent Kona 六大发行版，按主版本（8 / 11 / 17 / 21）下载安装，自动解压到 `data/` 并在设置中选中
@@ -367,6 +416,20 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | 展示 | 搜索结果返回后由 `TranslateWorker` 后台逐张补名，命中即刷新卡片，不阻塞列表渲染 |
 | 搜索 | `translate_query()` 本地词表优先，未命中再走在线词典，把中文反查为英文项目名 |
 
+### 10. 基岩版安装与启动链路
+
+基岩版走的是「UWP 安装包」路径，与 Java 版完全不同：
+
+| 环节 | 实现 |
+| :--- | :--- |
+| 版本目录 | 内置 `mc_launcher/data/bedrock_catalog.json`（32 个主版本 / 82 条发行版），标记包 ID、架构、体积与直链；1.8.1 另含 SHA256 |
+| 商店直链 | `POST store.rg-adguard.net/api/GetFiles`（`type=url`、`ring=Retail/RP`），正则解析 `.appx` 链接；链接中的 `&amp;` 必须 `html.unescape()`，否则 CDN 返回 403 |
+| 下载 | 自研 `MultiPartDownload`：Range 探测真实总大小 → 按 2 MB 最小分段切分 → 线程池并发写入 `.partN` → 合并 → SHA256/SHA1 校验；已存在分片参与续传，进度回调传绝对字节数保证单调 |
+| 安装 | `Add-AppxPackage -Path ... -ForceUpdateFromAnyVersion -ForceApplicationShutdown`，微软签名包无需开发者模式；PowerShell 输出交给独立线程 + 队列读取，标记 `INSTALL_OK` 出现后额外等待收尾，避免超时误杀 |
+| 依赖 | 首次安装失败时自动从商店清单取 VCLibs 等依赖补装并重试一次（本地安装包同样适用） |
+| 启动 | `Get-AppxPackageManifest` 解析 `包族名!应用Id` → `explorer.exe shell:AppsFolder\<AUMID>`；20 秒后检查主进程是否真的起来 |
+| 失败诊断 | 读取 `Microsoft-Windows-TWinUI/Operational` 的激活失败事件（Id 5961），把 `0x803F8001`（无授权）等 HRESULT 译成可读提示 |
+
 ---
 
 ## 内部接口参考
@@ -385,6 +448,8 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | `mc_launcher/downloads.py` | 下载中心任务模型与调度（并发上限、暂停 / 恢复 / 取消 / 重试） |
 | `mc_launcher/java.py` | Java 探测、版本匹配、Java 下载与解压 |
 | `mc_launcher/forbric.py` | Forbric 安装器获取 / 下载 / 启动、版本结果轮询 |
+| `mc_launcher/bedrock.py` | 基岩版：离线版本目录加载、微软商店文件接口、多线程分块下载、`Add-AppxPackage` 安装、AUMID 解析与启动 / 卸载 |
+| `mc_launcher/terrain_java.py` | 内嵌 TerrainGen.java（与 Minecraft 相同的 ImprovedNoise 柏林噪声 + persistence 0.5 / lacunarity 2 多层叠加），自动 `javac` 编译或 Java 11+ 单文件启动，输出高度图与彩色 PNG |
 | `mc_launcher/nbt.py` | 最小 NBT 读写（13 种标签 / gzip 自动识别），含保留标签类型的 typed 变体 |
 | `mc_launcher/terracotta.py` | 陶瓦联机发行包下载校验、进程管理与本地 HTTP API |
 | `mc_launcher/cn_source.py` | MC百科译名查询、节流与 `cn_names.json` 缓存（可选在线词典） |
@@ -408,11 +473,14 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | 版本设置 | `ControlPage` | 单版本 Java / 内存 / 参数 / 隔离、Mod 管理、资源包、光影、存档、日志 |
 | Mod 加载器 | `LoadersPage` | 左侧按 MC 版本浏览，右侧列出该版本可用的加载器版本（最多 12 行），一键安装 |
 | 多人联机 | `MultiplayerPage` | 陶瓦联机安装、创建 / 加入房间、房间码复制、联机日志 |
-| 内置浏览器 | `BrowserPage` | QtWebEngine 浏览页、Cookie 登录态持久化、系统浏览器回退 |
+| 内置浏览器 | `BrowserPage` + `webview2.py` | Edge WebView2 内核（可直接播放 B 站视频）、多标签、Cookie 持久化、QtWebEngine 回退 |
 | Forbric | `ForbricPage` | 版本兼容拦截、安装器下载与 GUI 启动、结果监控 |
 | Java 中心 | `JavaCenterPage` | 六大 Java 发行版下载与安装 |
 | 教程中心 | `WikiPage` | 内置 8 篇 Markdown 教程（中/英/俄/法/日）、目录浏览、标题与正文搜索、NBT 编辑器入口 |
-| 设置 | `SettingsPage` | 数据目录、下载源、线程数（1–328）、代理、API Key、镜像、界面选项（含启动动画开关）、主题色与背景、插件目录 |
+| 基岩版 | `BedrockPage` | 三类来源（MCAPPX 历史 / 商店正式版 / 商店预览版）分类列表、架构与搜索过滤、内置浏览器（Edge 内核）下载、下载目录监听归档、安装 / 启动 / 卸载、打开下载目录 |
+| 皮肤工厂 | `SkinFactoryPage` | 64×64 像素皮肤编辑器：画笔 / 橡皮 / 填充 / 取色 / 加亮 / 加深 / 直线 / 矩形 / 椭圆 / 喷枪、镜像对称、撤销重做（整份图层快照）、缩放与网格、按部位高亮底层与第二层 UV；最多 8 层多层绘画，列表勾选显隐、点击切换活动层，导出 PNG / 保存皮肤库 / 应用账号时自动合并；右侧 3D 模型（等轴测投影 + 第二层半透明叠加）可选中部位后直接作画，支持图层切换、左转 / 右转 / 复位视角按钮、视角滑块、自动旋转、Shift + 拖动旋转，多皮肤库保存 / 载入 / 删除、应用到当前账号 |
+| 世界种子 | `SeedTerrainPage` | 输入种子 → 本机 Java 执行内嵌 TerrainGen（与 Minecraft 相同的柏林噪声算法与参数）生成高度图 → 内联 WebGL 把地形渲染为 Minecraft 风格方块（体素柱：平顶 + 阶梯侧面，海平面压平，侧面按朝向压暗），视角 / 缩放 / 平移按钮 + 拖动旋转 / 滚轮缩放 / 右键平移 / 双击复位 / 自动旋转，可调尺寸与起伏、导出高度图 PNG |
+| 设置 | `SettingsPage` | 数据目录、下载源、线程数（1–328）、代理、API Key、镜像、界面选项（含启动动画 / 页面切换动画 / 毛玻璃开关）、主题色与背景、插件目录、功能开关 |
 
 > 注意区分两个加载器页：`LoaderPage`（`page_loader.py`）是「下载安装」页里的**表单式**加载器安装区（手动填 MC 版本 + 加载器版本）；`LoadersPage`（`page_loaders.py`）是导航栏独立入口「Mod 加载器」，按 MC 版本**浏览列表**后选择安装。两者共用同一套安装 worker 与 `modloader.install_loader()`。
 
@@ -432,6 +500,7 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | `data/accounts.json` | 账号列表与当前选中账号（含刷新令牌） |
 | `data/instances/<实例>/instance.json` | 实例元数据（名称、MC 版本、加载器、来源整合包、创建时间） |
 | `data/wiki/<语言代码>/*.md` | 内置教程 Markdown（首次运行按当前界面语言自动写入，可自行修改 / 扩充） |
+| `mc_launcher/data/bedrock_catalog.json` | 基岩版离线版本目录（随程序分发，只读；含包 ID、架构体积、SHA256 与 mcappx 直链） |
 
 ---
 
@@ -458,12 +527,19 @@ MikanCL/
 │   ├── downloads.py            # 下载中心
 │   ├── java.py                  # Java 探测与下载
 │   ├── forbric.py              # Forbric
+│   ├── bedrock.py              # 基岩版（目录 / 商店接口 / 下载 / 安装 / 启动）
+│   ├── terrain_java.py         # 世界种子地形（内嵌原版同算法柏林噪声 Java 程序）
+│   ├── data/                   # 随程序分发的静态数据
+│   │   └── bedrock_catalog.json # 基岩版离线版本目录（32 主版本 / 82 发行版）
+│   ├── resources/              # 原生依赖
+│   │   └── WebView2Loader.dll  # 内置浏览器调用 Edge 内核的加载器
 │   ├── nbt.py                  # NBT 读写（level.dat / playerdata）
 │   ├── terracotta.py           # 陶瓦联机
 │   ├── cn_source.py            # MC百科译名词典（在线 + 缓存）
 │   ├── mod_cn.py               # 本地中文词表、用途分类与中文检索
 │   ├── plugins.py              # 插件加载与插件 API
 │   ├── i18n.py                 # 五语言翻译
+│   ├── agreement.py            # 用户协议文案（5 语言）与同意状态
 │   ├── context.py              # 应用上下文
 │   ├── version.py              # 版本清单
 │   └── ui/                     # 界面层
@@ -479,10 +555,13 @@ MikanCL/
 │       ├── page_control.py     # 版本设置 / Mod 管理
 │       ├── page_multiplayer.py # 多人联机（陶瓦）
 │       ├── page_browser.py     # 内置浏览器
+│       ├── webview2.py         # Edge WebView2 内核（ctypes 直调 COM）
 │       ├── page_forbric.py     # Forbric（+ forbric_worker.py）
 │       ├── page_java_center.py # Java 中心
 │       ├── page_wiki.py        # 教程中心（内置 Markdown Wiki）
+│       ├── page_bedrock.py     # 基岩版（分类列表 / 下载 / 安装 / 启动）
 │       ├── dialog_nbt.py       # NBT 编辑器对话框
+│       ├── dialog_agreement.py # 用户协议确认 / 查看对话框
 │       ├── page_settings.py    # 设置
 │       ├── page_loader.py      # 加载器安装（表单式：手动选 MC 版本 + 加载器版本）
 │       ├── page_loaders.py     # 加载器安装（按 MC 版本浏览，LoadersPage）
@@ -497,6 +576,7 @@ MikanCL/
 │   ├── libs/                   # authlib-injector 等运行库
 │   ├── logs/                   # launcher.log、install_error.log
 │   ├── skins/                  # 皮肤缓存
+│   ├── bedrock/                # 基岩版安装包下载目录（.appx）
 │   ├── wiki/                   # 内置教程 Markdown（按语言分目录，首次运行自动生成）
 │   └── browser/                # QtWebEngine profile（Cookie / 登录态）
 └── dist/                       # 打包产物（MikanCL.exe）
@@ -510,7 +590,8 @@ MikanCL/
 
 | 依赖 | 说明 |
 | :--- | :--- |
-| PySide6 ≥ 6.6 | Qt6 Python 绑定（含 QtWebEngine 内置浏览器） |
+| PySide6 ≥ 6.6 | Qt6 Python 绑定（QtWebEngine 仅作浏览器回退内核） |
+| Microsoft Edge WebView2 Runtime | 内置浏览器主内核，Windows 10/11 默认已预装 |
 
 ### 标准库
 
@@ -581,6 +662,9 @@ pyinstaller --noconfirm --clean --onefile --windowed --name MikanCL \
 8. **下载源**：国内网络建议把 BMCLAPI 镜像优先级调高；CurseForge / Modrinth 也支持自定义镜像地址
 9. **单实例限制**：同一时间只能运行一个 MikanCL；如需切换数据目录，请使用侧边栏的数据目录下拉框
 10. **杀毒软件**：PyInstaller 打包的 exe 常被误报，加入白名单即可
+11. **基岩版下载**：点「在浏览器下载」会切到内置浏览器（优先 Edge 内核）打开该版本的下载页，在页面上点下载按钮即可；下载完成的 `.appx` / `.msix` 会由启动器自动归档到基岩版下载目录，随后点「从本地安装」安装
+12. **基岩版启动要求**：手动安装的安装包本身不含授权，启动时需用拥有 Minecraft 的微软账号登录商店（或加入 Game Pass），否则系统会报 `0x803F8001`；启动 20 秒后未检测到进程时会给出该提示
+13. **基岩版降级**：安装低版本会替换现有版本（`-ForceUpdateFromAnyVersion`），想回到新版重新下载安装即可
 
 ---
 
@@ -635,7 +719,7 @@ MikanCL 以 **GNU General Public License v3.0（GPL-3.0）** 发布。完整许�
 
 > **许可边界**：GPL-3.0 只覆盖 MikanCL 自身的代码。Minecraft 游戏本体、Mod、整合包、资源包、光影包、材质包、Java 运行时，以及第三方组件（如陶瓦联机 Terracotta，其自身为 AGPL-3.0）均适用各自的权利与许可，请分别遵守。
 
-**法律声明**：MikanCL 仅提供版本下载、启动与内容管理的客户端功能，不包含任何 Minecraft 游戏本体、Mod 二进制文件或账号凭据。Minecraft 为 Mojang / Microsoft 的商标与版权作品，请通过正版渠道购买与使用；Mod、整合包、资源包、光影包的版权归各自作者所有，请遵守其授权协议。
+**法律声明**：MikanCL 仅提供版本下载、启动与内容管理的客户端功能，不包含任何 Minecraft 游戏本体、Mod 二进制文件或账号凭据。Minecraft 为 Mojang / Microsoft 的商标与版权作品，请通过正版渠道购买与使用；Mod、整合包、资源包、光影包的版权归各自作者所有，请遵守其授权协议。首次使用前程序会要求阅读并同意内置的《用户协议》（7 项条款，含非官方声明与免责条款），不同意则不会进入主界面。
 
 ---
 
@@ -671,6 +755,9 @@ MikanCL 能跑起来，靠的是下面这些人和项目。排名不分先后，
 - **MC百科（mcmod.cn）** — Mod / 整合包中文译名与中文检索词典
 - **Modrinth** — 内容平台 API 与 CDN
 - **CurseForge / Overwolf** — 内容平台 API 与 CDN
+- **MCAPPX（mcappx.com）** — 基岩版历史版本离线安装包与版本目录
+- **rg-adguard（store.rg-adguard.net）** — 微软商店应用文件直链解析
+- **Microsoft Store / delivery.mp.microsoft.com** — 基岩版正式版与预览版安装包直链
 
 ### Mod 生态
 

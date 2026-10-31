@@ -59,6 +59,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_NAME
+from .. import bedrock
 from ..auth import AuthError, MicrosoftAuth, apply_local_skin, apply_skin_resourcepack, ensure_authlib_injector
 from ..config import DATA_DIR, ISOLATION_LABELS, ServerEntry
 from ..context import AppContext, wait_thread
@@ -70,8 +71,10 @@ from ..launcher import (
     archive_crash_log,
     build_launch_plan,
     crash_hint,
+    has_game_window,
     post_launch,
     prepare_isolated_dir,
+    process_cpu_seconds,
     split_server,
     start_game,
     wait_early_exit,
@@ -593,6 +596,96 @@ class VersionRow(QFrame):
             self.ctx.bus.toast.emit(f"已删除版本 {self.version.id}")
 
 
+BEDROCK_ID = "__bedrock__"
+
+
+class BedrockRow(QFrame):
+    """版本列表中的基岩版条目：与 Java 版一起管理，并标注「基岩版」。"""
+
+    selected = Signal()
+    activated = Signal()
+
+    def __init__(self, info: dict, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.info = dict(info or {})
+        self.setObjectName("VersionRow")
+        self.setProperty("selected", False)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(72)
+        version = str(self.info.get("Version") or "")
+        family = str(self.info.get("PackageFamilyName") or "")
+        self.setToolTip(f"Microsoft.MinecraftUWP {version}\n{family}")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 10, 12, 10)
+        layout.setSpacing(10)
+
+        icon_label = QLabel()
+        icon_label.setPixmap(make_version_pixmap("release", 32))
+        icon_label.setFixedSize(32, 32)
+        layout.addWidget(icon_label)
+
+        texts = QVBoxLayout()
+        texts.setSpacing(4)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        name_label = QLabel(t("HomePage", "基岩版 {0}", version))
+        name_label.setStyleSheet("font-size: 14px; font-weight: 600; color: #e6f1e9;")
+        title_row.addWidget(name_label)
+        title_row.addWidget(Badge(t("HomePage", "基岩版"), "green"))
+        title_row.addStretch(1)
+        texts.addLayout(title_row)
+        meta = QLabel(t("HomePage", "微软商店安装包 · Appx 版"))
+        meta.setObjectName("Tiny")
+        texts.addWidget(meta)
+        layout.addLayout(texts, 1)
+
+        launch_button = QPushButton(t("HomePage", "启动"))
+        launch_button.setFixedWidth(66)
+        launch_button.clicked.connect(self.activated.emit)
+        layout.addWidget(launch_button)
+
+    def set_selected(self, value: bool) -> None:
+        self.setProperty("selected", value)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self.selected.emit()
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self.activated.emit()
+        super().mouseDoubleClickEvent(event)
+
+
+class BedrockProbeWorker(QThread):
+    """后台查询已安装的基岩版（PowerShell 约 1.6s，放到线程里避免卡界面）。"""
+
+    done = Signal(object)
+
+    def run(self) -> None:
+        try:
+            self.done.emit(bedrock.installed_package())
+        except Exception:  # noqa: BLE001 - 查询失败按未安装处理
+            self.done.emit(None)
+
+
+class BedrockLaunchWorker(QThread):
+    """后台启动基岩版，避免 shell 调用阻塞界面。"""
+
+    done = Signal(bool, str)
+
+    def run(self) -> None:
+        try:
+            ok, message = bedrock.launch_installed()
+        except Exception as exc:  # noqa: BLE001
+            ok, message = False, str(exc)
+        self.done.emit(ok, message)
+
+
 def _loader_kind(loader: str) -> str:
     return {
         "原版": "gray",
@@ -784,6 +877,7 @@ class LaunchWorker(QThread):
     log = Signal(str)
     started = Signal(object)
     failed = Signal(str)
+    stalled = Signal(str)  # 启动看门狗：进程存活但迟迟没有窗口
     preflight_blocked = Signal(list)  # 预检阻止项列表，由页面弹框决定是否继续
 
     def __init__(
@@ -972,10 +1066,45 @@ class LaunchWorker(QThread):
             threading.Thread(
                 target=self._watch_session, args=(session,), name="mc-exit-watcher", daemon=True
             ).start()
+            threading.Thread(
+                target=self._watch_startup,
+                args=(session,),
+                name="mc-startup-watchdog",
+                daemon=True,
+            ).start()
         except Cancelled:
             self.failed.emit("启动已取消。")
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
+
+    def _watch_startup(
+        self, session, timeout: float = 30.0, interval: float = 2.0
+    ) -> None:
+        """启动看门狗：30 秒内既没有窗口、进程又仍存活时提示“可能卡在初始化”。"""
+        deadline = time.time() + timeout
+        pid = int(getattr(session.process, "pid", 0) or 0)
+        cpu_flat = True  # 累计 CPU 时间是否始终为 0
+        while time.time() < deadline:
+            if self.cancel_event.is_set():
+                return  # 用户取消启动，尽快退出
+            if session.process.poll() is not None:
+                return  # 进程已退出，交给早退检测 / 退出监听处理
+            if has_game_window(pid):
+                return  # 已出现游戏窗口，无需再等待
+            cpu = process_cpu_seconds(pid)
+            if cpu is None or cpu > 0:
+                cpu_flat = False
+            if self.cancel_event.wait(interval):
+                return
+        if session.process.poll() is not None or has_game_window(pid):
+            return
+        message = "游戏进程已启动 30 秒仍未检测到窗口，可能卡在初始化，请查看日志。"
+        if cpu_flat:
+            message += "\n（该进程 CPU 时间始终为 0，可能被安全软件拦截或 Java 未能真正运行。）"
+        try:
+            self.stalled.emit(message)
+        except RuntimeError:  # 页面/worker 已销毁
+            pass
 
     def _watch_session(self, session) -> None:
         """守护线程只通过总线发信号，不引用 LaunchWorker，避免其已析构。"""
@@ -1029,14 +1158,24 @@ class LogHighlighter(QSyntaxHighlighter):
 
 
 class HomePage(QWidget):
+    repair_finished = Signal(bool, str)  # (是否成功, 错误信息)，由补全线程发回主线程
+
     def __init__(self, ctx: AppContext, parent: QWidget | None = None):
         super().__init__(parent)
         self.ctx = ctx
         self._rows: dict[str, VersionRow] = {}
+        self._bedrock_info: dict | None = None
+        self._bedrock_row: BedrockRow | None = None
+        self._bedrock_worker: QThread | None = None
+        self._bedrock_launch_worker: QThread | None = None
+        self._bedrock_checked_at = 0.0
+        self._bedrock_pending_launch = 0.0
+        self._empty_versions: QWidget | None = None
         self._selected_id = ""
         self._required_java = 21
         self._worker: LaunchWorker | None = None
         self._session = None
+        self._repair_thread: threading.Thread | None = None
         self._launch_queue: list[str] = []
         self._queue_running = False
         self._queue_stop = False
@@ -1352,14 +1491,20 @@ class HomePage(QWidget):
         self.instance_combo.currentIndexChanged.connect(self._on_instance_changed)
         self.ctx.bus.config_changed.connect(self.reload_config)
         self.ctx.bus.javas_changed.connect(self.reload_config)
-        self.ctx.bus.versions_changed.connect(self.refresh_versions)
+        self.ctx.bus.versions_changed.connect(self._refresh_after_change)
         self.ctx.bus.accounts_changed.connect(self._refresh_account_card)
         self.ctx.bus.instances_changed.connect(self._reload_instances)
         self.ctx.bus.game_exited.connect(self._on_exited)
+        self.repair_finished.connect(self._on_repair_finished)
 
     # ------------------------------------------------------------------
     def _instance_dir(self) -> Path:
         return self.ctx.config.instance_path(self.ctx.config.selected_instance_id)
+
+    def _refresh_after_change(self) -> None:
+        """版本发生变化（含基岩版安装 / 卸载）时强制重新探测。"""
+        self._bedrock_checked_at = 0.0
+        self.refresh_versions()
 
     def refresh_versions(self) -> None:
         game_dir = self._instance_dir()
@@ -1375,6 +1520,8 @@ class HomePage(QWidget):
             if widget is not None:
                 widget.deleteLater()
         self._rows.clear()
+        self._bedrock_row = None
+        self._empty_versions = None
 
         if not versions:
             empty = QWidget()
@@ -1401,10 +1548,12 @@ class HomePage(QWidget):
             button.setMaximumWidth(180)
             button.clicked.connect(lambda: self.ctx.bus.navigate.emit("download"))
             empty_layout.addWidget(button, alignment=Qt.AlignHCenter)
+            self._empty_versions = empty
             self.version_layout.addWidget(empty)
             self.version_layout.addStretch(1)
-            self.version_count.setText(self.tr("0 个版本"))
+            self._update_version_count()
             self._select_version("")
+            self._probe_bedrock()
             return
 
         for version in versions:
@@ -1415,10 +1564,13 @@ class HomePage(QWidget):
             self.version_layout.insertWidget(self.version_layout.count() - 1, row)
             self._rows[version.id] = row
 
-        self.version_count.setText(t("HomePage", "{0} 个版本", len(versions)))
+        self._update_version_count()
         self._apply_search(self.search_edit.text())
+        self._probe_bedrock()
         instance = self.ctx.config.selected_instance()
-        if self._selected_id in self._rows:
+        if self._selected_id == BEDROCK_ID and self._bedrock_info is not None:
+            keep = BEDROCK_ID
+        elif self._selected_id in self._rows:
             keep = self._selected_id
         elif instance.version_id and instance.version_id in self._rows:
             keep = instance.version_id
@@ -1426,19 +1578,80 @@ class HomePage(QWidget):
             keep = versions[0].id
         self._select_version(keep)
 
+    def _update_version_count(self) -> None:
+        count = len(self._rows) + (1 if self._bedrock_info else 0)
+        self.version_count.setText(t("HomePage", "{0} 个版本", count))
+
+    def _probe_bedrock(self) -> None:
+        """异步刷新已安装的基岩版，让基岩版与 Java 版一起出现在启动列表里。"""
+        if self._bedrock_checked_at and time.time() - self._bedrock_checked_at < 10:
+            self._apply_bedrock_info(self._bedrock_info)
+            return
+        if self._bedrock_worker is not None and self._bedrock_worker.isRunning():
+            return
+        worker = BedrockProbeWorker(self)
+        worker.done.connect(self._on_bedrock_probe)
+        worker.finished.connect(lambda w=worker: self._release_bedrock_probe(w))
+        self._bedrock_worker = worker
+        worker.start()
+
+    def _on_bedrock_probe(self, info: object) -> None:
+        self._bedrock_info = info if isinstance(info, dict) else None
+        self._bedrock_checked_at = time.time()
+        self._apply_bedrock_info(self._bedrock_info)
+
+    def _release_bedrock_probe(self, worker: QThread) -> None:
+        if self._bedrock_worker is worker:
+            self._bedrock_worker = None
+        worker.deleteLater()
+
+    def _apply_bedrock_info(self, info: dict | None) -> None:
+        if self._bedrock_row is not None:
+            self.version_layout.removeWidget(self._bedrock_row)
+            self._bedrock_row.deleteLater()
+            self._bedrock_row = None
+        if info:
+            row = BedrockRow(info, self)
+            row.selected.connect(lambda: self._select_version(BEDROCK_ID))
+            row.activated.connect(self._launch_bedrock)
+            self._bedrock_row = row
+            self.version_layout.insertWidget(0, row)
+            if self._empty_versions is not None:
+                self._empty_versions.setVisible(False)
+            self._apply_search(self.search_edit.text())
+            if not self._rows and self._selected_id in ("", BEDROCK_ID):
+                self._select_version(BEDROCK_ID)
+        else:
+            if self._empty_versions is not None:
+                self._empty_versions.setVisible(True)
+            if self._selected_id == BEDROCK_ID:
+                self._select_version("")
+        self._update_version_count()
+
     def _apply_search(self, text: str) -> None:
         needle = (text or "").strip().lower()
         for version_id, row in self._rows.items():
             row.setVisible(not needle or needle in version_id.lower())
+        if self._bedrock_row is not None:
+            haystack = (t("HomePage", "基岩版") + " bedrock").lower()
+            self._bedrock_row.setVisible(not needle or needle in haystack)
 
     def _select_version(self, version_id: str) -> None:
         self._selected_id = version_id
         for rid, row in self._rows.items():
             row.set_selected(rid == version_id)
+        if self._bedrock_row is not None:
+            self._bedrock_row.set_selected(version_id == BEDROCK_ID)
         if not version_id:
             self.launch_info.setText(self.tr("未选择版本"))
             self.launch_button.setEnabled(False)
             self.java_hint.setText("")
+            return
+        if version_id == BEDROCK_ID:
+            version = str((self._bedrock_info or {}).get("Version") or "")
+            self.launch_info.setText(t("HomePage", "将启动：基岩版 {0}", version))
+            self.launch_button.setEnabled(True)
+            self.java_hint.setText(self.tr("基岩版无需 Java"))
             return
         row = self._rows.get(version_id)
         loader = row.version.loader if row else ""
@@ -1447,6 +1660,63 @@ class HomePage(QWidget):
         )
         self.launch_button.setEnabled(bool(row and not row.version.error))
         self._update_java_hint(version_id)
+
+    def _launch_bedrock(self) -> None:
+        self._select_version(BEDROCK_ID)
+        self._start_bedrock_launch()
+
+    def _start_bedrock_launch(self) -> None:
+        if self._bedrock_launch_worker is not None and self._bedrock_launch_worker.isRunning():
+            return
+        if not self._bedrock_info:
+            self.ctx.bus.toast.emit(self.tr("尚未安装基岩版，请先到基岩版页下载安装"))
+            return
+        self.progress_card.setVisible(True)
+        self.progress_stage.setText(self.tr("正在启动基岩版…"))
+        self.progress_detail.setText("")
+        self.progress_bar.setValue(0)
+        self._append_log("[基岩版] 请求启动已安装的基岩版")
+        worker = BedrockLaunchWorker(self)
+        worker.done.connect(self._on_bedrock_launched)
+        worker.finished.connect(lambda w=worker: self._release_bedrock_launch(w))
+        self._bedrock_launch_worker = worker
+        worker.start()
+
+    def _release_bedrock_launch(self, worker: QThread) -> None:
+        if self._bedrock_launch_worker is worker:
+            self._bedrock_launch_worker = None
+        worker.deleteLater()
+
+    def _on_bedrock_launched(self, ok: bool, message: str) -> None:
+        if not ok:
+            self.progress_card.setVisible(False)
+            QMessageBox.warning(self, self.tr("无法启动基岩版"), message)
+            return
+        self.progress_bar.setValue(1000)
+        self.progress_stage.setText(self.tr("基岩版已启动"))
+        self.progress_detail.setText(message)
+        self.launch_info.setText(self.tr("基岩版运行中"))
+        self._append_log(f"[基岩版] 已启动：{message}")
+        self.ctx.bus.toast.emit(self.tr("正在启动基岩版…"))
+        self._bedrock_pending_launch = time.time()
+        QTimer.singleShot(20000, self._verify_bedrock_launch)
+
+    def _verify_bedrock_launch(self) -> None:
+        if not self._bedrock_pending_launch:
+            return
+        self._bedrock_pending_launch = 0.0
+        try:
+            running = bedrock.is_game_running()
+        except Exception:  # noqa: BLE001
+            running = False
+        if running:
+            return
+        self.progress_card.setVisible(False)
+        hint = bedrock.activation_hint()
+        if hint:
+            QMessageBox.warning(self, self.tr("基岩版未能启动"), hint)
+        else:
+            self.ctx.bus.toast.emit(self.tr("未检测到基岩版进程，请稍等或重试"))
 
     def _update_java_hint(self, version_id: str) -> None:
         try:
@@ -1781,6 +2051,9 @@ class HomePage(QWidget):
         if not version_id:
             QMessageBox.information(self, APP_NAME, "请先选择一个版本。")
             return
+        if version_id == BEDROCK_ID:
+            self._start_bedrock_launch()
+            return
         row = self._rows.get(version_id)
         if row and row.version.error:
             QMessageBox.warning(self, "版本损坏", row.version.error)
@@ -1807,7 +2080,7 @@ class HomePage(QWidget):
             merged = load_version(game_dir, version_id)
             required = merged.java_major or 21
         except (VersionError, OSError) as exc:
-            QMessageBox.critical(self, "无法读取版本", str(exc))
+            self._show_version_error(version_id, str(exc))
             return
 
         java, warning = pick_java(self.ctx.javas, required, self.ctx.config.java_path)
@@ -1860,6 +2133,7 @@ class HomePage(QWidget):
         self._worker.failed.connect(self._on_failed)
         self._worker.finished.connect(self._on_worker_finished)
         self._worker.preflight_blocked.connect(self._on_preflight_blocked)
+        self._worker.stalled.connect(self._on_stalled)
         self._append_log(f"[启动] 准备启动 {version_id}，Java：{java.path}")
         self._worker.start()
 
@@ -1959,9 +2233,151 @@ class HomePage(QWidget):
                     self._append_log(f"[崩溃] 本次日志已归档：{archived}")
             hint = crash_hint(code, tail)
             self._append_log(hint)
-            QMessageBox.warning(self, "游戏异常退出", hint)
+            self._show_crash_dialog(hint)
         elif not self.ctx.config.keep_launcher_on_game_exit:
             QTimer.singleShot(200, lambda: self.window().close())
+
+    # ------------------------------------------------------------------
+    # 崩溃提示 / 文件补全 / Java 中心跳转
+    # ------------------------------------------------------------------
+    def _required_java_from_hint(self, hint: str) -> int:
+        """从崩溃日志推断所需 Java 主版本：class file 版本号 - 44，解析不到按 21。"""
+        match = re.search(r"class file version\s+(\d+(?:\.\d+)?)", hint, re.IGNORECASE)
+        if not match:
+            return 21
+        try:
+            version = int(float(match.group(1)))
+        except ValueError:
+            return 21
+        major = version - 44
+        return major if 8 <= major <= 30 else 21
+
+    def _show_crash_dialog(self, hint: str) -> None:
+        """异常退出弹窗：可直达 Java 中心装所需版本，或在后台补全缺失文件。"""
+        box = QMessageBox(self)
+        box.setWindowTitle("游戏异常退出")
+        box.setIcon(QMessageBox.Warning)
+        box.setText(hint)
+        lowered = hint.lower()
+        java_button = None
+        java_major = 0
+        if "unsupportedclassversionerror" in lowered or "class file version" in lowered:
+            java_major = self._required_java_from_hint(hint)
+            java_button = box.addButton(f"去装 Java {java_major}", QMessageBox.ActionRole)
+        repair_button = box.addButton("补全缺失文件", QMessageBox.ActionRole)
+        close_button = box.addButton("确定", QMessageBox.AcceptRole)
+        box.setDefaultButton(close_button)
+        box.exec()
+        clicked = box.clickedButton()
+        if java_button is not None and clicked is java_button:
+            self._open_java_center(java_major)
+        elif clicked is repair_button:
+            repair_button.setEnabled(False)  # 防重复点击
+            self._repair_version_files(self._selected_id)
+
+    def _open_java_center(self, major: int) -> None:
+        """导航到 Java 中心并按所需主版本预选筛选条件。"""
+        main = self.window()
+        navigate = getattr(main, "_navigate_by_name", None)
+        if callable(navigate):
+            navigate("java")
+        else:
+            self.ctx.bus.navigate.emit("java")
+        page = getattr(main, "java_page", None) or getattr(main, "java_center_page", None)
+        preselect = getattr(page, "preselect", None)
+        if callable(preselect):
+            preselect(int(major))
+
+    def _repair_version_files(self, version_id: str) -> None:
+        """后台补全当前版本的缺失文件（libraries / assets 等），完成后提示并刷新列表。"""
+        if not version_id:
+            return
+        if self._repair_thread is not None and self._repair_thread.is_alive():
+            self.ctx.bus.toast.emit("正在补全文件，请稍候。")
+            return
+        self._append_log(f"[补全] 开始补全 {version_id} 的缺失文件…")
+        thread = threading.Thread(
+            target=self._run_repair,
+            args=(version_id,),
+            name="mc-repair-files",
+            daemon=True,
+        )
+        self._repair_thread = thread
+        thread.start()
+
+    def _run_repair(self, version_id: str) -> None:
+        """补全线程：只发信号回主线程，避免跨线程操作控件。"""
+        installer = getattr(self.ctx, "installer", None)
+        ok, message = True, ""
+        try:
+            game_dir = self._instance_dir()
+            if installer is not None:
+                installer.config = self.ctx.config.with_game_dir(game_dir)
+            else:
+                installer = GameInstaller(
+                    self.ctx.config.with_game_dir(game_dir),
+                    self.ctx.sources,
+                    log_cb=lambda line: self.ctx.bus.log.emit(line),
+                )
+            installer.ensure_version(version_id)
+        except Cancelled:
+            ok, message = False, "补全已取消。"
+        except Exception as exc:  # noqa: BLE001
+            ok, message = False, str(exc)
+        if ok:
+            self.ctx.bus.log.emit(f"[补全] {version_id} 文件补全完成。")
+        else:
+            self.ctx.bus.log.emit(f"[补全] {version_id} 补全失败：{message}")
+        try:
+            self.repair_finished.emit(ok, message)
+        except RuntimeError:  # 页面已销毁
+            pass
+
+    def _on_repair_finished(self, ok: bool, message: str) -> None:
+        if ok:
+            QMessageBox.information(self, "补全完成", "已补全，请重试启动。")
+        else:
+            QMessageBox.warning(self, "补全失败", message or "补全未完成。")
+        self.refresh_versions()
+
+    def _show_version_error(self, version_id: str, message: str) -> None:
+        """无法读取版本（libraries/assets 缺失等）：额外提供“补全缺失文件”入口。"""
+        box = QMessageBox(self)
+        box.setWindowTitle("无法读取版本")
+        box.setIcon(QMessageBox.Critical)
+        box.setText(message)
+        repair_button = box.addButton("补全缺失文件", QMessageBox.ActionRole)
+        close_button = box.addButton("关闭", QMessageBox.RejectRole)
+        box.setDefaultButton(close_button)
+        box.exec()
+        if box.clickedButton() is repair_button:
+            repair_button.setEnabled(False)  # 防重复点击
+            self._repair_version_files(version_id)
+
+    def _on_stalled(self, message: str) -> None:
+        """启动看门狗：进程存活但迟迟没有窗口，允许强制结束并查看日志。"""
+        self._append_log(f"[警告] {message}")
+        box = QMessageBox(self)
+        box.setWindowTitle("游戏可能卡在初始化")
+        box.setIcon(QMessageBox.Warning)
+        box.setText(message)
+        kill_button = box.addButton("强制结束并查看日志", QMessageBox.DestructiveRole)
+        wait_button = box.addButton("继续等待", QMessageBox.RejectRole)
+        box.setDefaultButton(wait_button)
+        box.exec()
+        if box.clickedButton() is not kill_button:
+            return
+        session, self._session = self._session, None
+        if session is None:
+            return
+        try:
+            session.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        self._reset_launch_ui()
+        log_path = getattr(session, "log_path", None)
+        if log_path:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_path)))
 
     def _reset_launch_ui(self) -> None:
         self.progress_card.setVisible(False)
@@ -2128,4 +2544,9 @@ class HomePage(QWidget):
         if self._worker is not None and self._worker.isRunning():
             self._worker.cancel_event.set()
             wait_thread(self._worker, 4000)
+        for worker in (self._bedrock_worker, self._bedrock_launch_worker):
+            if worker is not None and worker.isRunning():
+                wait_thread(worker, 2500)
+        self._bedrock_worker = None
+        self._bedrock_launch_worker = None
         self._covers.shutdown()

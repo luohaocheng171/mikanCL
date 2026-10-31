@@ -76,6 +76,13 @@ QPushButton#Primary:pressed { background-color: #55c25e; }
 QPushButton#Primary:disabled { background-color: #24372a; color: #5f7867; }
 QPushButton#Ghost { background-color: transparent; border: none; color: #8fa99a; padding: 5px 8px; }
 QPushButton#Ghost:hover { color: #d9ecdf; background-color: #1a2a20; }
+QPushButton#PrimaryCompact { background-color: #65d46e; border: none; color: #08200e; font-weight: 700; font-size: 13px; padding: 4px 14px; border-radius: 8px; }
+QPushButton#PrimaryCompact:hover { background-color: #79e282; }
+QPushButton#PrimaryCompact:pressed { background-color: #55c25e; }
+QPushButton#PrimaryCompact:disabled { background-color: #24372a; color: #5f7867; }
+QPushButton#GhostCompact { background-color: transparent; border: none; color: #a9c3b1; font-size: 12px; padding: 4px 10px; border-radius: 6px; }
+QPushButton#GhostCompact:hover { color: #d9ecdf; background-color: #1a2a20; }
+QPushButton#GhostCompact:disabled { color: #52685c; }
 QPushButton#Danger { background-color: #3a1d20; border: 1px solid #5c2b31; color: #e8909a; }
 QPushButton#Danger:hover { background-color: #4a2329; }
 QPushButton#Chip { background-color: #15221a; border: 1px solid #24382b; border-radius: 14px; padding: 5px 12px; color: #a9c3b1; font-size: 12px; }
@@ -207,6 +214,18 @@ def background_overlay_stylesheet(has_image: bool) -> str:
         "QFrame#Sidebar { background-color: rgba(10, 16, 12, 200); }\n"
         "QFrame#TitleBar { background-color: rgba(10, 16, 12, 200); }\n"
         "QStatusBar { background-color: rgba(10, 16, 12, 200); }\n"
+    )
+
+
+def acrylic_stylesheet() -> str:
+    """毛玻璃开启时：把主窗体与根容器改为半透明，让 DWM 合成的模糊背景透出来。"""
+    return (
+        "QMainWindow, QWidget#Root { background-color: rgba(12, 19, 16, 170); }\n"
+        "QScrollArea, QScrollArea > QWidget > QWidget { background-color: transparent; }\n"
+        "QStackedWidget, QStackedWidget > QWidget { background-color: transparent; }\n"
+        "QFrame#Sidebar { background-color: rgba(10, 16, 12, 180); }\n"
+        "QFrame#TitleBar { background-color: rgba(10, 16, 12, 180); }\n"
+        "QStatusBar { background-color: rgba(10, 16, 12, 180); }\n"
     )
 
 

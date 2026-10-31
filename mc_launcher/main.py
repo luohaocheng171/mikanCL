@@ -14,9 +14,10 @@ os.environ.setdefault(
 from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: E402,F401
 from PySide6.QtCore import QCoreApplication, QSharedMemory, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QPalette  # noqa: E402
-from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox  # noqa: E402
 
 from . import APP_NAME, APP_NAME_CN  # noqa: E402
+from . import agreement  # noqa: E402
 from .auth import AccountStore  # noqa: E402
 from .config import LOG_DIR, Config  # noqa: E402
 from .content import ContentClient  # noqa: E402
@@ -141,6 +142,19 @@ def main() -> None:
     apply_theme(app, config.accent_color)
     # 翻译器需在 QApplication 之后、MainWindow 之前安装；Translator 自身挂到 app 上防 GC
     Translator(app).load(config.language)
+
+    # 用户协议门禁：未同意当前版本时必须先确认；选择不同意则直接退出，不进入主界面
+    if agreement.needs_prompt(config):
+        from .ui.dialog_agreement import AgreementDialog
+
+        dialog = AgreementDialog(config.language)
+        if dialog.exec() != QDialog.Accepted:
+            # 不同意：立刻结束进程，绝不进入主界面
+            guard.detach()
+            _SINGLE_INSTANCE = None
+            os._exit(0)
+        agreement.accept(config)
+
     apply_proxy(config.effective_proxy)
     context = AppContext(
         config=config,

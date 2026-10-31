@@ -7,12 +7,13 @@ import ctypes.wintypes
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QSize, QThread, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QSize, QThread, Qt, Signal, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QAction, QGuiApplication, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -33,6 +34,7 @@ from ..java import detect_java_installed
 from ..plugins import PluginManager, PluginPage
 from .dropinstall import handle_dropped_paths
 from .page_accounts import AccountsPage
+from .page_bedrock import BedrockPage
 from .page_browser import BrowserPage
 from .page_content import ContentPage
 from .page_control import ControlPage
@@ -44,10 +46,13 @@ from .page_home import HomePage
 from .page_java_center import JavaCenterPage
 from .page_loaders import LoadersPage
 from .page_multiplayer import MultiplayerPage
+from .page_seed_terrain import SeedTerrainPage
 from .page_settings import SettingsPage
+from .page_skin_factory import SkinFactoryPage
 from .page_wiki import WikiPage
 from .covers import CoverLoader
 from .theme import (
+    acrylic_stylesheet,
     background_overlay_stylesheet,
     make_avatar,
     make_block_icon,
@@ -378,7 +383,17 @@ class MainWindow(QMainWindow):
             ("forbric", self.tr("Forbric")),
             ("java", self.tr("Java 中心")),
             ("wiki", self.tr("教程中心")),
+            ("bedrock", self.tr("基岩版")),
+            ("skin_factory", self.tr("皮肤工厂")),
+            ("seed_terrain", self.tr("世界种子")),
             ("settings", self.tr("设置")),
+        ]
+        # 功能开关：被关闭的标签页不创建页面也不显示导航；设置页始终保留（否则无法再开回来）
+        cfg = self.ctx.config
+        nav_items = [
+            (key, text)
+            for key, text in nav_items
+            if key == "settings" or cfg.feature_enabled(key)
         ]
         nav_host = QWidget()
         nav_host.setStyleSheet("background: transparent;")
@@ -391,6 +406,8 @@ class MainWindow(QMainWindow):
             button.setObjectName("NavButton")
             button.setCheckable(True)
             button.setMinimumHeight(36)
+            # 记录导航 key，供 _navigate_by_name 反查页码（避免手写数字映射错位）
+            button._nav_key = key  # type: ignore[attr-defined]
             button.setIcon(make_nav_icon(key, 18, "#9fb6a7"))
             button.setIconSize(QSize(18, 18))
             button.clicked.connect(lambda checked=False, i=index: self.switch_page(i))
@@ -441,39 +458,76 @@ class MainWindow(QMainWindow):
         self.pages = QStackedWidget()
         content_layout.addWidget(self.pages)
 
-        self.home_page = HomePage(self.ctx, self)
-        self.download_page = DownloadPage(self.ctx, self)
-        self.download_center_page = DownloadCenterPage(self.ctx, self)
-        self.content_page = ContentPage(self.ctx, self)
-        self.modpack_page = ModpackPage(self.ctx, self)
-        self.accounts_page = AccountsPage(self.ctx, self)
-        self.control_page = ControlPage(self.ctx, self)
-        self.loaders_page = LoadersPage(self.ctx, self)
-        self.multiplayer_page = MultiplayerPage(self.ctx, self)
-        self.browser_page = BrowserPage(self.ctx, self)
-        self.forbric_page = ForbricPage(self.ctx, self)
-        self.java_center_page = JavaCenterPage(self.ctx, self)
-        self.wiki_page = WikiPage(self.ctx, self)
+        # 被功能开关关闭的页面直接不创建（属性置 None），后台任务与网络请求也随之不会启动
+        def _on(key: str) -> bool:
+            return key == "settings" or cfg.feature_enabled(key)
+
+        self.home_page = HomePage(self.ctx, self) if _on("home") else None
+        self.download_page = DownloadPage(self.ctx, self) if _on("download") else None
+        self.download_center_page = (
+            DownloadCenterPage(self.ctx, self) if _on("downloads") else None
+        )
+        self.content_page = ContentPage(self.ctx, self) if _on("content") else None
+        self.modpack_page = ModpackPage(self.ctx, self) if _on("modpack") else None
+        self.accounts_page = AccountsPage(self.ctx, self) if _on("account") else None
+        self.control_page = ControlPage(self.ctx, self) if _on("control") else None
+        self.loaders_page = LoadersPage(self.ctx, self) if _on("loaders") else None
+        self.multiplayer_page = MultiplayerPage(self.ctx, self) if _on("multiplayer") else None
+        self.browser_page = BrowserPage(self.ctx, self) if _on("browser") else None
+        self.forbric_page = ForbricPage(self.ctx, self) if _on("forbric") else None
+        self.java_center_page = JavaCenterPage(self.ctx, self) if _on("java") else None
+        self.wiki_page = WikiPage(self.ctx, self) if _on("wiki") else None
+        self.bedrock_page = BedrockPage(self.ctx, self) if _on("bedrock") else None
+        self.skin_factory_page = SkinFactoryPage(self.ctx, self) if _on("skin_factory") else None
+        self.seed_terrain_page = SeedTerrainPage(self.ctx, self) if _on("seed_terrain") else None
         self.settings_page = SettingsPage(self.ctx, self)
-        for page in (
-            self.home_page,
-            self.download_page,
-            self.download_center_page,
-            self.content_page,
-            self.modpack_page,
-            self.accounts_page,
-            self.control_page,
-            self.loaders_page,
-            self.multiplayer_page,
-            self.browser_page,
-            self.forbric_page,
-            self.java_center_page,
-            self.wiki_page,
-            self.settings_page,
-        ):
+        page_seq = (
+            ("home", self.home_page),
+            ("download", self.download_page),
+            ("downloads", self.download_center_page),
+            ("content", self.content_page),
+            ("modpack", self.modpack_page),
+            ("account", self.accounts_page),
+            ("control", self.control_page),
+            ("loaders", self.loaders_page),
+            ("multiplayer", self.multiplayer_page),
+            ("browser", self.browser_page),
+            ("forbric", self.forbric_page),
+            ("java", self.java_center_page),
+            ("wiki", self.wiki_page),
+            ("bedrock", self.bedrock_page),
+            ("skin_factory", self.skin_factory_page),
+            ("seed_terrain", self.seed_terrain_page),
+            ("settings", self.settings_page),
+        )
+        # 切页时的刷新回调按 key 查找：页面可被开关隐藏后，页码不再固定，不能再用硬编码数字
+        self._refresh_by_key: dict[str, object] = {}
+        for key, page in page_seq:
+            if page is None:
+                continue
             # 浏览器页内含 WebEngine 视图，保持原样；其余页面在窗口变矮时改为滚轮滚动，
             # 避免布局把卡片、表单硬压成薄片导致文字重叠或内容显示不全。
             self.pages.addWidget(page if page is self.browser_page else scroll_page(page))
+        refresh_candidates = (
+            ("home", self.home_page, "refresh_versions"),
+            ("download", self.download_page, "ensure_loaded"),
+            ("downloads", self.download_center_page, "refresh"),
+            ("content", self.content_page, "refresh"),
+            ("modpack", self.modpack_page, "refresh"),
+            ("account", self.accounts_page, "refresh"),
+            ("control", self.control_page, "refresh"),
+            ("loaders", self.loaders_page, "refresh"),
+            ("multiplayer", self.multiplayer_page, "refresh"),
+            ("forbric", self.forbric_page, "refresh"),
+            ("java", self.java_center_page, "refresh"),
+            ("wiki", self.wiki_page, "refresh"),
+            ("bedrock", self.bedrock_page, "refresh"),
+            ("skin_factory", self.skin_factory_page, None),
+            ("seed_terrain", self.seed_terrain_page, None),
+        )
+        for key, page, method in refresh_candidates:
+            if page is not None and method:
+                self._refresh_by_key[key] = getattr(page, method)
 
         bar = self.statusBar()
         bar.setSizeGripEnabled(True)
@@ -485,11 +539,15 @@ class MainWindow(QMainWindow):
                 APP_VERSION,
             )
         )
-        self.modpack_page.launch_requested.connect(self._launch_from_modpack)
+        if self.modpack_page is not None:
+            self.modpack_page.launch_requested.connect(self._launch_from_modpack)
         self._refresh_sidebar_account()
 
     def _launch_from_modpack(self, instance_id: str, version_id: str) -> None:
         """从「整合包」页直接启动：切换实例并拉起对应版本。"""
+        if self.home_page is None:
+            QMessageBox.warning(self, "无法启动", "「启动游戏」页已在功能开关中关闭，无法从整合包页启动。")
+            return
         self.switch_page(0)
         if not self.home_page.launch_instance_version(instance_id, version_id):
             QMessageBox.warning(
@@ -503,21 +561,25 @@ class MainWindow(QMainWindow):
         bus.navigate.connect(self._navigate_by_name)
         bus.open_browser.connect(self._open_browser)
         bus.toast.connect(lambda message: self.statusBar().showMessage(message, 6000))
-        bus.log.connect(self.home_page._write_console)
+        if self.home_page is not None:
+            bus.log.connect(self.home_page._write_console)
         bus.hide_window.connect(self._hide_to_tray)
         bus.javas_changed.connect(self.settings_page._rebuild_java_table)
         bus.accounts_changed.connect(self._refresh_sidebar_account)
         bus.config_changed.connect(self._refresh_sidebar_account)
         bus.config_changed.connect(self._apply_appearance)
+        self.pages.currentChanged.connect(self._on_page_changed)
         # 主页右键「编辑版本设置」：先由 ControlPage 选中版本，再切到该页（不重复 refresh）
         bus.focus_version.connect(self._show_version_settings)
 
     def _show_version_settings(self, _version_id: str = "") -> None:
         """切到「版本设置」页，但不再刷新，避免把刚选中的版本重置回实例默认版本。"""
-        control_index = 6
-        self.pages.setCurrentIndex(control_index)
-        if control_index < len(self.nav_buttons):
-            self.nav_buttons[control_index].setChecked(True)
+        # 页面可被功能开关隐藏，按 key 反查而不是用固定页码
+        for index, button in enumerate(self.nav_buttons):
+            if getattr(button, "_nav_key", "") == "control":
+                self.pages.setCurrentIndex(index)
+                button.setChecked(True)
+                return
 
     # ------------------------------------------------------------------
     # 插件
@@ -554,30 +616,96 @@ class MainWindow(QMainWindow):
         image = (self.ctx.config.background_image or "").strip()
         has_image = bool(image) and Path(image).exists()
         self.root.set_background(image if has_image else "")
-        self.setStyleSheet(background_overlay_stylesheet(has_image))
+        stylesheet = background_overlay_stylesheet(has_image)
+        if self.ctx.config.ui_acrylic:
+            stylesheet += acrylic_stylesheet()
+        self.setStyleSheet(stylesheet)
+        self._apply_acrylic()
+
+    def _apply_acrylic(self) -> None:
+        """Windows 下通过 DWM SetWindowCompositionAttribute 实现毛玻璃（acrylic）。"""
+        if sys.platform != "win32":
+            return
+        enabled = bool(self.ctx.config.ui_acrylic)
+        self.setAttribute(Qt.WA_TranslucentBackground, enabled)
+        try:
+            import ctypes
+
+            hwnd = int(self.winId())
+            ACCENT_ENABLE_ACRYLICBLURBEHIND = 4
+            ACCENT_DISABLED = 0
+            accent = ACCENT_ENABLE_ACRYLICBLURBEHIND if enabled else ACCENT_DISABLED
+            # 0xAABBGGRR，低 alpha 让 DWM 模糊透出，深色基调
+            gradient_color = 0x99201818 if enabled else 0
+
+            class AccentPolicy(ctypes.Structure):
+                _fields_ = [
+                    ("AccentState", ctypes.c_int),
+                    ("AccentFlags", ctypes.c_int),
+                    ("GradientColor", ctypes.c_uint),
+                    ("AnimationId", ctypes.c_int),
+                ]
+
+            class WindowCompositionAttributeData(ctypes.Structure):
+                _fields_ = [
+                    ("Attribute", ctypes.c_ulong),
+                    ("Data", ctypes.POINTER(AccentPolicy)),
+                    ("SizeOfData", ctypes.c_size_t),
+                ]
+
+            WCA_ACCENT_POLICY = 19
+            policy = AccentPolicy(accent, 0, gradient_color, 0)
+            data = WindowCompositionAttributeData(
+                WCA_ACCENT_POLICY, ctypes.byref(policy), ctypes.sizeof(policy)
+            )
+            ctypes.windll.user32.SetWindowCompositionAttribute(hwnd, ctypes.byref(data))
+        except Exception:
+            # 不支持的系统静默回退到半透明深色背景
+            pass
+
+    def _on_page_changed(self, index: int) -> None:
+        """页面切换淡入淡出动画；动画开关关闭时直接跳过以降低 GPU 占用。"""
+        if not self.ctx.config.ui_animations:
+            return
+        widget = self.pages.currentWidget()
+        if widget is None:
+            return
+        effect = QGraphicsOpacityEffect(widget)
+        widget.setGraphicsEffect(effect)
+        animation = QPropertyAnimation(effect, b"opacity", self)
+        animation.setDuration(180)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+        animation.finished.connect(lambda w=widget: self._clear_page_effect(w))
+        animation.start(QPropertyAnimation.DeleteWhenStopped)
+
+    @staticmethod
+    def _clear_page_effect(widget: QWidget) -> None:
+        try:
+            widget.setGraphicsEffect(None)
+        except RuntimeError:
+            pass
 
     def _navigate_by_name(self, name: str) -> None:
-        mapping = {
-            "home": 0,
-            "download": 1,
-            "downloads": 2,
-            "download_center": 2,
-            "content": 3,
-            "modpack": 4,
-            "account": 5,
-            "accounts": 5,
-            "control": 6,
-            "loader": 1,
-            "loaders": 7,
-            "multiplayer": 8,
-            "multi": 8,
-            "browser": 9,
-            "forbric": 10,
-            "java": 11,
-            "wiki": 12,
-            "settings": 13,
+        # 按导航项 key 反查页码：插件 / 外部跳转只需匹配 key，新增页面时不用再同步数字
+        aliases = {
+            "downloads": "downloads",
+            "download_center": "downloads",
+            "account": "account",
+            "accounts": "account",
+            "loader": "loaders",
+            "loaders": "loaders",
+            "multi": "multiplayer",
+            "multiplayer": "multiplayer",
+            "java": "java",
         }
-        self.switch_page(mapping.get(name, 0))
+        target = aliases.get(name, name)
+        for index, button in enumerate(self.nav_buttons):
+            if getattr(button, "_nav_key", "") == target:
+                self.switch_page(index)
+                return
+        self.switch_page(0)
 
     def _refresh_sidebar_account(self) -> None:
         account = self.ctx.current_account()
@@ -610,38 +738,29 @@ class MainWindow(QMainWindow):
             return
         self.pages.setCurrentIndex(index)
         self.nav_buttons[index].setChecked(True)
-        if index == 1:
-            self.download_page.ensure_loaded()
-        elif index == 0:
-            self.home_page.refresh_versions()
-        elif index == 2:
-            self.download_center_page.refresh()
-        elif index == 3:
-            self.content_page.refresh()
-        elif index == 4:
-            self.modpack_page.refresh()
-        elif index == 5:
-            self.accounts_page.refresh()
-        elif index == 6:
-            self.control_page.refresh()
-        elif index == 7:
-            self.loaders_page.refresh()
-        elif index == 8:
-            self.multiplayer_page.refresh()
-        elif index == 10:
-            self.forbric_page.refresh()
-        elif index == 11:
-            self.java_center_page.refresh()
-        elif index == 12:
-            self.wiki_page.refresh()
+        # 页面可被功能开关隐藏，页码不固定：按导航 key 找刷新回调
+        key = getattr(self.nav_buttons[index], "_nav_key", "")
+        refresh = self._refresh_by_key.get(key)
+        if callable(refresh):
+            refresh()
         elif index in self._plugin_pages:
             # 插件页可选提供 refresh() 方法，切页时自动调用
-            refresh = getattr(self._plugin_pages[index], "refresh", None)
-            if callable(refresh):
-                refresh()
+            plugin_refresh = getattr(self._plugin_pages[index], "refresh", None)
+            if callable(plugin_refresh):
+                plugin_refresh()
 
     def _open_browser(self, url: str) -> None:
-        self.switch_page(9)
+        if self.browser_page is None:
+            # 内置浏览器被功能开关关闭时退化为系统浏览器打开
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+
+            QDesktopServices.openUrl(QUrl(url))
+            return
+        for index, button in enumerate(self.nav_buttons):
+            if getattr(button, "_nav_key", "") == "browser":
+                self.switch_page(index)
+                break
         self.browser_page.navigate_to(url)
 
     def _hide_to_tray(self) -> None:
@@ -707,18 +826,28 @@ class MainWindow(QMainWindow):
             self._hide_to_tray()
             return
         self.ctx.config.save()
-        self.home_page.shutdown()
-        self.download_page.shutdown()
-        self.content_page.shutdown()
-        self.modpack_page.shutdown()
-        self.accounts_page.shutdown()
-        self.settings_page.shutdown()
-        self.browser_page.shutdown()
-        self.forbric_page.shutdown()
-        self.java_center_page.shutdown()
-        self.loaders_page.shutdown()
-        self.multiplayer_page.shutdown()
-        self.wiki_page.shutdown()
+        for page in (
+            self.home_page,
+            self.download_page,
+            self.download_center_page,
+            self.content_page,
+            self.modpack_page,
+            self.accounts_page,
+            self.control_page,
+            self.loaders_page,
+            self.multiplayer_page,
+            self.browser_page,
+            self.forbric_page,
+            self.java_center_page,
+            self.wiki_page,
+            self.bedrock_page,
+            self.settings_page,
+        ):
+            if page is None:
+                continue
+            shutdown = getattr(page, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
         self._avatar_covers.shutdown()
         if self.plugin_manager is not None:
             self.plugin_manager.shutdown()

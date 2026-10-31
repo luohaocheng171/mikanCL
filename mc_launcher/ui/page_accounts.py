@@ -470,9 +470,19 @@ class AccountsPage(QWidget):
         self._skin_uploading = False
         self._build()
         self.ctx.bus.accounts_changed.connect(self.refresh)
+        self.ctx.bus.config_changed.connect(self._apply_feature_toggles)
+        self._apply_feature_toggles()
         self.refresh()
 
     # ------------------------------------------------------------------
+    def _apply_feature_toggles(self) -> None:
+        """按设置里的功能开关隐藏/恢复离线登录与离线皮肤入口（立即生效）。"""
+        cfg = self.ctx.config
+        self.add_offline_button.setVisible(cfg.feature_enabled("offline_login"))
+        skin_on = cfg.feature_enabled("offline_skin")
+        self.skin_local_button.setVisible(skin_on)
+        self.skin_search_button.setVisible(skin_on)
+
     def _build(self) -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(26, 20, 26, 20)
@@ -481,9 +491,9 @@ class AccountsPage(QWidget):
             self.tr("账号管理"),
             self.tr("离线账号、微软正版账号与第三方外置登录，登录信息仅保存在本地"),
         )
-        add_offline = QPushButton(self.tr("添加离线账号"))
-        add_offline.clicked.connect(self._add_offline)
-        header_layout.addWidget(add_offline)
+        self.add_offline_button = QPushButton(self.tr("添加离线账号"))
+        self.add_offline_button.clicked.connect(self._add_offline)
+        header_layout.addWidget(self.add_offline_button)
         add_ms = QPushButton(self.tr("微软正版登录"))
         add_ms.setObjectName("Primary")
         add_ms.setToolTip(self.tr("内置浏览器登录微软账号，兼容所有个人账号"))
@@ -570,6 +580,42 @@ class AccountsPage(QWidget):
         )
         self.skin_preview = SkinPreview3D()
         skin_card.body.addWidget(self.skin_preview, alignment=Qt.AlignHCenter)
+        skin_view_row = QHBoxLayout()
+        skin_view_row.setSpacing(6)
+        skin_left = QPushButton(self.tr("左转"))
+        skin_left.setObjectName("GhostCompact")
+        skin_left.setFixedHeight(26)
+        skin_left.clicked.connect(lambda: self.skin_preview.rotate_by(-15))
+        skin_view_row.addWidget(skin_left)
+        skin_right = QPushButton(self.tr("右转"))
+        skin_right.setObjectName("GhostCompact")
+        skin_right.setFixedHeight(26)
+        skin_right.clicked.connect(lambda: self.skin_preview.rotate_by(15))
+        skin_view_row.addWidget(skin_right)
+        skin_reset = QPushButton(self.tr("复位"))
+        skin_reset.setObjectName("GhostCompact")
+        skin_reset.setFixedHeight(26)
+        skin_reset.clicked.connect(self.skin_preview.reset_view)
+        skin_view_row.addWidget(skin_reset)
+        skin_zoom_out = QPushButton("－")
+        skin_zoom_out.setObjectName("GhostCompact")
+        skin_zoom_out.setFixedSize(26, 26)
+        skin_zoom_out.setToolTip(self.tr("缩小"))
+        skin_zoom_out.clicked.connect(lambda: self.skin_preview.zoom_by(-0.15))
+        skin_view_row.addWidget(skin_zoom_out)
+        skin_zoom_in = QPushButton("＋")
+        skin_zoom_in.setObjectName("GhostCompact")
+        skin_zoom_in.setFixedSize(26, 26)
+        skin_zoom_in.setToolTip(self.tr("放大"))
+        skin_zoom_in.clicked.connect(lambda: self.skin_preview.zoom_by(0.15))
+        skin_view_row.addWidget(skin_zoom_in)
+        skin_view_row.addStretch(1)
+        skin_card.body.addLayout(skin_view_row)
+        skin_hint = QLabel(self.tr("拖动旋转 360°、滚轮缩放；右键拖动可平移。"))
+        skin_hint.setObjectName("Tiny")
+        skin_hint.setAlignment(Qt.AlignHCenter)
+        skin_hint.setWordWrap(True)
+        skin_card.body.addWidget(skin_hint)
         self.skin_status = QLabel(self.tr("未选择账号"))
         self.skin_status.setObjectName("Tiny")
         self.skin_status.setAlignment(Qt.AlignHCenter)
@@ -906,6 +952,8 @@ class AccountsPage(QWidget):
 
     # ---------- 本地皮肤 / 正版皮肤搜索 ----------
     def _choose_local_skin(self) -> None:
+        if not self.ctx.config.feature_enabled("offline_skin"):
+            return
         account = self.ctx.accounts.get(self._current_account_id())
         if account is None:
             QMessageBox.information(self, APP_NAME, "请先选择或创建一个账号。")
@@ -934,6 +982,8 @@ class AccountsPage(QWidget):
         self.ctx.bus.toast.emit("本地皮肤已保存，启动游戏时会自动应用。")
 
     def _search_premium_skin(self) -> None:
+        if not self.ctx.config.feature_enabled("offline_skin"):
+            return
         if self._skin_lookup_worker is not None and self._skin_lookup_worker.isRunning():
             return
         account = self.ctx.accounts.get(self._current_account_id())
@@ -1001,6 +1051,8 @@ class AccountsPage(QWidget):
 
     # ------------------------------------------------------------------
     def _add_offline(self) -> None:
+        if not self.ctx.config.feature_enabled("offline_login"):
+            return
         name, ok = QInputDialog.getText(
             self, "添加离线账号", "玩家昵称（1-16 个字符）：", QLineEdit.Normal, "Steve"
         )

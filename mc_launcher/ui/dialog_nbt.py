@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -43,6 +44,9 @@ from ..nbt import (
     load_nbt_typed_file,
     save_nbt_typed_file,
 )
+
+# 搜索匹配项的高亮底色（浅黄）
+_SEARCH_HIGHLIGHT = QColor("#fff2a8")
 
 # 可编辑的叶子类型
 _EDITABLE_TAGS = {TAG_BYTE, TAG_SHORT, TAG_INT, TAG_LONG, TAG_FLOAT, TAG_DOUBLE, TAG_STRING}
@@ -136,6 +140,18 @@ class NbtEditorDialog(QDialog):
         save_as_button = QPushButton(self.tr("另存为…"))
         save_as_button.clicked.connect(self._save_as)
         top.addWidget(save_as_button)
+
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText(self.tr("搜索标签名…"))
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.setFixedWidth(170)
+        self.search_edit.textChanged.connect(self._on_search_changed)
+        top.addWidget(self.search_edit)
+
+        self.search_count_label = QLabel()
+        self.search_count_label.setObjectName("Tiny")
+        self.search_count_label.setMinimumWidth(64)
+        top.addWidget(self.search_count_label)
         outer.addLayout(top)
 
         self.tree = QTreeWidget()
@@ -211,6 +227,7 @@ class NbtEditorDialog(QDialog):
         finally:
             self._updating = False
         self._update_status()
+        self._on_search_changed(self.search_edit.text())
 
     def open_path(self, path: str) -> None:
         """供外部入口直接打开指定文件（不弹确认框）。"""
@@ -254,6 +271,51 @@ class NbtEditorDialog(QDialog):
         if tag in _EDITABLE_TAGS:
             flags |= Qt.ItemIsEditable
         item.setFlags(flags)
+
+    # ------------------------------------------------------------------
+    # 搜索
+    # ------------------------------------------------------------------
+    def _iter_items(self):
+        """按树中显示顺序递归遍历所有节点（含子节点）。"""
+
+        def walk(item: QTreeWidgetItem):
+            yield item
+            for index in range(item.childCount()):
+                yield from walk(item.child(index))
+
+        for index in range(self.tree.topLevelItemCount()):
+            yield from walk(self.tree.topLevelItem(index))
+
+    def _on_search_changed(self, text: str) -> None:
+        keyword = text.strip().lower()
+        if not keyword:
+            self._clear_search_highlights()
+            self.search_count_label.clear()
+            return
+        first_match: QTreeWidgetItem | None = None
+        count = 0
+        for item in self._iter_items():
+            if keyword in item.text(0).lower():
+                item.setBackground(0, QBrush(_SEARCH_HIGHLIGHT))
+                parent = item.parent()
+                while parent is not None:
+                    parent.setExpanded(True)
+                    parent = parent.parent()
+                count += 1
+                if first_match is None:
+                    first_match = item
+            else:
+                item.setData(0, Qt.BackgroundRole, None)
+        if first_match is None:
+            self.search_count_label.setText(self.tr("无匹配"))
+            return
+        self.tree.setCurrentItem(first_match)
+        self.tree.scrollToItem(first_match, QAbstractItemView.PositionAtCenter)
+        self.search_count_label.setText(self.tr("{0} 个匹配").format(count))
+
+    def _clear_search_highlights(self) -> None:
+        for item in self._iter_items():
+            item.setData(0, Qt.BackgroundRole, None)
 
     # ------------------------------------------------------------------
     # 编辑
@@ -450,6 +512,7 @@ class NbtEditorDialog(QDialog):
         finally:
             self._updating = False
         self._update_status()
+        self._on_search_changed(self.search_edit.text())
 
     # ------------------------------------------------------------------
     # 保存

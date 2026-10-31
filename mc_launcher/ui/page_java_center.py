@@ -38,6 +38,9 @@ from .widgets import Card, page_header
 # 与设置页的 Java 下载目录保持一致
 JAVA_ROOT = DATA_DIR / "runtime"
 
+# 外部调用常写作 Adoptium（官方名为 Eclipse Temurin），统一映射到真实发行版 key
+_DIST_ALIASES = {"adoptium": "temurin"}
+
 
 def _fmt_size(value: object) -> str:
     try:
@@ -270,6 +273,35 @@ class JavaCenterPage(QWidget):
         self.refresh()
 
     def _on_major_changed(self, _index: int = -1) -> None:
+        self.refresh()
+
+    def preselect(self, major: int, distribution: str | None = None) -> None:
+        """外部跳转入口：预选主版本（找不到对应项就按数值就近）与可选发行版，然后刷新列表。"""
+        try:
+            wanted = int(major)
+        except (TypeError, ValueError):
+            wanted = 21
+        if distribution:
+            dist_id = _DIST_ALIASES.get(str(distribution).strip().lower(), distribution)
+            index = self._dist_combo.findData(dist_id)
+            if index >= 0:
+                self._dist_combo.blockSignals(True)
+                self._dist_combo.setCurrentIndex(index)
+                self._dist_combo.blockSignals(False)
+        # 复用现有 populate 路径重建主版本项，保证下拉已填充后再精确选择
+        self._populate_majors(default=wanted)
+        index = self._major_combo.findData(wanted)
+        if index < 0 and self._major_combo.count():
+            majors = [
+                int(self._major_combo.itemData(i) or 0)
+                for i in range(self._major_combo.count())
+            ]
+            nearest = min(majors, key=lambda value: abs(value - wanted))
+            index = self._major_combo.findData(nearest)
+        if index >= 0:
+            self._major_combo.blockSignals(True)
+            self._major_combo.setCurrentIndex(index)
+            self._major_combo.blockSignals(False)
         self.refresh()
 
     # ------------------------------------------------------------------

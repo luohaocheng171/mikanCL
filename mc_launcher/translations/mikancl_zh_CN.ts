@@ -1,390 +1,304 @@
-<?xml version='1.0' encoding='utf-8'?>
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE TS>
 <TS version="2.1" language="zh_CN">
 <context>
-    <name />
+    <name></name>
     <message>
-        <location filename="../ui/page_home.py" line="818" />
-        <location filename="../ui/page_home.py" line="949" />
-        <location filename="../ui/page_home.py" line="1672" />
         <source>启动游戏</source>
-        <translation type="unfinished">启动游戏</translation>
+        <translation type="obsolete">启动游戏</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="818" />
         <source>选择已安装的版本，一键进入 Minecraft</source>
-        <translation type="unfinished">选择已安装的版本，一键进入 Minecraft</translation>
+        <translation type="obsolete">选择已安装的版本，一键进入 Minecraft</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="820" />
         <source>打开游戏目录</source>
-        <translation type="unfinished">打开游戏目录</translation>
+        <translation type="obsolete">打开游戏目录</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="824" />
         <source>游戏设置</source>
-        <translation type="unfinished">游戏设置</translation>
+        <translation type="obsolete">游戏设置</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="843" />
         <source>离线模式</source>
-        <translation type="unfinished">离线模式</translation>
+        <translation type="obsolete">离线模式</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="844" />
         <source>管理账号</source>
-        <translation type="unfinished">管理账号</translation>
+        <translation type="obsolete">管理账号</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="848" />
         <source>当前账号</source>
-        <translation type="unfinished">当前账号</translation>
+        <translation type="obsolete">当前账号</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="849" />
         <source>支持离线 / 微软正版 / 外置登录</source>
-        <translation type="unfinished">支持离线 / 微软正版 / 外置登录</translation>
+        <translation type="obsolete">支持离线 / 微软正版 / 外置登录</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="858" />
         <source>点击切换账号</source>
-        <translation type="unfinished">点击切换账号</translation>
+        <translation type="obsolete">点击切换账号</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="864" />
         <source>输入玩家昵称</source>
-        <translation type="unfinished">输入玩家昵称</translation>
+        <translation type="obsolete">输入玩家昵称</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="877" />
         <source>启动配置</source>
-        <translation type="unfinished">启动配置</translation>
+        <translation type="obsolete">启动配置</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="877" />
         <source>Java、内存与窗口</source>
-        <translation type="unfinished">Java、内存与窗口</translation>
+        <translation type="obsolete">Java、内存与窗口</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="879" />
         <source>Java 运行时</source>
-        <translation type="unfinished">Java 运行时</translation>
+        <translation type="obsolete">Java 运行时</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="891" />
         <source>分配内存</source>
-        <translation type="unfinished">分配内存</translation>
+        <translation type="obsolete">分配内存</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="906" />
         <source>自定义分辨率</source>
-        <translation type="unfinished">自定义分辨率</translation>
+        <translation type="obsolete">自定义分辨率</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="907" />
         <source>勾选后使用下方宽高启动游戏</source>
-        <translation type="unfinished">勾选后使用下方宽高启动游戏</translation>
+        <translation type="obsolete">勾选后使用下方宽高启动游戏</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="927" />
-        <location filename="../ui/page_home.py" line="1169" />
-        <location filename="../ui/page_home.py" line="1682" />
         <source>未选择版本</source>
-        <translation type="unfinished">未选择版本</translation>
+        <translation type="obsolete">未选择版本</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="933" />
         <source>连接服务器</source>
-        <translation type="unfinished">连接服务器</translation>
+        <translation type="obsolete">连接服务器</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="938" />
         <source>选择后在启动时自动进入该服务器（单人游戏不受影响）</source>
-        <translation type="unfinished">选择后在启动时自动进入该服务器（单人游戏不受影响）</translation>
+        <translation type="obsolete">选择后在启动时自动进入该服务器（单人游戏不受影响）</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="942" />
         <source>管理</source>
-        <translation type="unfinished">管理</translation>
+        <translation type="obsolete">管理</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="958" />
-        <location filename="../ui/page_home.py" line="1544" />
         <source>准备启动</source>
-        <translation type="unfinished">准备启动</translation>
+        <translation type="obsolete">准备启动</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="969" />
-        <location filename="../ui/page_home.py" line="1547" />
-        <location filename="../ui/page_home.py" line="1744" />
         <source>取消</source>
-        <translation type="unfinished">取消</translation>
+        <translation type="obsolete">取消</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="988" />
         <source>已安装版本</source>
-        <translation type="unfinished">已安装版本</translation>
+        <translation type="obsolete">已安装版本</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="991" />
-        <location filename="../ui/page_home.py" line="1136" />
         <source>0 个版本</source>
-        <translation type="unfinished">0 个版本</translation>
+        <translation type="obsolete">0 个版本</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="996" />
         <source>实例</source>
-        <translation type="unfinished">实例</translation>
+        <translation type="obsolete">实例</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1001" />
         <source>切换默认实例或整合包独立实例</source>
-        <translation type="unfinished">切换默认实例或整合包独立实例</translation>
+        <translation type="obsolete">切换默认实例或整合包独立实例</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1004" />
         <source>搜索版本…</source>
-        <translation type="unfinished">搜索版本…</translation>
+        <translation type="obsolete">搜索版本…</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1007" />
         <source>刷新</source>
-        <translation type="unfinished">刷新</translation>
+        <translation type="obsolete">刷新</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1011" />
         <source>多选启动</source>
-        <translation type="unfinished">多选启动</translation>
+        <translation type="obsolete">多选启动</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1015" />
         <source>停止队列</source>
-        <translation type="unfinished">停止队列</translation>
+        <translation type="obsolete">停止队列</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1020" />
         <source>安装新版本</source>
-        <translation type="unfinished">安装新版本</translation>
+        <translation type="obsolete">安装新版本</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1040" />
         <source>运行日志</source>
-        <translation type="unfinished">运行日志</translation>
+        <translation type="obsolete">运行日志</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1045" />
         <source>全部日志</source>
-        <translation type="unfinished">全部日志</translation>
+        <translation type="obsolete">全部日志</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1046" />
         <source>仅错误与警告</source>
-        <translation type="unfinished">仅错误与警告</translation>
+        <translation type="obsolete">仅错误与警告</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1050" />
         <source>清空</source>
-        <translation type="unfinished">清空</translation>
+        <translation type="obsolete">清空</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1054" />
         <source>日志目录</source>
-        <translation type="unfinished">日志目录</translation>
+        <translation type="obsolete">日志目录</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1118" />
         <source>还没有安装任何版本</source>
-        <translation type="unfinished">还没有安装任何版本</translation>
+        <translation type="obsolete">还没有安装任何版本</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1123" />
         <source>前往下载页安装一个正式版，或用 HMCL 安装后指向同一个游戏目录。</source>
-        <translation type="unfinished">前往下载页安装一个正式版，或用 HMCL 安装后指向同一个游戏目录。</translation>
+        <translation type="obsolete">前往下载页安装一个正式版，或用 HMCL 安装后指向同一个游戏目录。</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1129" />
         <source>安装 Minecraft</source>
-        <translation type="unfinished">安装 Minecraft</translation>
+        <translation type="obsolete">安装 Minecraft</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1188" />
         <source>版本文件异常</source>
-        <translation type="unfinished">版本文件异常</translation>
+        <translation type="obsolete">版本文件异常</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1621" />
         <source>停止游戏</source>
-        <translation type="unfinished">停止游戏</translation>
+        <translation type="obsolete">停止游戏</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1733" />
         <source>按选择顺序依次启动；同一实例目录不能并行，需等前一个游戏退出。</source>
-        <translation type="unfinished">按选择顺序依次启动；同一实例目录不能并行，需等前一个游戏退出。</translation>
+        <translation type="obsolete">按选择顺序依次启动；同一实例目录不能并行，需等前一个游戏退出。</translation>
     </message>
     <message>
-        <location filename="../ui/page_home.py" line="1746" />
         <source>启动</source>
-        <translation type="unfinished">启动</translation>
+        <translation type="obsolete">启动</translation>
     </message>
 </context>
 <context>
     <name>AccountsPage</name>
     <message>
-        <location filename="../ui/page_accounts.py" line="481" />
         <source>账号管理</source>
         <translation>账号管理</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="482" />
         <source>离线账号、微软正版账号与第三方外置登录，登录信息仅保存在本地</source>
         <translation>离线账号、微软正版账号与第三方外置登录，登录信息仅保存在本地</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="484" />
         <source>添加离线账号</source>
         <translation>添加离线账号</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="487" />
         <source>微软正版登录</source>
         <translation>微软正版登录</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="489" />
         <source>内置浏览器登录微软账号，兼容所有个人账号</source>
         <translation>内置浏览器登录微软账号，兼容所有个人账号</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="492" />
         <source>设备码登录</source>
         <translation>设备码登录</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="494" />
         <source>设备码流程需要可用的 Azure Client ID，可在设置中配置</source>
         <translation>设备码流程需要可用的 Azure Client ID，可在设置中配置</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="497" />
         <source>第三方外置登录</source>
         <translation>第三方外置登录</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="509" />
         <source>账号列表</source>
         <translation>账号列表</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="509" />
         <source>双击账号可设为当前账号</source>
         <translation>双击账号可设为当前账号</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="513" />
         <source>账号</source>
         <translation>账号</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="513" />
         <source>类型</source>
         <translation>类型</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="513" />
         <source>状态</source>
         <translation>状态</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="530" />
         <source>账号详情</source>
         <translation>账号详情</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="530" />
         <source>当前账号将用于启动游戏</source>
         <translation>当前账号将用于启动游戏</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="535" />
-        <location filename="../ui/page_accounts.py" line="573" />
-        <location filename="../ui/page_accounts.py" line="684" />
-        <location filename="../ui/page_accounts.py" line="772" />
         <source>未选择账号</source>
         <translation>未选择账号</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="539" />
         <source>离线模式</source>
         <translation>离线模式</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="554" />
         <source>设为当前账号</source>
         <translation>设为当前账号</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="558" />
         <source>刷新登录令牌</source>
         <translation>刷新登录令牌</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="561" />
         <source>删除账号</source>
         <translation>删除账号</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="569" />
         <source>皮肤</source>
         <translation>皮肤</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="569" />
         <source>微软正版账号可上传自定义皮肤</source>
         <translation>微软正版账号可上传自定义皮肤</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="579" />
-        <location filename="../ui/page_accounts.py" line="769" />
         <source>仅微软正版账号可上传皮肤；离线/外置账号请到对应皮肤站修改。</source>
         <translation>仅微软正版账号可上传皮肤；离线/外置账号请到对应皮肤站修改。</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="586" />
         <source>皮肤模型</source>
         <translation>皮肤模型</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="588" />
         <source>经典（Classic）</source>
         <translation>经典（Classic）</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="589" />
         <source>纤细（Slim / Alex）</source>
         <translation>纤细（Slim / Alex）</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="595" />
-        <location filename="../ui/page_accounts.py" line="904" />
         <source>上传皮肤…</source>
         <translation>上传皮肤…</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="602" />
         <source>使用本地皮肤…</source>
         <translation>使用本地皮肤…</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="606" />
         <source>搜索正版皮肤…</source>
         <translation>搜索正版皮肤…</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="613" />
         <source>本地上传支持 64×64 / 64×32 PNG（≤24 KB）。离线账号的本地皮肤会写入 CustomSkinLoader/LocalSkin，需安装该 Mod 才能在游戏内显示。</source>
         <translation>本地上传支持 64×64 / 64×32 PNG（≤24 KB）。离线账号的本地皮肤会写入 CustomSkinLoader/LocalSkin，需安装该 Mod 才能在游戏内显示。</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="637" />
         <source>提示：微软正版登录采用设备码流程，不会接触你的密码；第三方登录需要填写服务器地址与密码，密码不会保存，只保存登录令牌。</source>
         <translation>提示：微软正版登录采用设备码流程，不会接触你的密码；第三方登录需要填写服务器地址与密码，密码不会保存，只保存登录令牌。</translation>
     </message>
@@ -445,58 +359,46 @@
         <translation>有效期至 {0}（{1}）</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="774" />
         <source>当前账号类型不支持上传皮肤</source>
         <translation>当前账号类型不支持上传皮肤</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="776" />
         <source>登录状态已失效，请刷新登录令牌</source>
         <translation>登录状态已失效，请刷新登录令牌</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="794" />
         <source>本地皮肤 · 启动时自动应用</source>
         <translation>本地皮肤 · 启动时自动应用</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="807" />
         <source>尚未设置自定义皮肤</source>
         <translation>尚未设置自定义皮肤</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="814" />
-        <location filename="../ui/page_accounts.py" line="857" />
         <source>皮肤预览已加载</source>
         <translation>皮肤预览已加载</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="831" />
         <source>正在加载皮肤预览…</source>
         <translation>正在加载皮肤预览…</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="833" />
         <source>皮肤地址无效</source>
         <translation>皮肤地址无效</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="853" />
         <source>皮肤预览下载失败</source>
         <translation>皮肤预览下载失败</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="877" />
         <source>正在上传…</source>
         <translation>正在上传…</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="878" />
         <source>正在上传皮肤，请稍候…</source>
         <translation>正在上传皮肤，请稍候…</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="895" />
         <source>皮肤上传失败</source>
         <translation>皮肤上传失败</translation>
     </message>
@@ -509,32 +411,26 @@
         <translation>皮肤查询失败</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="892" />
         <source>皮肤已上传，重新进入游戏生效。</source>
         <translation>皮肤已上传，重新进入游戏生效。</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="863" />
         <source>只有已登录的微软正版账号可以上传皮肤。</source>
         <translation>只有已登录的微软正版账号可以上传皮肤。</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="869" />
         <source>选择皮肤文件</source>
         <translation>选择皮肤文件</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="914" />
         <source>选择本地皮肤</source>
         <translation>选择本地皮肤</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="943" />
         <source>搜索正版皮肤</source>
         <translation>搜索正版皮肤</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="944" />
         <source>输入正版账号名：</source>
         <translation>输入正版账号名：</translation>
     </message>
@@ -547,7 +443,6 @@
         <translation>玩家昵称（1-16 个字符）：</translation>
     </message>
     <message>
-        <location filename="../ui/page_accounts.py" line="974" />
         <source>应用皮肤</source>
         <translation>应用皮肤</translation>
     </message>
@@ -568,6 +463,384 @@
     <message>
         <source>外置登录</source>
         <translation>外置登录</translation>
+    </message>
+    <message>
+        <source>皮肤已应用到账号 {0}</source>
+        <translation>皮肤已应用到账号 {0}</translation>
+    </message>
+    <message>
+        <source>左转</source>
+        <translation>左转</translation>
+    </message>
+    <message>
+        <source>右转</source>
+        <translation>右转</translation>
+    </message>
+    <message>
+        <source>复位</source>
+        <translation>复位</translation>
+    </message>
+    <message>
+        <source>拖动旋转 360°、滚轮缩放；右键拖动可平移。</source>
+        <translation>拖动旋转 360°、滚轮缩放；右键拖动可平移。</translation>
+    </message>
+</context>
+<context>
+    <name>BedrockPage</name>
+    <message>
+        <source>基岩版</source>
+        <translation>基岩版</translation>
+    </message>
+    <message>
+        <source>浏览 MCAPPX 历史版本与微软商店最新安装包，下载后自动安装到系统并可直接启动</source>
+        <translation>浏览 MCAPPX 历史版本与微软商店最新安装包，下载后自动安装到系统并可直接启动</translation>
+    </message>
+    <message>
+        <source>启动基岩版</source>
+        <translation>启动基岩版</translation>
+    </message>
+    <message>
+        <source>卸载</source>
+        <translation>卸载</translation>
+    </message>
+    <message>
+        <source>打开微软商店</source>
+        <translation>打开微软商店</translation>
+    </message>
+    <message>
+        <source>安装包下载目录：{0}</source>
+        <translation>安装包下载目录：{0}</translation>
+    </message>
+    <message>
+        <source>打开目录</source>
+        <translation>打开目录</translation>
+    </message>
+    <message>
+        <source>分类</source>
+        <translation>分类</translation>
+    </message>
+    <message>
+        <source>历史版本（MCAPPX）</source>
+        <translation>历史版本（MCAPPX）</translation>
+    </message>
+    <message>
+        <source>微软商店 · 正式版</source>
+        <translation>微软商店 · 正式版</translation>
+    </message>
+    <message>
+        <source>微软商店 · 预览版</source>
+        <translation>微软商店 · 预览版</translation>
+    </message>
+    <message>
+        <source>架构</source>
+        <translation>架构</translation>
+    </message>
+    <message>
+        <source>自动（{0}）</source>
+        <translation>自动（{0}）</translation>
+    </message>
+    <message>
+        <source>搜索版本号，例如 1.8.1</source>
+        <translation>搜索版本号，例如 1.8.1</translation>
+    </message>
+    <message>
+        <source>重新获取</source>
+        <translation>重新获取</translation>
+    </message>
+    <message>
+        <source>版本</source>
+        <translation>版本</translation>
+    </message>
+    <message>
+        <source>大小</source>
+        <translation>大小</translation>
+    </message>
+    <message>
+        <source>发布日期</source>
+        <translation>发布日期</translation>
+    </message>
+    <message>
+        <source>来源</source>
+        <translation>来源</translation>
+    </message>
+    <message>
+        <source>状态</source>
+        <translation>状态</translation>
+    </message>
+    <message>
+        <source>操作</source>
+        <translation>操作</translation>
+    </message>
+    <message>
+        <source>微软商店条目由官方接口生成直链，可多线程下载并直接安装；MCAPPX 历史版本目录内置离线缓存，其直链受 Cloudflare 人机验证保护，无法直接下载时会打开浏览器下载页。</source>
+        <translation>微软商店条目由官方接口生成直链，可多线程下载并直接安装；MCAPPX 历史版本目录内置离线缓存，其直链受 Cloudflare 人机验证保护，无法直接下载时会打开浏览器下载页。</translation>
+    </message>
+    <message>
+        <source>无法打开下载目录</source>
+        <translation>无法打开下载目录</translation>
+    </message>
+    <message>
+        <source>尚未安装基岩版</source>
+        <translation>尚未安装基岩版</translation>
+    </message>
+    <message>
+        <source>选择下方任意版本下载安装；安装后会自动替换系统中已有的基岩版</source>
+        <translation>选择下方任意版本下载安装；安装后会自动替换系统中已有的基岩版</translation>
+    </message>
+    <message>
+        <source>已安装：{0}</source>
+        <translation>已安装：{0}</translation>
+    </message>
+    <message>
+        <source>架构 {0} · 包族 {1}</source>
+        <translation>架构 {0} · 包族 {1}</translation>
+    </message>
+    <message>
+        <source>架构 {0}</source>
+        <translation>架构 {0}</translation>
+    </message>
+    <message>
+        <source>选择下方版本下载安装，安装后可直接启动</source>
+        <translation>选择下方版本下载安装，安装后可直接启动</translation>
+    </message>
+    <message>
+        <source>正在从微软商店获取版本列表…</source>
+        <translation>正在从微软商店获取版本列表…</translation>
+    </message>
+    <message>
+        <source>微软商店接口没有返回可用的安装包</source>
+        <translation>微软商店接口没有返回可用的安装包</translation>
+    </message>
+    <message>
+        <source>获取失败，请检查网络或代理后点击「重新获取」</source>
+        <translation>获取失败，请检查网络或代理后点击「重新获取」</translation>
+    </message>
+    <message>
+        <source>MCAPPX 目录共 {0} 条（内置离线缓存）</source>
+        <translation>MCAPPX 目录共 {0} 条（内置离线缓存）</translation>
+    </message>
+    <message>
+        <source>微软商店接口返回 {0} 个可安装包</source>
+        <translation>微软商店接口返回 {0} 个可安装包</translation>
+    </message>
+    <message>
+        <source>（预览）</source>
+        <translation>（预览）</translation>
+    </message>
+    <message>
+        <source>安装包ID：{0}</source>
+        <translation>安装包ID：{0}</translation>
+    </message>
+    <message>
+        <source>微软商店</source>
+        <translation>微软商店</translation>
+    </message>
+    <message>
+        <source>已安装</source>
+        <translation>已安装</translation>
+    </message>
+    <message>
+        <source>可安装</source>
+        <translation>可安装</translation>
+    </message>
+    <message>
+        <source>需浏览器下载</source>
+        <translation>需浏览器下载</translation>
+    </message>
+    <message>
+        <source>启动</source>
+        <translation>启动</translation>
+    </message>
+    <message>
+        <source>下载并安装</source>
+        <translation>下载并安装</translation>
+    </message>
+    <message>
+        <source>仅下载</source>
+        <translation>仅下载</translation>
+    </message>
+    <message>
+        <source>尝试直链下载</source>
+        <translation>尝试直链下载</translation>
+    </message>
+    <message>
+        <source>打开下载页</source>
+        <translation>打开下载页</translation>
+    </message>
+    <message>
+        <source>保存基岩版安装包</source>
+        <translation>保存基岩版安装包</translation>
+    </message>
+    <message>
+        <source>Appx 安装包 (*.appx *.msix *.appxbundle)</source>
+        <translation>Appx 安装包 (*.appx *.msix *.appxbundle)</translation>
+    </message>
+    <message>
+        <source>基岩版 {0}（{1}）</source>
+        <translation>基岩版 {0}（{1}）</translation>
+    </message>
+    <message>
+        <source>微软商店官方包</source>
+        <translation>微软商店官方包</translation>
+    </message>
+    <message>
+        <source>已加入下载中心：{0}</source>
+        <translation>已加入下载中心：{0}</translation>
+    </message>
+    <message>
+        <source>安装包已保存到 {0}</source>
+        <translation>安装包已保存到 {0}</translation>
+    </message>
+    <message>
+        <source>基岩版安装完成，可直接启动</source>
+        <translation>基岩版安装完成，可直接启动</translation>
+    </message>
+    <message>
+        <source>安装包已保存：{0}</source>
+        <translation>安装包已保存：{0}</translation>
+    </message>
+    <message>
+        <source>需要浏览器下载</source>
+        <translation>需要浏览器下载</translation>
+    </message>
+    <message>
+        <source>是否用默认浏览器打开该版本的下载页？</source>
+        <translation>是否用默认浏览器打开该版本的下载页？</translation>
+    </message>
+    <message>
+        <source>取消</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>基岩版操作失败</source>
+        <translation>基岩版操作失败</translation>
+    </message>
+    <message>
+        <source>正在启动基岩版…</source>
+        <translation>正在启动基岩版…</translation>
+    </message>
+    <message>
+        <source>无法启动基岩版</source>
+        <translation>无法启动基岩版</translation>
+    </message>
+    <message>
+        <source>卸载基岩版</source>
+        <translation>卸载基岩版</translation>
+    </message>
+    <message>
+        <source>确定卸载已安装的基岩版 {0} 吗？存档会保留在系统中。</source>
+        <translation>确定卸载已安装的基岩版 {0} 吗？存档会保留在系统中。</translation>
+    </message>
+    <message>
+        <source>卸载失败</source>
+        <translation>卸载失败</translation>
+    </message>
+    <message>
+        <source>基岩版已卸载</source>
+        <translation>基岩版已卸载</translation>
+    </message>
+    <message>
+        <source>从本地安装</source>
+        <translation>从本地安装</translation>
+    </message>
+    <message>
+        <source>选择基岩版安装包</source>
+        <translation>选择基岩版安装包</translation>
+    </message>
+    <message>
+        <source>Appx 安装包 (*.appx *.msix *.appxbundle *.msixbundle *.Appx)</source>
+        <translation>Appx 安装包 (*.appx *.msix *.appxbundle *.msixbundle *.Appx)</translation>
+    </message>
+    <message>
+        <source>本地安装 {0}</source>
+        <translation>本地安装 {0}</translation>
+    </message>
+    <message>
+        <source>本地安装包</source>
+        <translation>本地安装包</translation>
+    </message>
+    <message>
+        <source>基岩版未能启动</source>
+        <translation>基岩版未能启动</translation>
+    </message>
+    <message>
+        <source>未检测到基岩版进程，请稍等或重试；若持续失败请确认已用正版账号登录微软商店</source>
+        <translation>未检测到基岩版进程，请稍等或重试；若持续失败请确认已用正版账号登录微软商店</translation>
+    </message>
+    <message>
+        <source>安装完成</source>
+        <translation>安装完成</translation>
+    </message>
+    <message>
+        <source>下载完成</source>
+        <translation>下载完成</translation>
+    </message>
+    <message>
+        <source>主版本</source>
+        <translation>主版本</translation>
+    </message>
+    <message>
+        <source>全部主版本</source>
+        <translation>全部主版本</translation>
+    </message>
+    <message>
+        <source>用内置浏览器（Edge 内核）打开下载页，下载完成后自动归档到本地，再安装并启动</source>
+        <translation>用内置浏览器（Edge 内核）打开下载页，下载完成后自动归档到本地，再安装并启动</translation>
+    </message>
+    <message>
+        <source>下载不再走启动器内置的离线直链：点「在浏览器下载」会切到内置浏览器打开该版本的下载页，点击页面上的下载按钮后由 Edge 内核完成下载；下载完成的 .appx / .msix 安装包会自动归档到上方下载目录，随后可点「从本地安装」。</source>
+        <translation>下载不再走启动器内置的离线直链：点「在浏览器下载」会切到内置浏览器打开该版本的下载页，点击页面上的下载按钮后由 Edge 内核完成下载；下载完成的 .appx / .msix 安装包会自动归档到上方下载目录，随后可点「从本地安装」。</translation>
+    </message>
+    <message>
+        <source>已在内置浏览器打开下载页，点击页面上的下载按钮即可保存到本机</source>
+        <translation>已在内置浏览器打开下载页，点击页面上的下载按钮即可保存到本机</translation>
+    </message>
+    <message>
+        <source>在浏览器下载</source>
+        <translation>在浏览器下载</translation>
+    </message>
+    <message>
+        <source>在内置浏览器（Edge 内核）打开该版本下载页，点击下载后保存到本机</source>
+        <translation>在内置浏览器（Edge 内核）打开该版本下载页，点击下载后保存到本机</translation>
+    </message>
+    <message>
+        <source>浏览器下载</source>
+        <translation>浏览器下载</translation>
+    </message>
+    <message>
+        <source>安装包已归档：{0}，可点「从本地安装」</source>
+        <translation>安装包已归档：{0}，可点「从本地安装」</translation>
+    </message>
+</context>
+<context>
+    <name>BedrockWorker</name>
+    <message>
+        <source>下载安装包</source>
+        <translation>下载安装包</translation>
+    </message>
+    <message>
+        <source>校验文件完整性</source>
+        <translation>校验文件完整性</translation>
+    </message>
+    <message>
+        <source>SHA256 校验失败，文件可能已损坏</source>
+        <translation>SHA256 校验失败，文件可能已损坏</translation>
+    </message>
+    <message>
+        <source>SHA1 校验失败，文件可能已损坏</source>
+        <translation>SHA1 校验失败，文件可能已损坏</translation>
+    </message>
+    <message>
+        <source>安装到系统</source>
+        <translation>安装到系统</translation>
+    </message>
+    <message>
+        <source>安装运行库依赖</source>
+        <translation>安装运行库依赖</translation>
+    </message>
+    <message>
+        <source>安装包不存在：{0}</source>
+        <translation>安装包不存在：{0}</translation>
     </message>
 </context>
 <context>
@@ -749,6 +1022,54 @@
         <translation>需要 Java {0}</translation>
     </message>
     <message>
+        <source>基岩版</source>
+        <translation>基岩版</translation>
+    </message>
+    <message>
+        <source>基岩版 {0}</source>
+        <translation>基岩版 {0}</translation>
+    </message>
+    <message>
+        <source>微软商店安装包 · Appx 版</source>
+        <translation>微软商店安装包 · Appx 版</translation>
+    </message>
+    <message>
+        <source>将启动：基岩版 {0}</source>
+        <translation>将启动：基岩版 {0}</translation>
+    </message>
+    <message>
+        <source>基岩版无需 Java</source>
+        <translation>基岩版无需 Java</translation>
+    </message>
+    <message>
+        <source>正在启动基岩版…</source>
+        <translation>正在启动基岩版…</translation>
+    </message>
+    <message>
+        <source>基岩版已启动</source>
+        <translation>基岩版已启动</translation>
+    </message>
+    <message>
+        <source>基岩版运行中</source>
+        <translation>基岩版运行中</translation>
+    </message>
+    <message>
+        <source>无法启动基岩版</source>
+        <translation>无法启动基岩版</translation>
+    </message>
+    <message>
+        <source>基岩版未能启动</source>
+        <translation>基岩版未能启动</translation>
+    </message>
+    <message>
+        <source>未检测到基岩版进程，请稍等或重试</source>
+        <translation>未检测到基岩版进程，请稍等或重试</translation>
+    </message>
+    <message>
+        <source>尚未安装基岩版，请先到基岩版页下载安装</source>
+        <translation>尚未安装基岩版，请先到基岩版页下载安装</translation>
+    </message>
+    <message>
         <source>版本文件异常</source>
         <translation>版本文件异常</translation>
     </message>
@@ -856,67 +1177,54 @@
 <context>
     <name>MainWindow</name>
     <message>
-        <location filename="../ui/main_window.py" line="230" />
         <source>启动游戏</source>
         <translation>启动游戏</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="231" />
         <source>下载安装</source>
         <translation>下载安装</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="232" />
         <source>下载中心</source>
         <translation>下载中心</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="233" />
         <source>内容中心</source>
         <translation>内容中心</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="234" />
         <source>整合包</source>
         <translation>整合包</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="235" />
         <source>账号管理</source>
         <translation>账号管理</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="236" />
         <source>版本设置</source>
         <translation>版本设置</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="238" />
         <source>Mod 加载器</source>
         <translation>Mod 加载器</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="240" />
         <source>多人联机</source>
         <translation>多人联机</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="241" />
         <source>内置浏览器</source>
         <translation>内置浏览器</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="243" />
         <source>Forbric</source>
         <translation>Forbric</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="244" />
         <source>Java 中心</source>
         <translation>Java 中心</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="245" />
         <source>设置</source>
         <translation>设置</translation>
     </message>
@@ -937,7 +1245,6 @@
         <translation>关闭</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="273" />
         <source>离线模式</source>
         <translation>离线模式</translation>
     </message>
@@ -950,12 +1257,10 @@
         <translation>{0} {1} 已就绪 · 正版 / 外置登录 / 内容中心</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="447" />
         <source>显示主界面</source>
         <translation>显示主界面</translation>
     </message>
     <message>
-        <location filename="../ui/main_window.py" line="451" />
         <source>退出启动器</source>
         <translation>退出启动器</translation>
     </message>
@@ -963,93 +1268,82 @@
         <source>教程中心</source>
         <translation>教程中心</translation>
     </message>
-</context>
+
+    <message>
+        <source>皮肤工厂</source>
+        <translation>皮肤工厂</translation>
+    </message>
+    <message>
+        <source>世界种子</source>
+        <translation>世界种子</translation>
+    </message></context>
 <context>
     <name>MultiplayerPage</name>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="113" />
         <source>多人联机</source>
         <translation>多人联机</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="114" />
         <source>陶瓦联机 · 房间码组网，无需端口映射或公网 IP</source>
         <translation>陶瓦联机 · 房间码组网，无需端口映射或公网 IP</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="127" />
-        <location filename="../ui/page_multiplayer.py" line="445" />
-        <location filename="../ui/page_multiplayer.py" line="518" />
         <source>未安装</source>
         <translation>未安装</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="136" />
         <source>陶瓦联机尚未安装，点击下方按钮自动下载官方发行包。</source>
         <translation>陶瓦联机尚未安装，点击下方按钮自动下载官方发行包。</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="153" />
         <source>复制房间码</source>
         <translation>复制房间码</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="172" />
         <source>联机操作</source>
         <translation>联机操作</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="172" />
         <source>房主创建房间，朋友输入房间码加入</source>
         <translation>房主创建房间，朋友输入房间码加入</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="180" />
         <source>你的名字</source>
         <translation>你的名字</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="182" />
         <source>游戏内显示名字</source>
         <translation>游戏内显示名字</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="185" />
         <source>房间码</source>
         <translation>房间码</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="193" />
         <source>创建房间</source>
         <translation>创建房间</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="196" />
         <source>加入房间</source>
         <translation>加入房间</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="199" />
         <source>结束联机</source>
         <translation>结束联机</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="202" />
         <source>下载并安装陶瓦联机</source>
         <translation>下载并安装陶瓦联机</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="218" />
         <source>怎么玩</source>
         <translation>怎么玩</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="218" />
         <source>三步开局</source>
         <translation>三步开局</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="221" />
         <source>1. 房主：进入单人存档 → Esc → 对局域网开放 → 回到本页点「创建房间」。
 2. 房主：把房间码发给朋友。
 3. 朋友：输入房间码点「加入房间」，然后在游戏「多人游戏」列表双击「陶瓦联机大厅」即可进入。
@@ -1062,196 +1356,154 @@
 房间基于 P2P 组网，免费、无需端口映射；网络质量取决于双方网络状况。</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="234" />
         <source>运行日志</source>
         <translation>运行日志</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="242" />
-        <source>联机能力来自开源项目 &lt;a href="https://github.com/burningtnt/Terracotta" style="color:#65d46e;"&gt;Terracotta | 陶瓦联机&lt;/a&gt;（AGPL-3.0，作者 Burning_TNT），本启动器仅调用其官方发行包。</source>
-        <translation>联机能力来自开源项目 &lt;a href="https://github.com/burningtnt/Terracotta" style="color:#65d46e;"&gt;Terracotta | 陶瓦联机&lt;/a&gt;（AGPL-3.0，作者 Burning_TNT），本启动器仅调用其官方发行包。</translation>
+        <source>联机能力来自开源项目 &lt;a href=&quot;https://github.com/burningtnt/Terracotta&quot; style=&quot;color:#65d46e;&quot;&gt;Terracotta | 陶瓦联机&lt;/a&gt;（AGPL-3.0，作者 Burning_TNT），本启动器仅调用其官方发行包。</source>
+        <translation>联机能力来自开源项目 &lt;a href=&quot;https://github.com/burningtnt/Terracotta&quot; style=&quot;color:#65d46e;&quot;&gt;Terracotta | 陶瓦联机&lt;/a&gt;（AGPL-3.0，作者 Burning_TNT），本启动器仅调用其官方发行包。</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="291" />
         <source>正在启动联机组件…</source>
         <translation>正在启动联机组件…</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="315" />
         <source>联机组件启动失败：{0}</source>
         <translation>联机组件启动失败：{0}</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="316" />
         <source>[陶瓦] 启动失败：{0}</source>
         <translation>[陶瓦] 启动失败：{0}</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="330" />
         <source>房间码已复制到剪贴板</source>
         <translation>房间码已复制到剪贴板</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="356" />
         <source>正在下载陶瓦联机… {0}</source>
         <translation>正在下载陶瓦联机… {0}</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="361" />
         <source>陶瓦联机安装完成</source>
         <translation>陶瓦联机安装完成</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="367" />
         <source>安装失败：{0}</source>
         <translation>安装失败：{0}</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="368" />
         <source>安装失败</source>
         <translation>安装失败</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="373" />
-        <location filename="../ui/page_multiplayer.py" line="383" />
         <source>请稍候</source>
         <translation>请稍候</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="373" />
-        <location filename="../ui/page_multiplayer.py" line="383" />
         <source>联机组件还没就绪，请稍等几秒再试。</source>
         <translation>联机组件还没就绪，请稍等几秒再试。</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="377" />
         <source>正在局域网内寻找你的世界…</source>
         <translation>正在局域网内寻找你的世界…</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="390" />
         <source>房间码无效</source>
         <translation>房间码无效</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="391" />
         <source>房间码格式应为 U/XXXX-XXXX-XXXX-XXXX，请检查后重试。</source>
         <translation>房间码格式应为 U/XXXX-XXXX-XXXX-XXXX，请检查后重试。</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="397" />
         <source>正在连接房间 {0}…</source>
         <translation>正在连接房间 {0}…</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="406" />
         <source>[陶瓦] 结束联机失败：{0}</source>
         <translation>[陶瓦] 结束联机失败：{0}</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="446" />
-        <location filename="../ui/page_multiplayer.py" line="520" />
         <source>点击「下载并安装陶瓦联机」自动获取官方发行包（约 8 MB）。</source>
         <translation>点击「下载并安装陶瓦联机」自动获取官方发行包（约 8 MB）。</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="449" />
         <source>正在启动</source>
         <translation>正在启动</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="450" />
         <source>首次运行会释放联机组件，请稍候…</source>
         <translation>首次运行会释放联机组件，请稍候…</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="453" />
         <source>出错了</source>
         <translation>出错了</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="457" />
         <source>未知错误</source>
         <translation>未知错误</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="461" />
-        <location filename="../ui/page_multiplayer.py" line="507" />
         <source>空闲</source>
         <translation>空闲</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="463" />
         <source>创建房间或输入房间码加入；房主需先在游戏中「对局域网开放」。</source>
         <translation>创建房间或输入房间码加入；房主需先在游戏中「对局域网开放」。</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="466" />
         <source>等待局域网世界</source>
         <translation>等待局域网世界</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="468" />
         <source>请在游戏中打开存档并选择「对局域网开放」，本页会自动完成创建。</source>
         <translation>请在游戏中打开存档并选择「对局域网开放」，本页会自动完成创建。</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="472" />
         <source>正在创建房间</source>
         <translation>正在创建房间</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="473" />
         <source>正在组网，请稍候…</source>
         <translation>正在组网，请稍候…</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="477" />
         <source>房间已创建</source>
         <translation>房间已创建</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="479" />
         <source>已连接玩家 {0} 人 · 把房间码发给朋友即可加入。</source>
         <translation>已连接玩家 {0} 人 · 把房间码发给朋友即可加入。</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="484" />
         <source>正在连接</source>
         <translation>正在连接</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="485" />
         <source>正在请求房间 {0}…</source>
         <translation>正在请求房间 {0}…</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="488" />
         <source>正在建立连接</source>
         <translation>正在建立连接</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="489" />
         <source>正在通过 P2P 组网，通常需要几秒到几十秒…</source>
         <translation>正在通过 P2P 组网，通常需要几秒到几十秒…</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="492" />
         <source>已进入房间</source>
         <translation>已进入房间</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="495" />
         <source>服务器地址 {0} · 打开游戏「多人游戏」，双击「陶瓦联机大厅」即可进入。</source>
         <translation>服务器地址 {0} · 打开游戏「多人游戏」，双击「陶瓦联机大厅」即可进入。</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="499" />
         <source>联机失败</source>
         <translation>联机失败</translation>
     </message>
     <message>
-        <location filename="../ui/page_multiplayer.py" line="503" />
         <source>处理中</source>
         <translation>处理中</translation>
     </message>
@@ -1283,87 +1535,70 @@
 <context>
     <name>SettingsPage</name>
     <message>
-        <location filename="../ui/page_settings.py" line="227" />
         <source>设置</source>
         <translation>设置</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="227" />
         <source>下载源、游戏配置与 Java 运行时管理</source>
         <translation>下载源、游戏配置与 Java 运行时管理</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="233" />
         <source>通用</source>
         <translation>通用</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="234" />
         <source>下载源</source>
         <translation>下载源</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="235" />
         <source>内容源与镜像</source>
         <translation>内容源与镜像</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="236" />
         <source>账号与登录</source>
         <translation>账号与登录</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="237" />
         <source>游戏设置</source>
         <translation>游戏设置</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="238" />
         <source>Java 运行时</source>
         <translation>Java 运行时</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="239" />
         <source>关于</source>
         <translation>关于</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="252" />
         <source>关闭窗口时最小化到托盘（可从托盘恢复）</source>
         <translation>关闭窗口时最小化到托盘（可从托盘恢复）</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="272" />
         <source>默认最大内存</source>
         <translation>默认最大内存</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="277" />
         <source>下载线程数</source>
         <translation>下载线程数</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="279" />
         <source>启动游戏后隐藏启动器（可从托盘恢复）</source>
         <translation>启动游戏后隐藏启动器（可从托盘恢复）</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="284" />
         <source>保存通用设置</source>
         <translation>保存通用设置</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="292" />
         <source>通用设置修改后需点击“保存通用设置”生效；内存与下载线程数同时影响全局配置。</source>
         <translation>通用设置修改后需点击“保存通用设置”生效；内存与下载线程数同时影响全局配置。</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="303" />
         <source>目录与缓存</source>
         <translation>目录与缓存</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="303" />
         <source>打开数据/游戏目录，或清理下载与封面缓存</source>
         <translation>打开数据/游戏目录，或清理下载与封面缓存</translation>
     </message>
@@ -1376,22 +1611,18 @@
         <translation>当前版本：{0} v{1}</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="318" />
         <source>打开数据目录</source>
         <translation>打开数据目录</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="321" />
         <source>打开游戏目录</source>
         <translation>打开游戏目录</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="328" />
         <source>清理封面缓存</source>
         <translation>清理封面缓存</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="333" />
         <source>清理下载缓存</source>
         <translation>清理下载缓存</translation>
     </message>
@@ -1400,67 +1631,54 @@
         <translation>缓存目录位于 {0}；清理后已下载的整合包与加载器需要重新下载。</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="266" />
         <source>界面语言</source>
         <translation>界面语言</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="596" />
         <source>分配内存</source>
         <translation>分配内存</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="985" />
         <source>语言已保存，重启启动器后生效</source>
         <translation>语言已保存，重启启动器后生效</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="259" />
         <source>立即重启</source>
         <translation>立即重启</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="365" />
         <source>支持官方源、BMCLAPI 镜像、自定义镜像与 API Key。下载时会按列表顺序自动回退。</source>
         <translation>支持官方源、BMCLAPI 镜像、自定义镜像与 API Key。下载时会按列表顺序自动回退。</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="370" />
         <source>＋ 添加自定义源</source>
         <translation>＋ 添加自定义源</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="373" />
         <source>测试当前源</source>
         <translation>测试当前源</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="381" />
         <source>名称</source>
         <translation>名称</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="382" />
         <source>版本清单地址</source>
         <translation>版本清单地址</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="383" />
         <source>映射方式</source>
         <translation>映射方式</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="384" />
         <source>API Key</source>
         <translation>API Key</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="385" />
         <source>启用</source>
         <translation>启用</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="386" />
         <source>操作</source>
         <translation>操作</translation>
     </message>
@@ -1493,72 +1711,58 @@
         <translation>删除</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="440" />
         <source>Modrinth CDN 镜像</source>
         <translation>Modrinth CDN 镜像</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="443" />
         <source>CurseForge CDN 镜像</source>
         <translation>CurseForge CDN 镜像</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="444" />
         <source>并行下载线程</source>
         <translation>并行下载线程</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="447" />
         <source>保存内容源设置</source>
         <translation>保存内容源设置</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="425" />
         <source>留空使用官方 CDN；可填自建镜像根地址</source>
         <translation>留空使用官方 CDN；可填自建镜像根地址</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="434" />
         <source>留空使用官方 CDN；如 https://mediafilez.forgecdn.net</source>
         <translation>留空使用官方 CDN；如 https://mediafilez.forgecdn.net</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="431" />
         <source>CurseForge API Key（必填）</source>
         <translation>CurseForge API Key（必填）</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="474" />
         <source>微软 OAuth 客户端 ID</source>
         <translation>微软 OAuth 客户端 ID</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="477" />
         <source>authlib-injector latest.json 地址</source>
         <translation>authlib-injector latest.json 地址</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="479" />
         <source>微软 Client ID</source>
         <translation>微软 Client ID</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="480" />
         <source>authlib-injector 源</source>
         <translation>authlib-injector 源</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="487" />
         <source>清除缓存</source>
         <translation>清除缓存</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="493" />
         <source>保存登录设置</source>
         <translation>保存登录设置</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="497" />
         <source>前往账号管理</source>
         <translation>前往账号管理</translation>
     </message>
@@ -1571,142 +1775,114 @@
         <translation>authlib-injector 缓存：{0}（尚未下载，首次使用外置登录时自动获取）</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="530" />
         <source>添加…</source>
         <translation>添加…</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="533" />
         <source>移除</source>
         <translation>移除</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="537" />
         <source>打开</source>
         <translation>打开</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="541" />
         <source>数据目录</source>
         <translation>数据目录</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="548" />
         <source>版本隔离</source>
         <translation>版本隔离</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="546" />
         <source>按版本隔离模组或存档，可避免不同版本互相干扰</source>
         <translation>按版本隔离模组或存档，可避免不同版本互相干扰</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="554" />
         <source>游戏进程优先级</source>
         <translation>游戏进程优先级</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="560" />
         <source>启动后动作</source>
         <translation>启动后动作</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="565" />
         <source>游戏窗口标题</source>
         <translation>游戏窗口标题</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="563" />
         <source>留空则使用游戏默认标题</source>
         <translation>留空则使用游戏默认标题</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="569" />
         <source>启用代理</source>
         <translation>启用代理</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="576" />
         <source>游戏也走代理</source>
         <translation>游戏也走代理</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="579" />
         <source>网络代理</source>
         <translation>网络代理</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="582" />
         <source>留空则自动按版本选择</source>
         <translation>留空则自动按版本选择</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="589" />
         <source>Java 路径</source>
         <translation>Java 路径</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="586" />
         <source>选择…</source>
         <translation>选择…</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="601" />
         <source>额外 JVM 参数</source>
         <translation>额外 JVM 参数</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="603" />
         <source>游戏退出后保持启动器窗口打开</source>
         <translation>游戏退出后保持启动器窗口打开</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="629" />
         <source>启动器会自动扫描系统与常见启动器目录。Java 8 → 1.16，Java 17 → 1.17–1.20.4，Java 21 → 1.20.5+</source>
         <translation>启动器会自动扫描系统与常见启动器目录。Java 8 → 1.16，Java 17 → 1.17–1.20.4，Java 21 → 1.20.5+</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="635" />
         <source>重新扫描</source>
         <translation>重新扫描</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="638" />
         <source>下载 Java…</source>
         <translation>下载 Java…</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="641" />
         <source>Java 中心</source>
         <translation>Java 中心</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="649" />
         <source>Java 版本</source>
         <translation>Java 版本</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="649" />
         <source>位数</source>
         <translation>位数</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="649" />
         <source>路径</source>
         <translation>路径</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="662" />
         <source>双击一行可将其设为默认 Java。若未检测到合适的 Java，请安装对应版本后在游戏设置中手动指定。</source>
         <translation>双击一行可将其设为默认 Java。若未检测到合适的 Java，请安装对应版本后在游戏设置中手动指定。</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="695" />
         <source>打开 Minecraft Wiki</source>
         <translation>打开 Minecraft Wiki</translation>
     </message>
     <message>
-        <location filename="../ui/page_settings.py" line="700" />
         <source>打开 Bilibili</source>
         <translation>打开 Bilibili</translation>
     </message>
@@ -1774,6 +1950,42 @@
         <source>不重写（仅用于清单）</source>
         <translation>不重写（仅用于清单）</translation>
     </message>
+    <message>
+        <source>功能开关</source>
+        <translation>功能开关</translation>
+    </message>
+    <message>
+        <source>标签页开关</source>
+        <translation>标签页开关</translation>
+    </message>
+    <message>
+        <source>关闭的标签页会从侧边栏隐藏并停用，重启启动器后生效</source>
+        <translation>关闭的标签页会从侧边栏隐藏并停用，重启启动器后生效</translation>
+    </message>
+    <message>
+        <source>功能入口开关</source>
+        <translation>功能入口开关</translation>
+    </message>
+    <message>
+        <source>关闭后账号管理页立即隐藏对应入口，无需重启</source>
+        <translation>关闭后账号管理页立即隐藏对应入口，无需重启</translation>
+    </message>
+    <message>
+        <source>离线登录（添加离线账号）</source>
+        <translation>离线登录（添加离线账号）</translation>
+    </message>
+    <message>
+        <source>离线皮肤（本地皮肤 / 正版皮肤搜索）</source>
+        <translation>离线皮肤（本地皮肤 / 正版皮肤搜索）</translation>
+    </message>
+    <message>
+        <source>标签页开关重启后生效；功能入口开关立即生效。</source>
+        <translation>标签页开关重启后生效；功能入口开关立即生效。</translation>
+    </message>
+    <message>
+        <source>标签页开关已保存，重启启动器后生效。</source>
+        <translation>标签页开关已保存，重启启动器后生效。</translation>
+    </message>
 </context>
 <context>
     <name>WikiPage</name>
@@ -1800,6 +2012,495 @@
     <message>
         <source>没有匹配的教程</source>
         <translation>没有匹配的教程</translation>
+    </message>
+</context>
+<context>
+    <name>SkinFactoryPage</name>
+    <message>
+        <source>皮肤工厂</source>
+        <translation>皮肤工厂</translation>
+    </message>
+    <message>
+        <source>像素级绘制 64×64 皮肤（含第二层遮罩），撤销重做 / 缩放 / 多皮肤库，成品可应用到账号</source>
+        <translation>像素级绘制 64×64 皮肤（含第二层遮罩），撤销重做 / 缩放 / 多皮肤库，成品可应用到账号</translation>
+    </message>
+    <message>
+        <source>像素画布</source>
+        <translation>像素画布</translation>
+    </message>
+    <message>
+        <source>左键绘制 · 右键擦除 · Ctrl+Z 撤销</source>
+        <translation>左键绘制 · 右键擦除 · Ctrl+Z 撤销</translation>
+    </message>
+    <message>
+        <source>画笔</source>
+        <translation>画笔</translation>
+    </message>
+    <message>
+        <source>橡皮</source>
+        <translation>橡皮</translation>
+    </message>
+    <message>
+        <source>填充</source>
+        <translation>填充</translation>
+    </message>
+    <message>
+        <source>取色</source>
+        <translation>取色</translation>
+    </message>
+    <message>
+        <source>加亮</source>
+        <translation>加亮</translation>
+    </message>
+    <message>
+        <source>加深</source>
+        <translation>加深</translation>
+    </message>
+    <message>
+        <source>笔刷</source>
+        <translation>笔刷</translation>
+    </message>
+    <message>
+        <source>镜像对称</source>
+        <translation>镜像对称</translation>
+    </message>
+    <message>
+        <source>网格</source>
+        <translation>网格</translation>
+    </message>
+    <message>
+        <source>缩放</source>
+        <translation>缩放</translation>
+    </message>
+    <message>
+        <source>撤销</source>
+        <translation>撤销</translation>
+    </message>
+    <message>
+        <source>重做</source>
+        <translation>重做</translation>
+    </message>
+    <message>
+        <source>颜色</source>
+        <translation>颜色</translation>
+    </message>
+    <message>
+        <source>选择颜色</source>
+        <translation>选择颜色</translation>
+    </message>
+    <message>
+        <source>最近</source>
+        <translation>最近</translation>
+    </message>
+    <message>
+        <source>部位</source>
+        <translation>部位</translation>
+    </message>
+    <message>
+        <source>整体（不限部位）</source>
+        <translation>整体（不限部位）</translation>
+    </message>
+    <message>
+        <source>坐标 -  颜色 -</source>
+        <translation>坐标 -  颜色 -</translation>
+    </message>
+    <message>
+        <source>透明</source>
+        <translation>透明</translation>
+    </message>
+    <message>
+        <source>导入 PNG…</source>
+        <translation>导入 PNG…</translation>
+    </message>
+    <message>
+        <source>导出 PNG…</source>
+        <translation>导出 PNG…</translation>
+    </message>
+    <message>
+        <source>清空画布</source>
+        <translation>清空画布</translation>
+    </message>
+    <message>
+        <source>应用到当前账号</source>
+        <translation>应用到当前账号</translation>
+    </message>
+    <message>
+        <source>3D 预览</source>
+        <translation>3D 预览</translation>
+    </message>
+    <message>
+        <source>选中部位后直接在 3D 模型上作画</source>
+        <translation>选中部位后直接在 3D 模型上作画</translation>
+    </message>
+    <message>
+        <source>图层</source>
+        <translation>图层</translation>
+    </message>
+    <message>
+        <source>底层</source>
+        <translation>底层</translation>
+    </message>
+    <message>
+        <source>第二层</source>
+        <translation>第二层</translation>
+    </message>
+    <message>
+        <source>视角</source>
+        <translation>视角</translation>
+    </message>
+    <message>
+        <source>自动旋转</source>
+        <translation>自动旋转</translation>
+    </message>
+    <message>
+        <source>「画笔」模式：左键作画、右键擦除；「鼠标」模式：拖动旋转 360°、右键平移、滚轮缩放；Shift + 拖动或中键可随时旋转。切换图层可编辑帽子 / 外套 / 袖 / 裤腿。</source>
+        <translation>「画笔」模式：左键作画、右键擦除；「鼠标」模式：拖动旋转 360°、右键平移、滚轮缩放；Shift + 拖动或中键可随时旋转。切换图层可编辑帽子 / 外套 / 袖 / 裤腿。</translation>
+    </message>
+    <message>
+        <source>模型</source>
+        <translation>模型</translation>
+    </message>
+    <message>
+        <source>经典（Steve）</source>
+        <translation>经典（Steve）</translation>
+    </message>
+    <message>
+        <source>纤细（Alex）</source>
+        <translation>纤细（Alex）</translation>
+    </message>
+    <message>
+        <source>皮肤库</source>
+        <translation>皮肤库</translation>
+    </message>
+    <message>
+        <source>多皮肤保存、载入与删除</source>
+        <translation>多皮肤保存、载入与删除</translation>
+    </message>
+    <message>
+        <source>新皮肤名称</source>
+        <translation>新皮肤名称</translation>
+    </message>
+    <message>
+        <source>保存到皮肤库</source>
+        <translation>保存到皮肤库</translation>
+    </message>
+    <message>
+        <source>载入</source>
+        <translation>载入</translation>
+    </message>
+    <message>
+        <source>应用</source>
+        <translation>应用</translation>
+    </message>
+    <message>
+        <source>皮肤库保存在 data/skins，双击列表项可直接载入；载入/切换皮肤不会向服务器上传任何文件。</source>
+        <translation>皮肤库保存在 data/skins，双击列表项可直接载入；载入/切换皮肤不会向服务器上传任何文件。</translation>
+    </message>
+    <message>
+        <source>导入皮肤 PNG</source>
+        <translation>导入皮肤 PNG</translation>
+    </message>
+    <message>
+        <source>保存皮肤 PNG</source>
+        <translation>保存皮肤 PNG</translation>
+    </message>
+    <message>
+        <source>无法读取该图片。</source>
+        <translation>无法读取该图片。</translation>
+    </message>
+    <message>
+        <source>保存失败。</source>
+        <translation>保存失败。</translation>
+    </message>
+    <message>
+        <source>皮肤库为空，编辑后点「保存到皮肤库」</source>
+        <translation>皮肤库为空，编辑后点「保存到皮肤库」</translation>
+    </message>
+    <message>
+        <source>保存皮肤文件失败。</source>
+        <translation>保存皮肤文件失败。</translation>
+    </message>
+    <message>
+        <source>请先在皮肤库中选择一个皮肤。</source>
+        <translation>请先在皮肤库中选择一个皮肤。</translation>
+    </message>
+    <message>
+        <source>无法读取该皮肤文件。</source>
+        <translation>无法读取该皮肤文件。</translation>
+    </message>
+    <message>
+        <source>确定删除皮肤「{0}」？</source>
+        <translation>确定删除皮肤「{0}」？</translation>
+    </message>
+    <message>
+        <source>删除失败。</source>
+        <translation>删除失败。</translation>
+    </message>
+    <message>
+        <source>已删除皮肤：{0}</source>
+        <translation>已删除皮肤：{0}</translation>
+    </message>
+    <message>
+        <source>皮肤「{0}」已存在，是否覆盖？</source>
+        <translation>皮肤「{0}」已存在，是否覆盖？</translation>
+    </message>
+    <message>
+        <source>双击载入 {0}</source>
+        <translation>双击载入 {0}</translation>
+    </message>
+    <message>
+        <source>皮肤已保存到皮肤库：{0}</source>
+        <translation>皮肤已保存到皮肤库：{0}</translation>
+    </message>
+    <message>
+        <source>已载入皮肤：{0}</source>
+        <translation>已载入皮肤：{0}</translation>
+    </message>
+    <message>
+        <source>请先选择一个账号。</source>
+        <translation>请先选择一个账号。</translation>
+    </message>
+
+    <message>
+        <source>删除</source>
+        <translation>删除</translation>
+    </message>
+    <message>
+        <source>刷新</source>
+        <translation>刷新</translation>
+    </message>    <message>
+        <source>直线</source>
+        <translation>直线</translation>
+    </message>
+    <message>
+        <source>矩形</source>
+        <translation>矩形</translation>
+    </message>
+    <message>
+        <source>椭圆</source>
+        <translation>椭圆</translation>
+    </message>
+    <message>
+        <source>喷枪</source>
+        <translation>喷枪</translation>
+    </message>
+    <message>
+        <source>3D 图层</source>
+        <translation>3D 图层</translation>
+    </message>
+    <message>
+        <source>左转</source>
+        <translation>左转</translation>
+    </message>
+    <message>
+        <source>右转</source>
+        <translation>右转</translation>
+    </message>
+    <message>
+        <source>复位视角</source>
+        <translation>复位视角</translation>
+    </message>
+    <message>
+        <source>新建图层</source>
+        <translation>新建图层</translation>
+    </message>
+    <message>
+        <source>删除图层</source>
+        <translation>删除图层</translation>
+    </message>
+    <message>
+        <source>上移</source>
+        <translation>上移</translation>
+    </message>
+    <message>
+        <source>下移</source>
+        <translation>下移</translation>
+    </message>
+    <message>
+        <source>图层名称</source>
+        <translation>图层名称</translation>
+    </message>
+    <message>
+        <source>图层 {0}</source>
+        <translation>图层 {0}</translation>
+    </message>
+    <message>
+        <source>最多支持 {0} 个图层。</source>
+        <translation>最多支持 {0} 个图层。</translation>
+    </message>
+    <message>
+        <source>底层不可删除。</source>
+        <translation>底层不可删除。</translation>
+    </message>
+    <message>
+        <source>确定删除图层「{0}」？该层内容将丢失。</source>
+        <translation>确定删除图层「{0}」？该层内容将丢失。</translation>
+    </message>
+    <message>
+        <source>多层编辑：勾选控制图层可见性，点击选中为活动层；自定义图层仅用于创作，导出 PNG / 保存皮肤库 / 应用账号时自动合并。</source>
+        <translation>多层编辑：勾选控制图层可见性，点击选中为活动层；自定义图层仅用于创作，导出 PNG / 保存皮肤库 / 应用账号时自动合并。</translation>
+    </message>
+    <message>
+        <source>操作模式</source>
+        <translation>操作模式</translation>
+    </message>
+    <message>
+        <source>鼠标</source>
+        <translation>鼠标</translation>
+    </message>
+    <message>
+        <source>缩小</source>
+        <translation>缩小</translation>
+    </message>
+    <message>
+        <source>放大</source>
+        <translation>放大</translation>
+    </message>
+</context>
+<context>
+    <name>SeedTerrainPage</name>
+    <message>
+        <source>世界种子</source>
+        <translation>世界种子</translation>
+    </message>
+    <message>
+        <source>输入种子，启动器调用本机 Java（与 Minecraft 相同的柏林噪声算法与参数）生成出生点附近的 3D 地形，无需进入游戏</source>
+        <translation>输入种子，启动器调用本机 Java（与 Minecraft 相同的柏林噪声算法与参数）生成出生点附近的 3D 地形，无需进入游戏</translation>
+    </message>
+    <message>
+        <source>种子</source>
+        <translation>种子</translation>
+    </message>
+    <message>
+        <source>可填数字或任意文本，留空随机</source>
+        <translation>可填数字或任意文本，留空随机</translation>
+    </message>
+    <message>
+        <source>尺寸</source>
+        <translation>尺寸</translation>
+    </message>
+    <message>
+        <source>起伏</source>
+        <translation>起伏</translation>
+    </message>
+    <message>
+        <source>生成地形</source>
+        <translation>生成地形</translation>
+    </message>
+    <message>
+        <source>导出高度图 PNG</source>
+        <translation>导出高度图 PNG</translation>
+    </message>
+    <message>
+        <source>当前环境未启用 QtWebEngine，将以 2D 高度图预览。</source>
+        <translation>当前环境未启用 QtWebEngine，将以 2D 高度图预览。</translation>
+    </message>
+    <message>
+        <source>说明：高度图由启动器调用本机 Java 运行时（内嵌 TerrainGen 程序）计算，噪声算法与参数（ImprovedNoise 置换表与 16 向梯度表，多层 octave 叠加，persistence 0.5 / lacunarity 2）与 Minecraft 一致；但不含生物群系、地形样条与密度函数，仍属非官方地形示意，仅供挑选种子时参考，与游戏内实际地形可能存在差异。</source>
+        <translation>说明：高度图由启动器调用本机 Java 运行时（内嵌 TerrainGen 程序）计算，噪声算法与参数（ImprovedNoise 置换表与 16 向梯度表，多层 octave 叠加，persistence 0.5 / lacunarity 2）与 Minecraft 一致；但不含生物群系、地形样条与密度函数，仍属非官方地形示意，仅供挑选种子时参考，与游戏内实际地形可能存在差异。</translation>
+    </message>
+    <message>
+        <source>拖动旋转 · 滚轮缩放 · 右键平移</source>
+        <translation>拖动旋转 · 滚轮缩放 · 右键平移</translation>
+    </message>
+    <message>
+        <source>WebGL 不可用</source>
+        <translation>WebGL 不可用</translation>
+    </message>
+    <message>
+        <source>地形生成失败</source>
+        <translation>地形生成失败</translation>
+    </message>
+    <message>
+        <source>导出高度图</source>
+        <translation>导出高度图</translation>
+    </message>
+    <message>
+        <source>请先生成一次地形。</source>
+        <translation>请先生成一次地形。</translation>
+    </message>
+    <message>
+        <source>视角</source>
+        <translation>视角</translation>
+    </message>
+    <message>
+        <source>缩放</source>
+        <translation>缩放</translation>
+    </message>
+    <message>
+        <source>平移</source>
+        <translation>平移</translation>
+    </message>
+    <message>
+        <source>复位视角</source>
+        <translation>复位视角</translation>
+    </message>
+    <message>
+        <source>自动旋转</source>
+        <translation>自动旋转</translation>
+    </message>
+    <message>
+        <source>向左旋转</source>
+        <translation>向左旋转</translation>
+    </message>
+    <message>
+        <source>向右旋转</source>
+        <translation>向右旋转</translation>
+    </message>
+    <message>
+        <source>抬高视角</source>
+        <translation>抬高视角</translation>
+    </message>
+    <message>
+        <source>压低视角</source>
+        <translation>压低视角</translation>
+    </message>
+    <message>
+        <source>放大</source>
+        <translation>放大</translation>
+    </message>
+    <message>
+        <source>缩小</source>
+        <translation>缩小</translation>
+    </message>
+    <message>
+        <source>按钮或拖动旋转 · 滚轮缩放 · 右键平移 · 双击复位</source>
+        <translation>按钮或拖动旋转 · 滚轮缩放 · 右键平移 · 双击复位</translation>
+    </message>
+    <message>
+        <source>尺寸越大，生成越久</source>
+        <translation>尺寸越大，生成越久</translation>
+    </message>
+    <message>
+        <source>噪声版本</source>
+        <translation>噪声版本</translation>
+    </message>
+    <message>
+        <source>经典（1.7–1.17）</source>
+        <translation>经典（1.7–1.17）</translation>
+    </message>
+    <message>
+        <source>新版（1.18+）</source>
+        <translation>新版（1.18+）</translation>
+    </message>
+    <message>
+        <source>尺寸过大，最多支持 {0}×{0}，请调小后再生成。</source>
+        <translation>尺寸过大，最多支持 {0}×{0}，请调小后再生成。</translation>
+    </message>
+    <message>
+        <source>说明：高度图由启动器调用本机 Java 运行时（内嵌 TerrainGen 程序）计算。「经典」使用 1.7–1.17 的 ImprovedNoise（256 置换表 + 16 向梯度表）与 8 层 octave 叠加（频率 ×2、振幅 ×0.5）；「新版」使用 1.18 起的 Xoroshiro128++ 随机源与气候噪声（大陆性 / 侵蚀度 / 奇异度）。两种模式的噪声参数均为原版固定值，不提供起伏等可调项；但不含生物群系、地形样条与密度函数，仍属非官方地形示意，仅供挑选种子时参考，与游戏内实际地形可能存在差异。</source>
+        <translation>说明：高度图由启动器调用本机 Java 运行时（内嵌 TerrainGen 程序）计算。「经典」使用 1.7–1.17 的 ImprovedNoise（256 置换表 + 16 向梯度表）与 8 层 octave 叠加（频率 ×2、振幅 ×0.5）；「新版」使用 1.18 起的 Xoroshiro128++ 随机源与气候噪声（大陆性 / 侵蚀度 / 奇异度）。两种模式的噪声参数均为原版固定值，不提供起伏等可调项；但不含生物群系、地形样条与密度函数，仍属非官方地形示意，仅供挑选种子时参考，与游戏内实际地形可能存在差异。</translation>
+    </message>
+</context>
+<context>
+    <name>SkinCanvas</name>
+    <message>
+        <source>底层</source>
+        <translation>底层</translation>
+    </message>
+    <message>
+        <source>图层 {0}</source>
+        <translation>图层 {0}</translation>
     </message>
 </context>
 </TS>

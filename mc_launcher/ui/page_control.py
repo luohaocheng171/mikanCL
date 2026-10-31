@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSpinBox,
     QSplitter,
@@ -37,7 +38,15 @@ from .. import APP_NAME
 from ..config import ISOLATION_LABELS, PROCESS_PRIORITIES
 from ..content import ContentError, ContentProject, ContentVersion
 from ..context import AppContext
-from ..version import InstalledVersion, VersionError, load_version, scan_installed_versions
+from ..installer import repair_version_json
+from ..version import (
+    InstalledVersion,
+    VersionError,
+    clean_game_dir,
+    clean_game_dir_targets,
+    load_version,
+    scan_installed_versions,
+)
 from .widgets import Badge, Card, card_title_row, hline, page_header, scroll_page
 
 NAV_ITEMS = ("概览", "游戏设置", "模组管理", "资源包管理", "光影包管理", "版本管理")
@@ -154,6 +163,70 @@ def _human_size(value: int) -> str:
     return f"{size:.1f} GB"
 
 
+# 批处理里需要加引号的字符集合（空格、&、|、重定向、括号等）
+_BAT_SPECIAL = set(' \t&()[]{}^=;,!`\'"+|<>%')
+
+
+def _bat_arg(value: str) -> str:
+    """按 cmd 规则转义单个参数：含特殊字符时用双引号包住。"""
+    text = str(value)
+    if not text:
+        return '""'
+    text = text.replace("%", "%%")  # 避免被当成批处理变量展开
+    if any(ch in _BAT_SPECIAL for ch in text):
+        return '"' + text.replace('"', '""') + '"'
+    return text
+
+
+def _ps_arg(value: str) -> str:
+    """PowerShell 单引号字符串转义：内部单引号写两次。"""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def build_script_text(plan, suffix: str) -> str:
+    """根据后缀生成 .bat / .ps1 启动脚本内容。"""
+    cwd = str(plan.cwd)
+    if suffix.lower() == ".ps1":
+        args = ",".join(_ps_arg(part) for part in plan.command)
+        return (
+            f"Set-Location {_ps_arg(cwd)}\n"
+            f"$cmd = @({args})\n"
+            "& $cmd[0] @($cmd[1..($cmd.Length-1)])\n"
+        )
+    line = " ".join(_bat_arg(part) for part in plan.command)
+    return f'@echo off\ncd /d "{cwd}"\n{line}\n'
+
+
+class RepairVersionWorker(QThread):
+    """后台修复损坏的版本 JSON，并补全缺失的 jar / 依赖库。"""
+
+    progress = Signal(float, str)
+    done = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, ctx: AppContext, version_id: str, game_dir: Path, parent=None):
+        super().__init__(parent)
+        self.ctx = ctx
+        self.version_id = version_id
+        self.game_dir = Path(game_dir)
+
+    def run(self) -> None:
+        try:
+            config = self.ctx.config.with_game_dir(self.game_dir)
+            path = repair_version_json(
+                config,
+                self.ctx.sources,
+                self.version_id,
+                progress_cb=lambda item: self.progress.emit(
+                    item.percent, item.detail or item.stage
+                ),
+                log_cb=lambda message: self.ctx.bus.log.emit(message),
+            )
+            self.done.emit(str(path))
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
 class ExportPackWorker(QThread):
     progress = Signal(float, str)
     done = Signal(str)
@@ -256,6 +329,7 @@ class ControlPage(QWidget):
         self._mod_update_worker: ModUpdateWorker | None = None
         self._mod_apply_worker: ModUpdateApplyWorker | None = None
         self._export_worker: ExportPackWorker | None = None
+        self._repair_worker: RepairVersionWorker | None = None
         self.overview_labels: dict[str, QLabel] = {}
         self.manage_labels: dict[str, QLabel] = {}
         self._build()
@@ -672,6 +746,17 @@ class ControlPage(QWidget):
         edit_nbt = QPushButton("编辑 level.dat…")
         edit_nbt.clicked.connect(self._edit_level_dat)
         buttons.addWidget(edit_nbt)
+        self.repair_button = QPushButton("修复版本")
+        self.repair_button.setToolTip("当前版本无需修复")
+        self.repair_button.setEnabled(False)
+        self.repair_button.clicked.connect(self._repair_version)
+        buttons.addWidget(self.repair_button)
+        clean_dir = QPushButton("清理游戏目录")
+        clean_dir.clicked.connect(self._clean_game_dir)
+        buttons.addWidget(clean_dir)
+        export_script = QPushButton("导出启动脚本…")
+        export_script.clicked.connect(self._export_launch_script)
+        buttons.addWidget(export_script)
         export_pack = QPushButton("导出为整合包…")
         export_pack.clicked.connect(self._export_modpack)
         buttons.addWidget(export_pack)
@@ -685,6 +770,16 @@ class ControlPage(QWidget):
         remove_instance.clicked.connect(self._remove_instance_record)
         buttons.addWidget(remove_instance)
         card.body.addLayout(buttons)
+
+        self.repair_progress = QProgressBar()
+        self.repair_progress.setRange(0, 100)
+        self.repair_progress.setTextVisible(False)
+        self.repair_progress.setVisible(False)
+        card.body.addWidget(self.repair_progress)
+        self.repair_status = QLabel("")
+        self.repair_status.setObjectName("Tiny")
+        self.repair_status.setVisible(False)
+        card.body.addWidget(self.repair_status)
         layout.addWidget(card)
 
         hint = QLabel(
@@ -720,6 +815,221 @@ class ControlPage(QWidget):
         dialog = NbtEditorDialog(self.ctx, self)
         dialog.open_path(str(target))
         dialog.exec()
+
+    # ------------------------------------------------------------------
+    def _update_repair_state(self) -> None:
+        """仅在当前版本被扫描标记为损坏时启用「修复版本」。"""
+        version = self._current_version()
+        running = self._repair_worker is not None and self._repair_worker.isRunning()
+        broken = version is not None and version.type == "broken"
+        self.repair_button.setEnabled(broken and not running)
+        if version is None:
+            self.repair_button.setToolTip("请先选择一个版本")
+        elif not broken:
+            self.repair_button.setToolTip("当前版本无需修复")
+        else:
+            self.repair_button.setToolTip(f"版本 JSON 损坏：{version.error or '无法解析'}")
+
+    def _repair_version(self) -> None:
+        version = self._current_version()
+        if version is None:
+            QMessageBox.information(self, APP_NAME, "请先选择一个版本。")
+            return
+        if version.type != "broken":
+            QMessageBox.information(self, APP_NAME, "当前版本无需修复。")
+            return
+        if self._repair_worker is not None and self._repair_worker.isRunning():
+            self.ctx.bus.toast.emit("正在修复版本，请稍候…")
+            return
+        answer = QMessageBox.question(
+            self,
+            "修复版本",
+            f"版本「{version.id}」的 JSON 无法解析：\n{version.error}\n\n"
+            "将从版本清单重新下载 JSON（原文件备份为 *.bad-时间戳），"
+            "并补全缺失的 jar 与依赖库。是否继续？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.repair_button.setEnabled(False)
+        self.repair_progress.setValue(0)
+        self.repair_progress.setVisible(True)
+        self.repair_status.setText("正在修复版本…")
+        self.repair_status.setVisible(True)
+        self._repair_worker = RepairVersionWorker(
+            self.ctx, version.id, self._instance_dir(), self
+        )
+        self._repair_worker.progress.connect(self._on_repair_progress)
+        self._repair_worker.done.connect(self._on_repair_done)
+        self._repair_worker.failed.connect(self._on_repair_failed)
+        self._repair_worker.finished.connect(self._on_repair_finished)
+        self._repair_worker.start()
+
+    def _on_repair_progress(self, percent: float, detail: str) -> None:
+        self.repair_progress.setValue(int(max(0.0, min(1.0, float(percent))) * 100))
+        if detail:
+            self.repair_status.setText(detail)
+
+    def _on_repair_done(self, path: str) -> None:
+        self.repair_progress.setVisible(False)
+        self.repair_status.setVisible(False)
+        self.refresh()
+        self.ctx.bus.versions_changed.emit()
+        QMessageBox.information(self, APP_NAME, f"已修复：\n{path}")
+
+    def _on_repair_failed(self, message: str) -> None:
+        self.repair_progress.setVisible(False)
+        self.repair_status.setVisible(False)
+        self.ctx.bus.log.emit(f"[修复] 修复版本失败：{message}")
+        QMessageBox.warning(self, APP_NAME, f"修复失败：{message}")
+
+    def _on_repair_finished(self) -> None:
+        self._update_repair_state()
+
+    # ------------------------------------------------------------------
+    def _clean_game_dir(self) -> None:
+        """清理日志、natives、临时文件与旧崩溃报告。"""
+        config = self.ctx.config.with_game_dir(self._instance_dir())
+        try:
+            targets, count, size = clean_game_dir_targets(config)
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, f"统计清理内容失败：{exc}")
+            return
+        if not targets:
+            QMessageBox.information(self, APP_NAME, "游戏目录已经很干净，没有需要清理的文件。")
+            return
+        answer = QMessageBox.question(
+            self,
+            "清理游戏目录",
+            f"将删除 {count} 个文件，释放约 {_human_size(size)}，是否继续？\n\n"
+            "清理范围：启动器日志（保留最近 3 个）、versions/*/natives、"
+            "versions/*/*.tmp、versions/*/*.part、7 天前的 crash-reports。",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            deleted, freed, failed = clean_game_dir(config)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, APP_NAME, f"清理失败：{exc}")
+            return
+        message = f"已删除 {deleted} 个文件，释放 {_human_size(freed)}。"
+        if failed:
+            message += f"\n有 {failed} 个文件删除失败（可能被游戏或启动器占用）。"
+        self.ctx.bus.log.emit(f"[清理] {message.replace(chr(10), ' ')}")
+        QMessageBox.information(self, APP_NAME, message)
+
+    # ------------------------------------------------------------------
+    def _export_launch_plan(self, version: InstalledVersion):
+        """用当前账号 / Java 设置构造最小可用的启动计划。"""
+        from ..java import pick_java
+        from ..launcher import LaunchOptions, build_launch_plan, prepare_isolated_dir
+
+        config = self.ctx.config
+        root_dir = self._instance_dir()
+        merged = load_version(root_dir, version.id)
+        # 与主页启动一致：按版本隔离设置决定实际游戏目录
+        game_dir = prepare_isolated_dir(
+            root_dir, version.id, config.isolation_for(version.id)
+        )
+        java, warning = pick_java(
+            self.ctx.javas, merged.java_major or 21, config.java_path
+        )
+        if java is None:
+            raise VersionError(warning or "未找到可用的 Java")
+        setting = config.version_setting(version.id)
+        account = self.ctx.current_account()
+        if account is not None and account.type != "offline":
+            player_name = account.name
+            uuid = account.uuid
+            access_token = account.access_token
+            user_type = "msa"
+        else:
+            player_name = (account.name if account is not None else "") or config.player_name
+            uuid = account.uuid if account is not None else ""
+            access_token = ""
+            user_type = "legacy"
+        if not player_name:
+            raise VersionError("尚未设置玩家昵称，请先在主页填写昵称后再导出。")
+        extra_jvm = " ".join(
+            part for part in (config.extra_jvm_args, setting.extra_jvm_args) if part.strip()
+        )
+        extra_game = " ".join(
+            part for part in (config.extra_game_args, setting.extra_game_args) if part.strip()
+        )
+        memory = int(setting.memory_mb) if setting.memory_mb else int(config.memory_mb)
+        return build_launch_plan(
+            LaunchOptions(
+                version=merged,
+                game_dir=game_dir,
+                root_dir=root_dir,
+                player_name=player_name,
+                java=java,
+                memory_mb=memory,
+                width=int(config.width),
+                height=int(config.height),
+                extra_jvm_args=extra_jvm,
+                extra_game_args=extra_game,
+                uuid=uuid,
+                access_token=access_token,
+                user_type=user_type,
+                offline=(account is None or account.type == "offline"),
+            )
+        )
+
+    def _export_launch_script(self) -> None:
+        version = self._current_version()
+        if version is None:
+            QMessageBox.information(self, APP_NAME, "请先选择一个版本。")
+            return
+        if version.type == "broken":
+            QMessageBox.warning(
+                self, APP_NAME, "当前版本的 JSON 已损坏，请先用「修复版本」修复后再导出启动脚本。"
+            )
+            return
+        try:
+            plan = self._export_launch_plan(version)
+        except Exception as exc:  # noqa: BLE001
+            self.ctx.bus.log.emit(f"[导出] 生成启动命令失败：{exc}")
+            QMessageBox.warning(
+                self,
+                APP_NAME,
+                f"无法生成启动命令：{exc}\n\n请先在主页成功启动一次该版本，再导出启动脚本。",
+            )
+            return
+        target, selected = QFileDialog.getSaveFileName(
+            self,
+            "导出启动脚本",
+            str(Path.home() / f"启动-{version.id}.bat"),
+            "Windows 批处理 (*.bat);;PowerShell 脚本 (*.ps1)",
+        )
+        if not target:
+            return
+        path = Path(target)
+        suffix = path.suffix.lower()
+        if suffix not in (".bat", ".ps1"):
+            suffix = ".ps1" if "ps1" in (selected or "").lower() else ".bat"
+            path = Path(target + suffix)  # 直接补后缀，避免误截断版本号里的点
+        try:
+            path.write_text(build_script_text(plan, suffix), encoding="utf-8-sig")
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, f"写入脚本失败：{exc}")
+            return
+        self.ctx.bus.toast.emit(f"启动脚本已导出：{path}")
+        box = QMessageBox(self)
+        box.setWindowTitle(APP_NAME)
+        box.setText(f"启动脚本已导出到：\n{path}")
+        box.setInformativeText(
+            "双击脚本即可按当前 Java / 内存 / 账号设置启动该版本；"
+            "脚本使用的是本机绝对路径，移动游戏目录后需重新导出。"
+        )
+        open_button = box.addButton("打开所在文件夹", QMessageBox.ActionRole)
+        box.addButton("关闭", QMessageBox.AcceptRole)
+        box.exec()
+        if box.clickedButton() is open_button:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
 
     def _import_world_archive(self) -> None:
         version = self._current_version()
@@ -839,13 +1149,19 @@ class ControlPage(QWidget):
             self._refreshing = False
 
     def shutdown(self) -> None:
-        for worker in (self._mod_update_worker, self._mod_apply_worker, self._export_worker):
+        for worker in (
+            self._mod_update_worker,
+            self._mod_apply_worker,
+            self._export_worker,
+            self._repair_worker,
+        ):
             if worker is not None and worker.isRunning():
                 worker.requestInterruption()
                 worker.wait(2000)
         self._mod_update_worker = None
         self._mod_apply_worker = None
         self._export_worker = None
+        self._repair_worker = None
 
     # ------------------------------------------------------------------
     def _current_instance_id(self) -> str:
@@ -1054,6 +1370,7 @@ class ControlPage(QWidget):
 
     def _reload_version_settings(self) -> None:
         version = self._current_version()
+        self._update_repair_state()
         if version is None:
             self.version_note.setText("当前版本：未选择")
             for widget in (

@@ -1,0 +1,1272 @@
+{
+  "source": "https://www.mcappx.com/bedrock/",
+  "updated": "2026-10-30",
+  "note": "目录由 MikanCL 抓取并内置；版本详情页受 Cloudflare 人机验证保护时请用浏览器下载。",
+  "majors": [
+    {
+      "id": "26.40",
+      "name": "26.40 混沌立方",
+      "url": "https://www.mcappx.com/bedrock/26.40/"
+    },
+    {
+      "id": "26.30",
+      "name": "26.30 混沌立方",
+      "url": "https://www.mcappx.com/bedrock/26.30/"
+    },
+    {
+      "id": "26.20",
+      "name": "26.20 小鬼当家",
+      "url": "https://www.mcappx.com/bedrock/26.20/"
+    },
+    {
+      "id": "26.10",
+      "name": "26.10 小鬼当家",
+      "url": "https://www.mcappx.com/bedrock/26.10/"
+    },
+    {
+      "id": "26.0",
+      "name": "26.0 群骑纷争",
+      "url": "https://www.mcappx.com/bedrock/26.0/"
+    },
+    {
+      "id": "1.21",
+      "name": "1.21 棘巧试炼",
+      "url": "https://www.mcappx.com/bedrock/1.21/"
+    },
+    {
+      "id": "1.20",
+      "name": "1.20 足迹与故事",
+      "url": "https://www.mcappx.com/bedrock/1.20/"
+    },
+    {
+      "id": "1.19",
+      "name": "1.19 荒野更新",
+      "url": "https://www.mcappx.com/bedrock/1.19/"
+    },
+    {
+      "id": "1.18",
+      "name": "1.18 洞穴与山崖（下）",
+      "url": "https://www.mcappx.com/bedrock/1.18/"
+    },
+    {
+      "id": "1.17",
+      "name": "1.17 洞穴与山崖（上）",
+      "url": "https://www.mcappx.com/bedrock/1.17/"
+    },
+    {
+      "id": "1.16",
+      "name": "1.16 下界更新",
+      "url": "https://www.mcappx.com/bedrock/1.16/"
+    },
+    {
+      "id": "RTX Beta",
+      "name": "RTX Beta",
+      "url": "https://www.mcappx.com/bedrock/RTX%20Beta/"
+    },
+    {
+      "id": "1.14",
+      "name": "1.14 嗡嗡蜂群",
+      "url": "https://www.mcappx.com/bedrock/1.14/"
+    },
+    {
+      "id": "1.13",
+      "name": "1.13",
+      "url": "https://www.mcappx.com/bedrock/1.13/"
+    },
+    {
+      "id": "1.12",
+      "name": "1.12",
+      "url": "https://www.mcappx.com/bedrock/1.12/"
+    },
+    {
+      "id": "1.11",
+      "name": "1.11 村庄与掠夺",
+      "url": "https://www.mcappx.com/bedrock/1.11/"
+    },
+    {
+      "id": "1.10",
+      "name": "1.10 纹理更新",
+      "url": "https://www.mcappx.com/bedrock/1.10/"
+    },
+    {
+      "id": "1.9",
+      "name": "1.9",
+      "url": "https://www.mcappx.com/bedrock/1.9/"
+    },
+    {
+      "id": "1.8",
+      "name": "1.8",
+      "url": "https://www.mcappx.com/bedrock/1.8/"
+    },
+    {
+      "id": "1.7",
+      "name": "1.7",
+      "url": "https://www.mcappx.com/bedrock/1.7/"
+    },
+    {
+      "id": "1.6",
+      "name": "1.6",
+      "url": "https://www.mcappx.com/bedrock/1.6/"
+    },
+    {
+      "id": "1.5",
+      "name": "1.5 水域更新（下）",
+      "url": "https://www.mcappx.com/bedrock/1.5/"
+    },
+    {
+      "id": "1.4",
+      "name": "1.4 水域更新（上）",
+      "url": "https://www.mcappx.com/bedrock/1.4/"
+    },
+    {
+      "id": "1.2",
+      "name": "1.2 独乐不如众乐更新",
+      "url": "https://www.mcappx.com/bedrock/1.2/"
+    },
+    {
+      "id": "1.1",
+      "name": "1.1 探索更新",
+      "url": "https://www.mcappx.com/bedrock/1.1/"
+    },
+    {
+      "id": "1.0",
+      "name": "1.0 末影更新",
+      "url": "https://www.mcappx.com/bedrock/1.0/"
+    },
+    {
+      "id": "0.16",
+      "name": "0.16 Boss 更新",
+      "url": "https://www.mcappx.com/bedrock/0.16/"
+    },
+    {
+      "id": "0.15",
+      "name": "0.15 友好更新",
+      "url": "https://www.mcappx.com/bedrock/0.15/"
+    },
+    {
+      "id": "0.14",
+      "name": "0.14 主世界更新",
+      "url": "https://www.mcappx.com/bedrock/0.14/"
+    },
+    {
+      "id": "0.13",
+      "name": "0.13",
+      "url": "https://www.mcappx.com/bedrock/0.13/"
+    },
+    {
+      "id": "0.12",
+      "name": "0.12",
+      "url": "https://www.mcappx.com/bedrock/0.12/"
+    }
+  ],
+  "releases": [
+    {
+      "version": "26.40.30",
+      "channel": "preview",
+      "major": "26.40",
+      "date": "2026-07-07",
+      "min_os": 18362,
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/26.40/26.40.30/",
+      "source": "mcappx"
+    },
+    {
+      "version": "26.40.27",
+      "channel": "preview",
+      "major": "26.40",
+      "date": "2026-06-23",
+      "min_os": 18362,
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/26.40/26.40.27/",
+      "source": "mcappx"
+    },
+    {
+      "version": "26.40.26",
+      "channel": "preview",
+      "major": "26.40",
+      "date": "2026-06-17",
+      "min_os": 18362,
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/26.40/26.40.26/",
+      "source": "mcappx"
+    },
+    {
+      "version": "26.40.22",
+      "channel": "preview",
+      "major": "26.40",
+      "date": "2026-06-10",
+      "min_os": 18362,
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/26.40/26.40.22/",
+      "source": "mcappx"
+    },
+    {
+      "version": "26.40.20",
+      "channel": "preview",
+      "major": "26.40",
+      "date": "2026-06-02",
+      "min_os": 18362,
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/26.40/26.40.20/",
+      "source": "mcappx"
+    },
+    {
+      "version": "1.8.1",
+      "channel": "release",
+      "major": "1.8",
+      "date": "2019-01-08",
+      "min_os": 14393,
+      "archs": [
+        "x64",
+        "x86",
+        "arm"
+      ],
+      "package_id": "1.8.102",
+      "format": "Appx",
+      "url": "https://www.mcappx.com/bedrock/1.8/1.8.1/",
+      "source": "mcappx",
+      "sizes": {
+        "x64": 180795474,
+        "x86": 177251287,
+        "arm": 73389834
+      },
+      "sha256": {
+        "x64": "f717870a8331809fdb8cc4171f042683838bd7885ddd22fbf22da32693829fc8",
+        "x86": "456cfc9b7d64e888138da60b258f54ee6f969aceea62d81ddc61997efdda82b4",
+        "arm": "b5d4c21f87c66346168ff6aa93d874ab0036c7eb5a6edcc2090b20f044d62e23"
+      },
+      "links": {
+        "x64": {
+          "jp": "https://dl.mcappx.com/be-1-8-102-x64-jp",
+          "us": "https://dl.mcappx.com/be-1-8-102-x64-us"
+        },
+        "x86": {
+          "jp": "https://dl.mcappx.com/be-1-8-102-x86-jp",
+          "us": "https://dl.mcappx.com/be-1-8-102-x86-us"
+        },
+        "arm": {
+          "jp": "https://dl.mcappx.com/be-1-8-102-arm-jp",
+          "us": "https://dl.mcappx.com/be-1-8-102-arm-us"
+        }
+      }
+    },
+    {
+      "version": "1.8.0",
+      "channel": "release",
+      "major": "1.8",
+      "date": "2018-12-11",
+      "min_os": 14393,
+      "archs": [
+        "x64",
+        "x86",
+        "arm"
+      ],
+      "package_id": "1.8.24",
+      "format": "Appx",
+      "url": "https://www.mcappx.com/bedrock/1.8/1.8.0/",
+      "source": "mcappx",
+      "sizes": {
+        "x64": 180795474,
+        "x86": 177251287,
+        "arm": 73389834
+      },
+      "links": {
+        "x64": {
+          "jp": "https://dl.mcappx.com/be-1-8-24-x64-jp",
+          "us": "https://dl.mcappx.com/be-1-8-24-x64-us"
+        },
+        "x86": {
+          "jp": "https://dl.mcappx.com/be-1-8-24-x86-jp",
+          "us": "https://dl.mcappx.com/be-1-8-24-x86-us"
+        },
+        "arm": {
+          "jp": "https://dl.mcappx.com/be-1-8-24-arm-jp",
+          "us": "https://dl.mcappx.com/be-1-8-24-arm-us"
+        }
+      }
+    },
+    {
+      "version": "1.8.0.10",
+      "channel": "preview",
+      "major": "1.8",
+      "date": "2018-10-18",
+      "min_os": 14393,
+      "archs": [
+        "x64"
+      ],
+      "package_id": "1.8.10",
+      "format": "Appx",
+      "url": "https://www.mcappx.com/bedrock/1.8/1.8.0.10/",
+      "source": "mcappx",
+      "sizes": {
+        "x64": 180648673
+      },
+      "links": {
+        "x64": {
+          "jp": "https://dl.mcappx.com/be-1-8-10-x64-jp",
+          "us": "https://dl.mcappx.com/be-1-8-10-x64-us"
+        }
+      }
+    },
+    {
+      "channel": "release",
+      "version": "1.21.132",
+      "min_os": 18362,
+      "date": "2026-01-08",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.132/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.131",
+      "min_os": 18362,
+      "date": "2025-12-16",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.131/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.130",
+      "min_os": 18362,
+      "date": "2025-12-09",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.130/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.130.28",
+      "min_os": 18362,
+      "date": "2025-11-18",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.130.28/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.130.27",
+      "min_os": 18362,
+      "date": "2025-11-11",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.130.27/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.130.26",
+      "min_os": 18362,
+      "date": "2025-11-04",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.130.26/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.130.25",
+      "min_os": 18362,
+      "date": "2025-10-31",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.130.25/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.130.24",
+      "min_os": 18362,
+      "date": "2025-10-30",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.130.24/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.130.22",
+      "min_os": 18362,
+      "date": "2025-10-22",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.130.22/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.130.20",
+      "min_os": 18362,
+      "date": "2025-10-14",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.130.20/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.124",
+      "min_os": 18362,
+      "date": "2025-11-21",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.124/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.123",
+      "min_os": 18362,
+      "date": "2025-11-13",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.123/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.122",
+      "min_os": 18362,
+      "date": "2025-11-10",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.122/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.121",
+      "min_os": 18362,
+      "date": "2025-11-05",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.121/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.120",
+      "min_os": 18362,
+      "date": "2025-10-28",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.120/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.120.25",
+      "min_os": 18362,
+      "date": "2025-10-07",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.120.25/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.120.24",
+      "min_os": 18362,
+      "date": "2025-10-01",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.120.24/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.120.23",
+      "min_os": 18362,
+      "date": "2025-09-23",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.120.23/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.120.22",
+      "min_os": 18362,
+      "date": "2025-09-16",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.120.22/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.120.21",
+      "min_os": 18362,
+      "date": "2025-09-09",
+      "archs": [
+        "x64"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.120.21/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.120.20",
+      "min_os": 19041,
+      "date": "2025-09-03",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.120.20/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.114",
+      "min_os": 19041,
+      "date": "2025-10-16",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.114/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.113",
+      "min_os": 19041,
+      "date": "2025-10-09",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.113/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.111",
+      "min_os": 19041,
+      "date": "2025-09-30",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.111/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.110.26",
+      "min_os": 19041,
+      "date": "2025-08-26",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.110.26/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.110.25",
+      "min_os": 19041,
+      "date": "2025-08-19",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.110.25/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.110.24",
+      "min_os": 19041,
+      "date": "2025-08-12",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.110.24/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.110.23",
+      "min_os": 19041,
+      "date": "2025-08-06",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.110.23/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.110.22",
+      "min_os": 19041,
+      "date": "2025-07-30",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.110.22/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.110.20",
+      "min_os": 19041,
+      "date": "2025-07-22",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.110.20/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.101",
+      "min_os": 19041,
+      "date": "2025-08-13",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.101/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.100",
+      "min_os": 19041,
+      "date": "2025-08-05",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.100/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.100.24",
+      "min_os": 19041,
+      "date": "2025-07-16",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.100.24/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.100.23",
+      "min_os": 19041,
+      "date": "2025-07-01",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.100.23/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.100.22",
+      "min_os": 19041,
+      "date": "2025-06-25",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.100.22/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.100.21",
+      "min_os": 19041,
+      "date": "2025-06-18",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.100.21/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.100.20",
+      "min_os": 19041,
+      "date": "2025-06-10",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.100.20/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.94",
+      "min_os": 19041,
+      "date": "2025-07-14",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.94/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.93",
+      "min_os": 19041,
+      "date": "2025-07-03",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.93/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.92",
+      "min_os": 19041,
+      "date": "2025-06-19",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.92/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.90",
+      "min_os": 19041,
+      "date": "2025-06-17",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.90/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.90.28",
+      "min_os": 19041,
+      "date": "2025-06-02",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.90.28/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.90.27",
+      "min_os": 19041,
+      "date": "2025-05-27",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.90.27/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.90.26",
+      "min_os": 19041,
+      "date": "2025-05-20",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.90.26/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.90.25",
+      "min_os": 19041,
+      "date": "2025-05-13",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.90.25/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.90.23",
+      "min_os": 19041,
+      "date": "2025-05-07",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.90.23/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.90.21",
+      "min_os": 19041,
+      "date": "2025-04-29",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.90.21/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.90.20",
+      "min_os": 19041,
+      "date": "2025-04-22",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.90.20/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.82",
+      "min_os": 19041,
+      "date": "2025-05-19",
+      "archs": [
+        "x64",
+        "x86",
+        "arm"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.82/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.81",
+      "min_os": 19041,
+      "date": "2025-05-14",
+      "archs": [
+        "x64",
+        "x86",
+        "arm"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.81/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.80",
+      "min_os": 19041,
+      "date": "2025-05-06",
+      "archs": [
+        "x64",
+        "x86",
+        "arm"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.80/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.80.28",
+      "min_os": 19041,
+      "date": "2025-04-15",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.80.28/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.80.27",
+      "min_os": 19041,
+      "date": "2025-04-08",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.80.27/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.80.25",
+      "min_os": 19041,
+      "date": "2025-04-03",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.80.25/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.80.22",
+      "min_os": 19041,
+      "date": "2025-03-26",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.80.22/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.80.21",
+      "min_os": 19041,
+      "date": "2025-03-18",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.80.21/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.80.20",
+      "min_os": 19041,
+      "date": "2025-03-11",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.80.20/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.73",
+      "min_os": 19041,
+      "date": "2025-04-08",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.72(01",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.71",
+      "min_os": 19041,
+      "date": "2025-03-28",
+      "archs": [
+        "x64",
+        "x86",
+        "arm"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.71/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.70",
+      "min_os": 19041,
+      "date": "2025-03-25",
+      "archs": [
+        "x64",
+        "x86",
+        "arm"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.70/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.70.26",
+      "min_os": 19041,
+      "date": "2025-03-05",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.70.26/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.70.25",
+      "min_os": 19041,
+      "date": "2025-02-26",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.70.25/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.70.24",
+      "min_os": 19041,
+      "date": "2025-02-19",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.70.24/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.70.23",
+      "min_os": 19041,
+      "date": "2025-02-12",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.70.23/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.70.22",
+      "min_os": 19041,
+      "date": "2025-02-05",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.70.22/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.70.20",
+      "min_os": 19041,
+      "date": "2025-01-30",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.70.20/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.62",
+      "min_os": 19041,
+      "date": "2025-02-25",
+      "archs": [
+        "x64",
+        "x86",
+        "arm"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.62/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.61",
+      "min_os": 19041,
+      "date": "2025-02-19",
+      "archs": [
+        "x64",
+        "x86",
+        "arm"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.61/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "release",
+      "version": "1.21.60",
+      "min_os": 19041,
+      "date": "2025-02-11",
+      "archs": [
+        "x64",
+        "x86",
+        "arm"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.60/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.60.28",
+      "min_os": 19041,
+      "date": "2025-01-22",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.60.28/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.60.27",
+      "min_os": 19041,
+      "date": "2025-01-15",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.60.27/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.60.25",
+      "min_os": 19041,
+      "date": "2025-01-08",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.60.25/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.60.24",
+      "min_os": 19041,
+      "date": "2024-12-12",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.60.24/",
+      "major": "1.21",
+      "source": "mcappx"
+    },
+    {
+      "channel": "preview",
+      "version": "1.21.60.23",
+      "min_os": 19041,
+      "date": "2024-12-04",
+      "archs": [
+        "x64",
+        "x86"
+      ],
+      "url": "https://www.mcappx.com/bedrock/1.21/1.21.60.23/",
+      "major": "1.21",
+      "source": "mcappx"
+    }
+  ]
+}

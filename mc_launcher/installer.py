@@ -27,6 +27,7 @@ from .version import (
     client_jar_path,
     load_version,
     logging_file_path,
+    resolve_libraries,
 )
 
 
@@ -47,6 +48,119 @@ class DownloadTask:
     size: int = 0
     sha1: str = ""
     label: str = ""
+
+
+def estimate_version_size(version: MergedVersion, assets_path: Path) -> int:
+    """按版本 JSON 估算安装/补全所需磁盘字节数：版本本体 + 依赖库 + 资源索引里的对象。
+
+    资源索引可能尚未下载，此时跳过该项而不报错；返回 0 表示无法估算。
+    """
+    total = 0
+    data = getattr(version, "json", None)
+    if isinstance(data, dict):
+        try:
+            total += int(data.get("size") or 0)
+        except (TypeError, ValueError):
+            pass
+    for lib in version.libraries:
+        try:
+            total += int(lib.size or 0)
+        except (TypeError, ValueError):
+            continue
+    index = version.asset_index or {}
+    index_id = str(index.get("id") or version.assets_id or "")
+    if not index_id:
+        return total
+    index_path = Path(assets_path) / "indexes" / f"{index_id}.json"
+    try:
+        index_data = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return total  # 索引还没下载，跳过资源体积
+    objects = index_data.get("objects")
+    if isinstance(objects, dict):
+        for obj in objects.values():
+            if not isinstance(obj, dict):
+                continue
+            try:
+                total += int(obj.get("size") or 0)
+            except (TypeError, ValueError):
+                continue
+    return total
+
+
+_ASSET_INDEX_FALLBACK = 350 * 1024 ** 2
+
+
+def estimate_remote_version_size(
+    version_json_url: str,
+    sources: SourceManager,
+    assets_path: Path,
+    http: Http | None = None,
+) -> int:
+    """本地还没有版本 JSON 时，按远端清单 JSON 估算安装所需磁盘字节数。
+
+    统计口径与 :func:`estimate_version_size` 一致：客户端 jar + 依赖库 + 资源
+    索引 objects。资源索引既不在本地也拉不到时按 350 MB 兜底，保证大型整合包
+    仍能量级预警。返回 0 表示无法估算（例如版本 JSON 下载失败）。
+    """
+    url = str(version_json_url or "")
+    if not url:
+        return 0
+    client = http or Http(timeout=20)
+    raw: dict | None = None
+    for candidate in sources.resource_candidates(url):
+        try:
+            raw = client.get_json(candidate)
+        except (DownloadError, Cancelled):
+            continue
+        break
+    if not isinstance(raw, dict):
+        return 0
+
+    total = 0
+    downloads = raw.get("downloads") if isinstance(raw.get("downloads"), dict) else {}
+    jar = downloads.get("client") if isinstance(downloads.get("client"), dict) else {}
+    try:
+        total += int(jar.get("size") or 0)
+    except (TypeError, ValueError):
+        pass
+    for lib in resolve_libraries(raw):
+        try:
+            total += int(lib.size or 0)
+        except (TypeError, ValueError):
+            continue
+
+    index = raw.get("assetIndex") if isinstance(raw.get("assetIndex"), dict) else {}
+    index_id = str(index.get("id") or raw.get("assets") or "")
+    if not index_id:
+        return total
+    index_data: dict | None = None
+    try:
+        index_data = json.loads(
+            (Path(assets_path) / "indexes" / f"{index_id}.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        index_data = None
+    index_url = str(index.get("url") or "")
+    if not isinstance(index_data, dict) and index_url:
+        for candidate in sources.resource_candidates(index_url):
+            try:
+                index_data = client.get_json(candidate)
+            except (DownloadError, Cancelled):
+                continue
+            break
+    objects = index_data.get("objects") if isinstance(index_data, dict) else None
+    if isinstance(objects, dict):
+        for obj in objects.values():
+            if not isinstance(obj, dict):
+                continue
+            try:
+                total += int(obj.get("size") or 0)
+            except (TypeError, ValueError):
+                continue
+    elif not isinstance(index_data, dict):
+        total += _ASSET_INDEX_FALLBACK
+    return total
 
 
 class GameInstaller:
@@ -529,3 +643,92 @@ class GameInstaller:
             files_done=len(tasks),
             files_total=len(tasks),
         )
+
+
+# ----------------------------------------------------------------------
+def repair_version_json(
+    config: Config,
+    sources: SourceManager,
+    version_id: str,
+    progress_cb: Callable[[Progress], None] | None = None,
+    log_cb: Callable[[str], None] | None = None,
+) -> Path:
+    """修复损坏的版本 JSON：备份原文件后从版本清单重新下载写回，再补全启动文件。
+
+    - 原 JSON 备份为 ``<id>.json.bad-<时间戳>``；
+    - 从 ``sources.get_manifest()`` 的 data.versions 找到该条目并下载其客户端 JSON；
+    - 原子写回 ``versions/<id>/<id>.json``；
+    - 调用 ``GameInstaller.ensure_version`` 补全缺失的 jar / 依赖库（已有文件不会重下）。
+
+    返回修复后的 JSON 路径；失败时抛出 VersionError / DownloadError。
+    """
+
+    def log(message: str) -> None:
+        if log_cb:
+            log_cb(message)
+
+    def report(stage: str, detail: str, percent: float) -> None:
+        if progress_cb:
+            progress_cb(Progress(stage, detail, percent))
+
+    game_dir = config.game_path
+    version_dir = game_dir / "versions" / version_id
+    version_dir.mkdir(parents=True, exist_ok=True)
+    json_path = version_dir / f"{version_id}.json"
+
+    report("修复版本", "读取版本清单…", 0.02)
+    manifest, source_name, _cached = sources.get_manifest()
+    data = manifest.get("data") if isinstance(manifest, dict) else None
+    entries = (data or {}).get("versions") if isinstance(data, dict) else None
+    entry = None
+    for item in entries or []:
+        if isinstance(item, dict) and str(item.get("id") or "") == version_id:
+            entry = item
+            break
+    if entry is None:
+        raise VersionError(
+            f"版本清单中找不到「{version_id}」，无法自动修复。\n"
+            "如果这是 Forge / Fabric 等修改版，请到下载页重新安装该版本。"
+        )
+    url = str(entry.get("url") or "")
+    if not url:
+        raise VersionError(f"版本清单条目「{version_id}」缺少 JSON 下载地址。")
+    log(f"[修复] 从 {source_name} 获取 {version_id}.json")
+
+    payload: dict | None = None
+    errors: list[str] = []
+    for candidate in sources.resource_candidates(url):
+        try:
+            payload = Http(timeout=25).get_json(candidate)
+            break
+        except DownloadError as exc:
+            errors.append(f"{candidate.source_name}: {exc}")
+    if payload is None:
+        raise DownloadError("下载版本 JSON 失败：\n" + "\n".join(errors[:4]))
+
+    backup: Path | None = None
+    if json_path.exists():
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        backup = json_path.with_name(f"{version_id}.json.bad-{stamp}")
+        try:
+            shutil.move(str(json_path), str(backup))
+        except OSError as exc:
+            raise VersionError(f"无法备份损坏的版本 JSON：{exc}") from exc
+        log(f"[修复] 已备份损坏文件：{backup.name}")
+
+    try:
+        tmp = version_dir / f"{version_id}.json.tmp"
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(json_path)  # 原子写回，避免出现半截 JSON
+        load_version(game_dir, version_id)  # 立刻校验能否解析（含 inheritsFrom 合并）
+    except Exception:
+        # 写回或解析失败时还原备份，保证版本仍可手动修复
+        if backup is not None and backup.exists() and not json_path.exists():
+            shutil.move(str(backup), str(json_path))
+        raise
+
+    report("修复版本", "补全启动文件…", 0.25)
+    installer = GameInstaller(config, sources, progress_cb=progress_cb, log_cb=log_cb)
+    installer.ensure_version(version_id)
+    log(f"[修复] {version_id} 修复完成")
+    return json_path

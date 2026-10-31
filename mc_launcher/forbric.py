@@ -23,6 +23,17 @@ _GITHUB_RELEASE_URL = (
     "https://api.github.com/repos/Ray-T-r/Minecraft-Forbric-mod-loader/releases/latest"
 )
 
+# 第三方仓库若改名 / 删除 / 被接管，GitHub API 会整体失败；这里用「最新发布直链」兜底，
+# 由 releases/latest/download 自动重定向到最新 tag，不依赖具体版本号
+_FALLBACK_JAR = (
+    "https://github.com/Ray-T-r/Minecraft-Forbric-mod-loader"
+    "/releases/latest/download/forbric-kernel-installer.jar"
+)
+_FALLBACK_BAT = (
+    "https://github.com/Ray-T-r/Minecraft-Forbric-mod-loader"
+    "/releases/latest/download/Forbric-Installer.bat"
+)
+
 
 def is_forbric_supported(mc_version: str | None) -> bool:
     """空版本视为支持（默认全局目录），否则仅支持 26.2。"""
@@ -53,16 +64,16 @@ def fetch_latest_installer() -> tuple[str, str]:
                     jar_url = url
                 elif name.endswith(".bat"):
                     bat_url = url
-            if not jar_url:
-                raise ContentError("发布中没有找到 forbric-kernel-installer-*.jar。")
-            if not bat_url:
-                raise ContentError("发布中没有找到 Forbric-Installer.bat。")
-            return jar_url, bat_url
+            # 资产命名随发布变化时，缺失的一方用最新发布直链兜底
+            return jar_url or _FALLBACK_JAR, bat_url or _FALLBACK_BAT
         except Exception as exc:  # noqa: BLE001 - 请求失败做简单重试
             last_error = exc
             if attempt < 2:
                 time.sleep(1 + attempt)  # 1~2 秒
-    raise ContentError(f"获取 Forbric 最新安装器失败：{last_error}")
+    # 接口整体不可用（仓库改名 / 被接管 / 触发限流）时仍返回直链，下载阶段再报具体错误
+    if isinstance(last_error, Exception):
+        return _FALLBACK_JAR, _FALLBACK_BAT
+    raise ContentError("获取 Forbric 最新安装器失败：未知错误")
 
 
 def download_installer(

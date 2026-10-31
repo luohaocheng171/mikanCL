@@ -1,10 +1,15 @@
-"""内置浏览器页：多标签访问 Minecraft Wiki、MC 百科与 Bilibili。"""
+"""内置浏览器页：多标签访问 Minecraft Wiki、MC 百科与 Bilibili。
+
+默认使用系统自带的 Edge WebView2 内核（完整 Chromium，自带 H.264/AAC），B 站等
+站点的视频可以在启动器里直接播放，不需要切到系统浏览器；只有系统缺失 WebView2
+运行时的时候，才回退到 QtWebEngine 并提示「视频可能无法播放」。
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QUrl, Qt
+from PySide6.QtCore import QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices, QIcon, QKeySequence, QShortcut
 from PySide6.QtWebEngineCore import (
     QWebEngineDownloadRequest,
@@ -27,6 +32,7 @@ from PySide6.QtWidgets import (
 from ..config import BROWSER_DIR, DATA_DIR
 from ..context import AppContext
 from ..net import USER_AGENT
+from .webview2 import WebView2View, webview2_available
 
 QUICK_LINKS = [
     ("Minecraft Wiki", "https://zh.minecraft.wiki/"),
@@ -72,46 +78,120 @@ START_HTML = """
 </body></html>
 """
 
+HOME_BASE = "https://mclite.local/"
 
-class WebPage(QWebEnginePage):
-    def __init__(self, profile: QWebEngineProfile, owner: "BrowserPage", parent=None):
-        super().__init__(profile, parent)
-        self.owner = owner
+
+class _QtPage(QWebEnginePage):
+    """QtWebEngine 回退内核的页面：处理弹窗与视频全屏。"""
+
+    def __init__(self, profile: QWebEngineProfile, host: "QtHost"):
+        super().__init__(profile, host)
+        self.host = host
         self.fullScreenRequested.connect(self._on_fullscreen)
 
     def createWindow(self, _window_type):  # noqa: N802
-        view = self.owner.add_tab("about:blank", background=False)
-        return view.page()
+        browser = self.host.browser
+        if browser is None:
+            return None
+        new_host = browser.add_tab(None)
+        return new_host.view.page() if new_host is not None else None
 
     def _on_fullscreen(self, request) -> None:
-        """HTML5 视频进入/退出全屏：交给整个窗口切换，避免画面被裁剪。"""
         request.accept()
-        view = self.view()
-        if view is None:
-            return
-        window = view.window()
-        if request.toggleOn():
-            self._was_maximized = window.isMaximized()
-            window.showFullScreen()
-        else:
-            if getattr(self, "_was_maximized", False):
-                window.showMaximized()
-            else:
-                window.showNormal()
+        self.host.fullscreenChanged.emit(bool(request.toggleOn()))
 
 
-class WebView(QWebEngineView):
-    def __init__(self, owner: "BrowserPage", profile: QWebEngineProfile, parent=None):
+class QtHost(QWidget):
+    """QtWebEngine 标签页（回退用），对外接口与 WebView2View 保持一致。"""
+
+    titleChanged = Signal(str)
+    urlChanged = Signal(str)
+    loadProgress = Signal(int)
+    loadFinished = Signal(bool)
+    newWindowRequested = Signal(str)
+    fullscreenChanged = Signal(bool)
+    closeRequested = Signal()
+    newTabShortcut = Signal()
+    closeTabShortcut = Signal()
+    failed = Signal(str)
+
+    def __init__(self, browser: "BrowserPage", profile: QWebEngineProfile, parent=None):
         super().__init__(parent)
-        self.owner = owner
-        page = WebPage(profile, owner, self)
-        self.setPage(page)
+        self.browser = browser
+        self._icon = QIcon()
+        self.view = QWebEngineView(self)
+        self.view.setPage(_QtPage(profile, self))
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.view)
+
+        settings = self.view.page().settings()
+        # HTML5 媒体播放：允许脚本自动播放、支持视频全屏、允许播放器弹窗
+        for attribute, value in (
+            ("PlaybackRequiresUserGesture", False),
+            ("FullScreenSupportEnabled", True),
+            ("JavascriptCanOpenWindows", True),
+            ("DarkMode", True),
+        ):
+            flag = getattr(QWebEngineSettings.WebAttribute, attribute, None)
+            if flag is not None:
+                settings.setAttribute(flag, value)
+
+        self.view.titleChanged.connect(self.titleChanged.emit)
+        self.view.urlChanged.connect(lambda url: self.urlChanged.emit(url.toString()))
+        self.view.loadStarted.connect(lambda: self.loadProgress.emit(0))
+        self.view.loadProgress.connect(self.loadProgress.emit)
+        self.view.loadFinished.connect(self.loadFinished.emit)
+        self.view.iconChanged.connect(self._on_icon)
+
+    def _on_icon(self, icon: QIcon) -> None:
+        if not icon.isNull():
+            self._icon = icon
+
+    def icon(self) -> QIcon:
+        return self._icon
+
+    def load(self, url: str) -> None:
+        self.view.setUrl(QUrl(url))
+
+    def set_html(self, html: str) -> None:
+        self.view.setHtml(html, QUrl(HOME_BASE))
+
+    def url(self) -> str:
+        return self.view.url().toString()
+
+    def title(self) -> str:
+        return self.view.title()
+
+    def back(self) -> None:
+        self.view.back()
+
+    def forward(self) -> None:
+        self.view.forward()
+
+    def reload(self) -> None:
+        self.view.reload()
+
+    def stop(self) -> None:
+        self.view.stop()
+
+    def focus_in(self) -> None:
+        self.view.setFocus()
+
+    def shutdown(self) -> None:
+        self.view.stop()
 
 
 class BrowserPage(QWidget):
     def __init__(self, ctx: AppContext, parent: QWidget | None = None):
         super().__init__(parent)
         self.ctx = ctx
+        # WebView2 可用就走 Chromium，视频可以直接播放；否则回退 QtWebEngine
+        self.engine = "webview2" if webview2_available() else "qt"
+        self.profile: QWebEngineProfile | None = None
+        self._was_maximized = False
+        # 用户手动收起 H.264 提示条后置为 True，下次页面变化时复位
+        self._video_hint_dismissed = False
         self._build()
         self.add_tab(None)
 
@@ -157,12 +237,37 @@ class BrowserPage(QWidget):
         new_tab.setObjectName("Chip")
         new_tab.clicked.connect(lambda: self.add_tab(None))
         quick_row.addWidget(new_tab)
-        system_browser = QPushButton("🌐 系统浏览器")
-        system_browser.setObjectName("Chip")
-        system_browser.setToolTip("用系统默认浏览器打开当前页面（可播放 H.264 视频）")
-        system_browser.clicked.connect(self._open_in_system_browser)
-        quick_row.addWidget(system_browser)
+        self.system_browser_button = QPushButton("🌐 系统浏览器")
+        self.system_browser_button.setObjectName("Chip")
+        self.system_browser_button.setToolTip("用系统默认浏览器打开当前页面")
+        self.system_browser_button.clicked.connect(self._open_in_system_browser)
+        quick_row.addWidget(self.system_browser_button)
         outer.addLayout(quick_row)
+
+        # H.264 提示条：WebView2 内核自带解码器，这条提示只在回退内核里才可能出现
+        self.video_hint_bar = QWidget()
+        self.video_hint_bar.setObjectName("VideoHint")
+        self.video_hint_bar.setStyleSheet(
+            "QWidget#VideoHint { background: #241d10; border: 1px solid #6b5a2a;"
+            " border-radius: 8px; }"
+        )
+        hint_layout = QHBoxLayout(self.video_hint_bar)
+        hint_layout.setContentsMargins(10, 6, 8, 6)
+        hint_layout.setSpacing(8)
+        self.video_hint_label = QLabel("内置浏览器缺少 H.264 / AAC 解码器，视频可能无法播放。")
+        hint_layout.addWidget(self.video_hint_label, 1)
+        self.video_hint_button = QPushButton("用系统浏览器打开本页")
+        self.video_hint_button.setObjectName("Chip")
+        self.video_hint_button.clicked.connect(self._open_in_system_browser)
+        hint_layout.addWidget(self.video_hint_button)
+        self.video_hint_close = QPushButton("×")
+        self.video_hint_close.setObjectName("Chip")
+        self.video_hint_close.setFixedSize(28, 24)
+        self.video_hint_close.setToolTip("知道了，先收起这条提示")
+        self.video_hint_close.clicked.connect(self._dismiss_video_hint)
+        hint_layout.addWidget(self.video_hint_close)
+        self.video_hint_bar.setVisible(False)
+        outer.addWidget(self.video_hint_bar)
 
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
@@ -189,6 +294,20 @@ class BrowserPage(QWidget):
         footer.addWidget(self.status_msg)
         outer.addLayout(footer)
 
+        # WebView2 自带解码器，「系统浏览器」按钮在这里属于多余操作，直接隐藏
+        self.system_browser_button.setVisible(self.engine != "webview2")
+
+        self._new_shortcut = QShortcut(QKeySequence("Ctrl+T"), self)
+        self._new_shortcut.activated.connect(lambda: self.add_tab(None))
+        self._close_shortcut = QShortcut(QKeySequence("Ctrl+W"), self)
+        self._close_shortcut.activated.connect(
+            lambda: self._close_tab(self.tabs.currentIndex())
+        )
+
+    def _ensure_profile(self) -> QWebEngineProfile:
+        """回退内核的 profile 按需创建，避免走 WebView2 时白启一套 Chromium 进程。"""
+        if self.profile is not None:
+            return self.profile
         profile = QWebEngineProfile("MikanCL", self)
         storage = BROWSER_DIR / "storage"
         cache = BROWSER_DIR / "cache"
@@ -202,19 +321,12 @@ class BrowserPage(QWidget):
             QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies
         )
         profile.downloadRequested.connect(self._on_download)
-        # 显式从磁盘加载已保存的 cookie，保证 B 站等站点登录状态跨会话保留
         try:
             profile.cookieStore().loadAllCookies()
         except (AttributeError, RuntimeError):
             pass
         self.profile = profile
-
-        self._new_shortcut = QShortcut(QKeySequence("Ctrl+T"), self)
-        self._new_shortcut.activated.connect(lambda: self.add_tab(None))
-        self._close_shortcut = QShortcut(QKeySequence("Ctrl+W"), self)
-        self._close_shortcut.activated.connect(
-            lambda: self._close_tab(self.tabs.currentIndex())
-        )
+        return profile
 
     def _tool_button(self, text: str, tooltip: str, slot) -> QPushButton:
         button = QPushButton(text)
@@ -225,46 +337,83 @@ class BrowserPage(QWidget):
         return button
 
     # ------------------------------------------------------------------
-    def add_tab(self, url: str | None = None, background: bool = False) -> WebView:
-        view = WebView(self, self.profile, self)
-        view.titleChanged.connect(lambda title, v=view: self._set_tab_title(v, title))
-        view.urlChanged.connect(lambda qurl, v=view: self._on_url_changed(v, qurl))
-        view.loadStarted.connect(lambda v=view: self._on_load_started(v))
-        view.loadProgress.connect(lambda value, v=view: self._on_load_progress(v, value))
-        view.loadFinished.connect(lambda ok, v=view: self._on_load_finished(v, ok))
-        view.iconChanged.connect(lambda icon, v=view: self._set_tab_icon(v, icon))
-        settings = view.page().settings()
-        # HTML5 媒体播放：允许脚本自动播放、支持视频全屏、允许播放器弹窗
-        for attribute, value in (
-            ("PlaybackRequiresUserGesture", False),
-            ("FullScreenSupportEnabled", True),
-            ("JavascriptCanOpenWindows", True),
-            ("DarkMode", True),
-        ):
-            flag = getattr(QWebEngineSettings.WebAttribute, attribute, None)
-            if flag is not None:
-                settings.setAttribute(flag, value)
-
-        index = self.tabs.addTab(view, "新标签页")
-        if url is None:
-            view.setHtml(START_HTML, QUrl("https://mclite.local/"))
-        elif url == "about:blank":
-            view.setHtml(START_HTML, QUrl("https://mclite.local/"))
+    def add_tab(self, url: str | None = None, background: bool = False):
+        if self.engine == "webview2":
+            host = WebView2View(self)
+            host.newTabShortcut.connect(lambda: self.add_tab(None))
+            host.closeTabShortcut.connect(
+                lambda h=host: self._close_tab(self.tabs.indexOf(h))
+            )
+            host.failed.connect(self._fallback_to_qt)
         else:
-            view.setUrl(QUrl(url))
+            host = QtHost(self, self._ensure_profile(), self)
+
+        host.titleChanged.connect(lambda title, h=host: self._set_tab_title(h, title))
+        host.urlChanged.connect(lambda url, h=host: self._on_url_changed(h, url))
+        host.loadProgress.connect(lambda value, h=host: self._on_load_progress(h, value))
+        host.loadFinished.connect(lambda ok, h=host: self._on_load_finished(h, ok))
+        host.newWindowRequested.connect(self._on_new_window_requested)
+        host.fullscreenChanged.connect(self._on_fullscreen_changed)
+        host.closeRequested.connect(lambda h=host: self._close_tab(self.tabs.indexOf(h)))
+
+        index = self.tabs.addTab(host, "新标签页")
+        if url is None or url == "about:blank":
+            host.set_html(START_HTML)
+        else:
+            host.load(url)
         self.tabs.setCurrentIndex(index)
-        return view
+        if background:
+            self.tabs.setCurrentIndex(max(0, index - 1))
+        return host
+
+    def _dispose(self, host) -> None:
+        host.shutdown()
+        host.deleteLater()
 
     def _close_tab(self, index: int) -> None:
-        view = self.tabs.widget(index)
+        if index < 0:
+            return
+        host = self.tabs.widget(index)
         self.tabs.removeTab(index)
-        if view is not None:
-            view.deleteLater()
+        if host is not None:
+            self._dispose(host)
         if self.tabs.count() == 0:
             self.add_tab(None)
 
-    def _set_tab_title(self, view: WebView, title: str) -> None:
-        index = self.tabs.indexOf(view)
+    def _fallback_to_qt(self, message: str) -> None:
+        """WebView2 起不来时整体切回 QtWebEngine，并把所有标签页重建一次。"""
+        self.ctx.bus.log.emit(f"[浏览器] {message}")
+        if self.engine != "webview2":
+            return
+        self.engine = "qt"
+        self._ensure_profile()
+        self.system_browser_button.setVisible(True)
+        while self.tabs.count():
+            host = self.tabs.widget(0)
+            self.tabs.removeTab(0)
+            if host is not None:
+                self._dispose(host)
+        self.add_tab(None)
+        # 回退内核缺少 H.264 解码，直接把已有的提示条亮出来，不再额外弹窗打扰
+        self.video_hint_bar.setVisible(True)
+
+    def _on_new_window_requested(self, url: str) -> None:
+        self.add_tab(url or None)
+
+    def _on_fullscreen_changed(self, enter: bool) -> None:
+        window = self.window()
+        if window is None:
+            return
+        if enter:
+            self._was_maximized = window.isMaximized()
+            window.showFullScreen()
+        elif self._was_maximized:
+            window.showMaximized()
+        else:
+            window.showNormal()
+
+    def _set_tab_title(self, host, title: str) -> None:
+        index = self.tabs.indexOf(host)
         if index < 0:
             return
         label = title.strip() or "新标签页"
@@ -272,71 +421,110 @@ class BrowserPage(QWidget):
             label = "新标签页"
         self.tabs.setTabText(index, label[:24])
         self.tabs.setTabToolTip(index, title)
+        icon = getattr(host, "icon", None)
+        if callable(icon):
+            icon = icon()
+            if isinstance(icon, QIcon) and not icon.isNull():
+                self.tabs.setTabIcon(index, icon)
 
-    def _set_tab_icon(self, view: WebView, icon: QIcon) -> None:
-        index = self.tabs.indexOf(view)
-        if index >= 0 and not icon.isNull():
-            self.tabs.setTabIcon(index, icon)
-
-    def _on_url_changed(self, view: WebView, url: QUrl) -> None:
-        if view is self.current_view():
-            text = url.toString()
-            if text.startswith("https://mclite.local/"):
+    def _on_url_changed(self, host, url: str) -> None:
+        if host is self.current_host():
+            text = url or ""
+            if text.startswith(HOME_BASE) or text in ("about:blank", "about:srcdoc"):
                 text = ""
             if not self.url_edit.hasFocus():
                 self.url_edit.setText(text)
             self.status_url.setText(text)
 
     def _on_tab_changed(self, _index: int) -> None:
-        view = self.current_view()
-        if view is not None:
-            url = view.url().toString()
-            if url.startswith("https://mclite.local/"):
-                url = ""
-            self.url_edit.setText(url)
-            self.status_url.setText(url)
+        host = self.current_host()
+        # 切走页面时先收起上一条提示，再按新页面重新探测
+        self.video_hint_bar.setVisible(False)
+        self._video_hint_dismissed = False
+        if host is None:
+            return
+        self.url_edit.setText(self._display_url(host.url()))
+        self.status_url.setText(self._display_url(host.url()))
+        if isinstance(host, WebView2View):
+            host.focus_in()
+        else:
+            self._probe_h264(host)
 
-    def _on_load_started(self, view: WebView) -> None:
-        if view is self.current_view():
+    @staticmethod
+    def _display_url(url: str) -> str:
+        if url.startswith(HOME_BASE) or url in ("about:blank", "about:srcdoc"):
+            return ""
+        return url
+
+    def _on_load_progress(self, host, value: int) -> None:
+        if host is self.current_host():
             self.progress_bar.setVisible(True)
-            self.progress_bar.setValue(0)
-            self.status_msg.setText("加载中…")
-
-    def _on_load_progress(self, view: WebView, value: int) -> None:
-        if view is self.current_view():
             self.progress_bar.setValue(value)
+            if value > 0:
+                self.status_msg.setText("加载中…")
 
-    def _on_load_finished(self, view: WebView, ok: bool) -> None:
-        if view is self.current_view():
-            self.progress_bar.setVisible(False)
-            self.status_msg.setText("加载完成" if ok else "加载失败")
+    def _on_load_finished(self, host, ok: bool) -> None:
+        if host is not self.current_host():
+            return
+        self.progress_bar.setVisible(False)
+        self.status_msg.setText("加载完成" if ok else "加载失败")
+        if not isinstance(host, WebView2View):
+            self._probe_h264(host)
 
     # ------------------------------------------------------------------
-    def current_view(self) -> WebView | None:
-        view = self.tabs.currentWidget()
-        return view if isinstance(view, WebView) else None
+    def _probe_h264(self, host) -> None:
+        """回退内核才需要探测：页面有 video 且内核不支持 H.264 时提示换系统浏览器。"""
+        if not isinstance(host, QtHost):
+            return
+        script = """
+        (function () {
+            try {
+                var probe = document.createElement('video');
+                var support = probe.canPlayType('video/mp4; codecs="avc1.42E01E"');
+                var count = document.querySelectorAll('video').length;
+                return (!support && count > 0) ? 1 : 0;
+            } catch (e) {
+                return 0;
+            }
+        })();
+        """
+        host.view.page().runJavaScript(script, self._on_h264_probe)
+
+    def _on_h264_probe(self, result) -> None:
+        if result and not self._video_hint_dismissed and self.engine == "qt":
+            self.video_hint_bar.setVisible(True)
+        elif not result:
+            self.video_hint_bar.setVisible(False)
+
+    def _dismiss_video_hint(self) -> None:
+        """手动收起提示条，直到下次页面切换或重新加载再重新判断。"""
+        self._video_hint_dismissed = True
+        self.video_hint_bar.setVisible(False)
+
+    # ------------------------------------------------------------------
+    def current_host(self):
+        widget = self.tabs.currentWidget()
+        return widget if isinstance(widget, (WebView2View, QtHost)) else None
 
     def _open_in_system_browser(self) -> None:
-        """内置内核缺少 H.264 解码，无法播放部分站点视频时改交给系统浏览器。"""
-        view = self.current_view()
-        url = view.url() if view is not None else QUrl()
-        if url.scheme() not in ("http", "https"):
+        host = self.current_host()
+        url = host.url() if host is not None else ""
+        if not url.startswith(("http://", "https://")):
             raw = self.url_edit.text().strip()
             if raw:
-                url = QUrl(self._clean_input(raw))
-        if url.scheme() not in ("http", "https"):
+                url = self._clean_input(raw)
+        if not url.startswith(("http://", "https://")):
             self.ctx.bus.toast.emit("当前没有可打开的网页地址")
             return
-        QDesktopServices.openUrl(url)
+        QDesktopServices.openUrl(QUrl(url))
         self.ctx.bus.toast.emit("已用系统浏览器打开当前页面")
 
     def _navigate(self) -> None:
-        view = self.current_view()
-        if view is None:
+        host = self.current_host()
+        if host is None:
             return
-        raw = self.url_edit.text().strip()
-        view.setUrl(QUrl(self._clean_input(raw)))
-        view.setFocus()
+        host.load(self._clean_input(self.url_edit.text().strip()))
+        host.focus_in()
 
     @staticmethod
     def _clean_input(raw: str) -> str:
@@ -352,32 +540,32 @@ class BrowserPage(QWidget):
         return f"https://search.bilibili.com/all?keyword={quote_plus(raw)}"
 
     def _go_back(self) -> None:
-        view = self.current_view()
-        if view:
-            view.back()
+        host = self.current_host()
+        if host:
+            host.back()
 
     def _go_forward(self) -> None:
-        view = self.current_view()
-        if view:
-            view.forward()
+        host = self.current_host()
+        if host:
+            host.forward()
 
     def _reload(self) -> None:
-        view = self.current_view()
-        if view:
-            view.reload()
+        host = self.current_host()
+        if host:
+            host.reload()
 
     def _go_home(self) -> None:
-        view = self.current_view()
-        if view:
-            view.setHtml(START_HTML, QUrl("https://mclite.local/"))
+        host = self.current_host()
+        if host:
+            host.set_html(START_HTML)
             self.url_edit.clear()
 
     def navigate_to(self, url: str) -> None:
-        view = self.current_view()
-        if view is None:
-            view = self.add_tab(url)
+        host = self.current_host()
+        if host is None:
+            self.add_tab(url)
         else:
-            view.setUrl(QUrl(url))
+            host.load(url)
         self.url_edit.setText(url)
 
     # ------------------------------------------------------------------
@@ -396,13 +584,13 @@ class BrowserPage(QWidget):
     def shutdown(self) -> None:
         # 退出前把内存中的 cookie 落盘，确保下次启动仍保持登录状态
         try:
-            flush = getattr(self.profile.cookieStore(), "flushCookieStore", None)
+            flush = getattr(self.profile.cookieStore(), "flushCookieStore", None) if self.profile else None
             if callable(flush):
                 flush()
         except (AttributeError, RuntimeError):
             pass
         while self.tabs.count():
-            view = self.tabs.widget(0)
+            host = self.tabs.widget(0)
             self.tabs.removeTab(0)
-            if view is not None:
-                view.deleteLater()
+            if host is not None:
+                self._dispose(host)

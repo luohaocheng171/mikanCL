@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import os
+import re
+import sys
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPushButton,
     QTextBrowser,
     QVBoxLayout,
@@ -843,6 +849,32 @@ def _titles_from_file(path: Path) -> str:
     return path.stem
 
 
+# 文件名非法字符（Windows 保留字符 + 路径分隔符）
+_INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\r\n\t]')
+
+
+def _sanitize_title(title: str) -> str:
+    """把教程标题清洗成安全文件名片段（非法字符转下划线，最长 40 字符）。"""
+    name = _INVALID_FILENAME_CHARS.sub("_", title or "")
+    name = " ".join(name.split()).strip(" .")
+    return name[:40]
+
+
+def _open_local_file(path: Path) -> None:
+    """用系统默认程序打开本地文件（Windows 优先 os.startfile）。"""
+    startfile = getattr(os, "startfile", None)
+    if sys.platform.startswith("win") and callable(startfile):
+        try:
+            startfile(str(path))
+            return
+        except OSError:
+            pass
+    try:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+    except Exception:  # noqa: BLE001 - 打开失败不影响新建结果
+        pass
+
+
 class WikiPage(QWidget):
     def __init__(self, ctx: AppContext, parent: QWidget | None = None):
         super().__init__(parent)
@@ -865,6 +897,10 @@ class WikiPage(QWidget):
         nbt_button.setObjectName("Chip")
         nbt_button.clicked.connect(self._open_nbt_editor)
         header_layout.addWidget(nbt_button)
+        self.new_button = QPushButton(self.tr("✚ 新建教程"))
+        self.new_button.setObjectName("Chip")
+        self.new_button.clicked.connect(self._new_doc)
+        header_layout.addWidget(self.new_button)
         outer.addWidget(header)
 
         card = Card(margins=14, spacing=10)
@@ -976,6 +1012,53 @@ class WikiPage(QWidget):
     def _open_nbt_editor(self) -> None:
         dialog = NbtEditorDialog(self.ctx, self)
         dialog.exec()
+
+    # ------------------------------------------------------------------
+    def _current_lang(self) -> str:
+        lang = str(getattr(self.ctx.config, "language", "") or DEFAULT_LANGUAGE)
+        return ensure_default_wiki(lang)
+
+    def _create_doc(self, title: str) -> Path:
+        """按标题在当前语言目录新建 Markdown 教程，返回文件路径。"""
+        lang = self._lang or self._current_lang()
+        folder = WIKI_DIR / lang
+        folder.mkdir(parents=True, exist_ok=True)
+        stem = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{_sanitize_title(title)}"
+        path = folder / f"{stem}.md"
+        index = 1
+        while path.exists():
+            path = folder / f"{stem}_{index}.md"
+            index += 1
+        path.write_text(f"# {title.strip()}\n\n", encoding="utf-8")
+        return path
+
+    def _new_doc(self) -> None:
+        title, ok = QInputDialog.getText(self, self.tr("新建教程"), self.tr("教程标题："))
+        if not ok:
+            return
+        title = (title or "").strip()
+        if not title:
+            QMessageBox.warning(
+                self, self.tr("标题不能为空"), self.tr("请输入教程标题后再创建。")
+            )
+            return
+        try:
+            path = self._create_doc(title)
+        except OSError as exc:
+            QMessageBox.warning(
+                self, self.tr("新建教程失败"), self.tr("写入文件失败：{0}").format(exc)
+            )
+            return
+        _open_local_file(path)
+        self.refresh()
+        self._select_path(path)
+
+    def _select_path(self, path: Path) -> None:
+        self.search_edit.clear()
+        for index, (entry_path, _title, _content) in enumerate(self._entries):
+            if entry_path == path:
+                self.catalog.setCurrentRow(index)
+                return
 
     # ------------------------------------------------------------------
     def shutdown(self) -> None:

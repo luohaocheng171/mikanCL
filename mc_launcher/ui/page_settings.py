@@ -35,11 +35,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import APP_NAME, APP_VERSION
+from .. import APP_NAME, APP_VERSION, agreement
 from ..config import (
     AFTER_LAUNCH_ACTIONS,
     CACHE_DIR,
     DATA_DIR,
+    FEATURE_PAGE_KEYS,
     ISOLATION_LABELS,
     PROCESS_PRIORITIES,
     SOURCE_MAPPINGS,
@@ -234,7 +235,8 @@ class SettingsPage(QWidget):
         self.tabs = QTabWidget()
         outer.addWidget(self.tabs, 1)
         self.tabs.insertTab(0, scroll_page(self._build_general_tab()), self.tr("通用"))
-        self.tabs.insertTab(1, scroll_page(self._build_appearance_tab()), self.tr("外观"))
+        self.tabs.insertTab(1, scroll_page(self._build_features_tab()), self.tr("功能开关"))
+        self.tabs.insertTab(2, scroll_page(self._build_appearance_tab()), self.tr("外观"))
         self.tabs.addTab(self._build_sources_tab(), self.tr("下载源"))
         self.tabs.addTab(scroll_page(self._build_content_tab()), self.tr("内容源与镜像"))
         self.tabs.addTab(scroll_page(self._build_auth_tab()), self.tr("账号与登录"))
@@ -362,6 +364,96 @@ class SettingsPage(QWidget):
         layout.addStretch(1)
         return page
 
+    # ------------------------------------------------------------------
+    # 功能开关：标签页显隐（重启生效）+ 离线登录/皮肤入口（立即生效）
+    def _build_features_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 14, 0, 0)
+        layout.setSpacing(12)
+
+        cfg = self.ctx.config
+        self._feature_checks: dict[str, QCheckBox] = {}
+
+        pages_card = Card(margins=20, spacing=10)
+        pages_card.body.addWidget(
+            card_title_row(
+                self.tr("标签页开关"),
+                self.tr("关闭的标签页会从侧边栏隐藏并停用，重启启动器后生效"),
+            )
+        )
+        # 与主窗口 nav_items 的 key 一一对应；名称复用 MainWindow 上下文翻译
+        nav_names = {
+            "home": "启动游戏",
+            "download": "下载安装",
+            "downloads": "下载中心",
+            "content": "内容中心",
+            "modpack": "整合包",
+            "account": "账号管理",
+            "control": "版本设置",
+            "loaders": "Mod 加载器",
+            "multiplayer": "多人联机",
+            "browser": "内置浏览器",
+            "forbric": "Forbric",
+            "java": "Java 中心",
+            "wiki": "教程中心",
+            "bedrock": "基岩版",
+            "skin_factory": "皮肤工厂",
+            "seed_terrain": "世界种子",
+        }
+        for key in FEATURE_PAGE_KEYS:
+            check = QCheckBox(t("MainWindow", nav_names[key]))
+            check.setChecked(cfg.feature_enabled(key))
+            check.toggled.connect(
+                lambda checked, k=key: self._on_page_feature_toggled(k, checked)
+            )
+            pages_card.body.addWidget(check)
+            self._feature_checks[key] = check
+        layout.addWidget(pages_card)
+
+        func_card = Card(margins=20, spacing=10)
+        func_card.body.addWidget(
+            card_title_row(
+                self.tr("功能入口开关"),
+                self.tr("关闭后账号管理页立即隐藏对应入口，无需重启"),
+            )
+        )
+        for key, text in (
+            ("offline_login", self.tr("离线登录（添加离线账号）")),
+            ("offline_skin", self.tr("离线皮肤（本地皮肤 / 正版皮肤搜索）")),
+        ):
+            check = QCheckBox(text)
+            check.setChecked(cfg.feature_enabled(key))
+            check.toggled.connect(
+                lambda checked, k=key: self._on_function_feature_toggled(k, checked)
+            )
+            func_card.body.addWidget(check)
+            self._feature_checks[key] = check
+        layout.addWidget(func_card)
+
+        restart_row = QHBoxLayout()
+        restart_row.setSpacing(10)
+        restart = QPushButton(self.tr("立即重启"))
+        restart.setObjectName("Ghost")
+        restart.clicked.connect(self._restart_launcher)
+        restart_row.addWidget(restart)
+        hint = QLabel(self.tr("标签页开关重启后生效；功能入口开关立即生效。"))
+        hint.setObjectName("Tiny")
+        hint.setWordWrap(True)
+        restart_row.addWidget(hint, 1)
+        layout.addLayout(restart_row)
+        layout.addStretch(1)
+        return page
+
+    def _on_page_feature_toggled(self, key: str, checked: bool) -> None:
+        self.ctx.config.set_feature(key, checked)
+        self.ctx.bus.toast.emit(self.tr("标签页开关已保存，重启启动器后生效。"))
+
+    def _on_function_feature_toggled(self, key: str, checked: bool) -> None:
+        self.ctx.config.set_feature(key, checked)
+        # 账号页监听 config_changed，立即隐藏/恢复对应入口
+        self.ctx.bus.config_changed.emit()
+
     def _build_appearance_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -428,8 +520,49 @@ class SettingsPage(QWidget):
         hint.setWordWrap(True)
         card.body.addWidget(hint)
         layout.addWidget(card)
+
+        effects_card = Card(margins=20, spacing=10)
+        effects_card.body.addWidget(
+            card_title_row(
+                self.tr("界面效果"),
+                self.tr("均可随时开关，关闭后可降低 GPU 与内存占用"),
+            )
+        )
+        self.anim_check = QCheckBox(self.tr("页面切换动画（淡入淡出）"))
+        self.anim_check.setChecked(self.ctx.config.ui_animations)
+        self.anim_check.toggled.connect(self._on_animations_toggled)
+        effects_card.body.addWidget(self.anim_check)
+        self.acrylic_check = QCheckBox(self.tr("毛玻璃背景（依赖 Windows DWM 合成）"))
+        self.acrylic_check.setChecked(self.ctx.config.ui_acrylic)
+        self.acrylic_check.toggled.connect(self._on_acrylic_toggled)
+        effects_card.body.addWidget(self.acrylic_check)
+        effects_hint = QLabel(
+            self.tr(
+                "毛玻璃仅在 Windows 10/11 桌面窗口管理器开启时生效，不额外启动进程、不联网；"
+                "在不支持的系统上会自动回退为半透明深色背景。"
+            )
+        )
+        effects_hint.setObjectName("Tiny")
+        effects_hint.setWordWrap(True)
+        effects_card.body.addWidget(effects_hint)
+        layout.addWidget(effects_card)
+
         layout.addStretch(1)
         return page
+
+    def _on_animations_toggled(self, checked: bool) -> None:
+        cfg = self.ctx.config
+        cfg.ui_animations = bool(checked)
+        cfg.save()
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit(self.tr("界面动画设置已保存。"))
+
+    def _on_acrylic_toggled(self, checked: bool) -> None:
+        cfg = self.ctx.config
+        cfg.ui_acrylic = bool(checked)
+        cfg.save()
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit(self.tr("毛玻璃设置已保存。"))
 
     def _apply_accent(self, color: str) -> None:
         cfg = self.ctx.config
@@ -849,8 +982,50 @@ class SettingsPage(QWidget):
         note.setWordWrap(True)
         card.body.addWidget(note)
         layout.addWidget(card)
+
+        # 用户协议：随时可重新查看，也可关闭启动前的确认提示
+        agree_texts = agreement.texts(self.ctx.config.language)
+        agree_card = Card(margins=20, spacing=10)
+        agree_title = QLabel(agree_texts["title"])
+        agree_title.setStyleSheet("font-size: 15px; font-weight: 700;")
+        agree_card.body.addWidget(agree_title)
+        accepted_text = (
+            agree_texts["agreed_at"].format(agreement.accepted_at(self.ctx.config))
+            if agreement.accepted(self.ctx.config)
+            else agree_texts["not_accepted"]
+        )
+        agree_info = QLabel(
+            agree_texts["version"].format(agreement.AGREEMENT_VERSION)
+            + "  ·  "
+            + accepted_text
+        )
+        agree_info.setObjectName("Tiny")
+        agree_info.setWordWrap(True)
+        agree_card.body.addWidget(agree_info)
+        agree_row = QHBoxLayout()
+        self.agreement_view_button = QPushButton(agree_texts["view"])
+        self.agreement_view_button.setObjectName("GhostCompact")
+        self.agreement_view_button.setFixedHeight(34)
+        self.agreement_view_button.clicked.connect(self._view_agreement)
+        agree_row.addWidget(self.agreement_view_button)
+        self.agreement_prompt_check = QCheckBox(agree_texts["prompt_switch"])
+        self.agreement_prompt_check.setChecked(bool(self.ctx.config.agreement_prompt))
+        self.agreement_prompt_check.toggled.connect(self._set_agreement_prompt)
+        agree_row.addWidget(self.agreement_prompt_check)
+        agree_row.addStretch(1)
+        agree_card.body.addLayout(agree_row)
+        layout.addWidget(agree_card)
         layout.addStretch(1)
         return page
+
+    def _view_agreement(self) -> None:
+        from .dialog_agreement import AgreementDialog
+
+        AgreementDialog(self.ctx.config.language, self, view_only=True).exec()
+
+    def _set_agreement_prompt(self, checked: bool) -> None:
+        self.ctx.config.agreement_prompt = bool(checked)
+        self.ctx.config.save_debounced()
 
     def _connect(self) -> None:
         self.ctx.bus.config_changed.connect(self._sync_ui_from_config)

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import threading
 
-from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtCore import QThread, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QGridLayout,
@@ -99,6 +99,7 @@ class MultiplayerPage(QWidget):
         self.worker: SimpleWorker | None = None
         self._state: dict = {"state": "waiting"}
         self._starting = False
+        self._last_room = ""
         self.log_line.connect(self._append_log)
         self._build()
         self._render()
@@ -139,19 +140,24 @@ class MultiplayerPage(QWidget):
         status_card.body.addWidget(self.detail_text)
 
         self.room_label = QLabel("")
+        accent = str(getattr(self.ctx.config, "accent_color", "") or "#65d46e")
         self.room_label.setStyleSheet(
-            "font-family: Consolas, 'Cascadia Mono', monospace; font-size: 22px;"
-            " font-weight: 700; color: #9ff0a8; letter-spacing: 1px;"
+            "font-family: Consolas, 'Cascadia Mono', monospace; font-size: 26px;"
+            f" font-weight: 700; color: {accent}; letter-spacing: 4px;"
         )
         self.room_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.room_label.setWordWrap(False)
+        self.room_label.setFixedHeight(44)
+        self.room_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         self.room_label.setVisible(False)
         status_card.body.addWidget(self.room_label)
 
         room_row = QHBoxLayout()
         room_row.setContentsMargins(0, 0, 0, 0)
-        room_row.setSpacing(8)
-        self.copy_btn = QPushButton(self.tr("复制房间码"))
+        room_row.setSpacing(6)
+        self.copy_btn = QPushButton(self.tr("📋 复制房间码"))
         self.copy_btn.setObjectName("Ghost")
+        self.copy_btn.setMinimumWidth(150)
         self.copy_btn.setVisible(False)
         self.copy_btn.clicked.connect(self._copy_room)
         room_row.addWidget(self.copy_btn)
@@ -325,9 +331,15 @@ class MultiplayerPage(QWidget):
 
     def _copy_room(self) -> None:
         code = self.room_label.text().strip()
-        if code:
-            QApplication.clipboard().setText(code)
-            self.ctx.bus.toast.emit(self.tr("房间码已复制到剪贴板"))
+        if not code:
+            return
+        QApplication.clipboard().setText(code)
+        self.ctx.bus.toast.emit(self.tr("房间码已复制到剪贴板"))
+        self.copy_btn.setText(self.tr("已复制 ✓"))
+        QTimer.singleShot(2000, self._reset_copy_btn)
+
+    def _reset_copy_btn(self) -> None:
+        self.copy_btn.setText(self.tr("📋 复制房间码"))
 
     # ------------------------------------------------------------------
     # 操作
@@ -514,6 +526,10 @@ class MultiplayerPage(QWidget):
         self.room_label.setVisible(show_room and bool(room))
         self.room_label.setText(room)
         self.copy_btn.setVisible(show_room and bool(room))
+        # 房间码变化或隐藏时清掉“已复制”临时文案，避免刷新后残留
+        if room != self._last_room or not room:
+            self._last_room = room
+            self._reset_copy_btn()
         if not installed:
             self.state_text.setText(self.tr("未安装"))
             self.detail_text.setText(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -37,7 +38,12 @@ from PySide6.QtWidgets import (
 from .. import APP_NAME
 from ..content import ContentError, pick_best_version
 from ..context import AppContext, wait_thread
-from ..installer import GameInstaller, Progress
+from ..installer import (
+    GameInstaller,
+    Progress,
+    estimate_remote_version_size,
+    estimate_version_size,
+)
 from ..java import pick_java
 from ..modloader import (
     LOADER_LABELS,
@@ -50,6 +56,7 @@ from ..net import Cancelled, Candidate, DownloadError, Http
 from ..version import (
     CATEGORY_LABELS,
     VersionError,
+    load_version,
     scan_installed_versions,
     version_category,
 )
@@ -122,6 +129,34 @@ class ManifestWorker(QThread):
             self.failed.emit(str(exc))
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
+
+
+class SizeEstimateWorker(QThread):
+    """本地没有版本 JSON 时，在线按清单估算安装所需磁盘空间。"""
+
+    done = Signal(int)
+
+    def __init__(self, ctx: AppContext, entry: dict, parent=None):
+        super().__init__(parent)
+        self.ctx = ctx
+        self.entry = dict(entry)
+        self._stopped = threading.Event()
+
+    def run(self) -> None:
+        need = 0
+        try:
+            need = estimate_remote_version_size(
+                str(self.entry.get("url") or ""),
+                self.ctx.sources,
+                self.ctx.config.assets_path,
+            )
+        except Exception:  # noqa: BLE001 - 估算失败不应阻止安装
+            need = 0
+        if not self._stopped.is_set():
+            self.done.emit(need)
+
+    def cancel(self) -> None:
+        self._stopped.set()
 
 
 class ClientJarSaveWorker(QThread):
@@ -767,6 +802,7 @@ class DownloadPage(QWidget):
         self._loader_scan: LoaderScanWorker | None = None
         self._retired_scans: list[LoaderScanWorker] = []
         self._install_worker: ChainInstallWorker | None = None
+        self._size_worker: SizeEstimateWorker | None = None
         self._install_task_id = ""
         self._install_pause = threading.Event()
         self._pending_install: tuple[dict, str, str] | None = None
@@ -824,6 +860,29 @@ class DownloadPage(QWidget):
         manage.clicked.connect(lambda: self.ctx.bus.navigate.emit("settings"))
         header_layout.addWidget(manage)
         outer.addWidget(header)
+
+        # 基岩版入口：与 Java 版一起下载与启动，单独标注「基岩版」
+        bedrock_card = Card(margins=14, spacing=8)
+        bedrock_row = QHBoxLayout()
+        bedrock_row.setSpacing(10)
+        bedrock_title = QLabel("基岩版（Bedrock Edition）")
+        bedrock_title.setObjectName("CardTitle")
+        bedrock_row.addWidget(bedrock_title)
+        bedrock_row.addWidget(Badge("基岩版", "green"))
+        bedrock_row.addStretch(1)
+        bedrock_open = QPushButton("打开基岩版下载")
+        bedrock_open.setObjectName("Chip")
+        bedrock_open.clicked.connect(lambda: self.ctx.bus.navigate.emit("bedrock"))
+        bedrock_row.addWidget(bedrock_open)
+        bedrock_card.body.addLayout(bedrock_row)
+        bedrock_hint = QLabel(
+            "与 Java 版共用下载中心：MCAPPX 历史版本与微软商店安装包，"
+            "安装后直接在启动页的版本列表里启动（标注为基岩版）。"
+        )
+        bedrock_hint.setObjectName("Tiny")
+        bedrock_hint.setWordWrap(True)
+        bedrock_card.body.addWidget(bedrock_hint)
+        outer.addWidget(bedrock_card)
 
         latest_row = QHBoxLayout()
         latest_row.setSpacing(12)
@@ -1482,7 +1541,10 @@ class DownloadPage(QWidget):
 
     def _update_install_button(self) -> None:
         running = self._install_worker is not None and self._install_worker.isRunning()
-        self.install_button.setEnabled(not running and self._detail_entry is not None)
+        estimating = self._size_worker is not None and self._size_worker.isRunning()
+        self.install_button.setEnabled(
+            not running and not estimating and self._detail_entry is not None
+        )
         saving = self._client_worker is not None and self._client_worker.isRunning()
         self.client_jar_button.setEnabled(
             self._detail_entry is not None and not saving
@@ -1496,9 +1558,40 @@ class DownloadPage(QWidget):
     # ------------------------------------------------------------------
     # 串行安装
     # ------------------------------------------------------------------
+    def _local_install_size(self, version_id: str) -> int | None:
+        """本地已有版本 JSON 时直接估算；没有（全新安装）返回 None。"""
+        try:
+            merged = load_version(self.ctx.config.game_path, version_id)
+        except (VersionError, OSError):
+            return None
+        need = estimate_version_size(merged, self.ctx.config.assets_path)
+        return need if need > 0 else None
+
+    def _confirm_disk_space(self, need: int) -> bool:
+        """空间不足时提示并默认取消，充足则静默继续。"""
+        if need <= 0:
+            return True
+        try:
+            free = int(shutil.disk_usage(str(self.ctx.config.versions_path)).free)
+        except OSError:
+            return True
+        if need <= free:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "磁盘空间不足",
+            f"该版本约需 {need / 1024 ** 3:.1f} GB，当前剩余 {free / 1024 ** 3:.1f} GB。\n"
+            "继续安装可能因空间不足失败，是否仍要安装？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
+
     def _start_install(self) -> None:
         entry = self._detail_entry
         if entry is None or (self._install_worker is not None and self._install_worker.isRunning()):
+            return
+        if self._size_worker is not None and self._size_worker.isRunning():
             return
         kind = self._selected_kind
         loader_version = ""
@@ -1511,6 +1604,46 @@ class DownloadPage(QWidget):
                 QMessageBox.warning(self, "缺少加载器版本", "请先选择一个加载器版本。")
                 return
 
+        version_id = str(entry.get("id") or "")
+        need = self._local_install_size(version_id)
+        if need is None:
+            # 全新安装：本地没有版本 JSON，改为在线按清单估算后再继续
+            self._start_size_estimate(dict(entry), kind, loader_version)
+            return
+        if not self._confirm_disk_space(need):
+            return  # 磁盘空间不足且用户选择取消
+        self._begin_install(dict(entry), kind, loader_version)
+
+    def _start_size_estimate(self, entry: dict, kind: str, loader_version: str) -> None:
+        """在线估算磁盘占用（不阻塞界面），完成后自动继续安装流程。"""
+        worker = SizeEstimateWorker(self.ctx, entry, self)
+        worker.done.connect(
+            lambda need: self._on_size_estimated(need, entry, kind, loader_version)
+        )
+        worker.finished.connect(self._on_size_worker_finished)
+        self._size_worker = worker
+        self.selection_label.setText("正在估算磁盘占用…")
+        self._update_install_button()
+        worker.start()
+
+    def _on_size_estimated(
+        self, need: int, entry: dict, kind: str, loader_version: str
+    ) -> None:
+        if self._size_worker is None:
+            return  # 页面已收尾，忽略迟到的结果
+        self._select_loader(kind)  # 恢复“当前选择”文案与按钮状态
+        if not self._confirm_disk_space(need):
+            return
+        self._begin_install(entry, kind, loader_version)
+
+    def _on_size_worker_finished(self) -> None:
+        worker = self._size_worker
+        self._size_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        self._update_install_button()
+
+    def _begin_install(self, entry: dict, kind: str, loader_version: str) -> None:
         self._installing_mc = str(entry.get("id") or "")
         self._installing_kind = kind
         self._pending_install = (dict(entry), kind, loader_version)
@@ -1872,6 +2005,11 @@ class DownloadPage(QWidget):
         if install_worker is not None:
             install_worker.cancel()
             workers.append(install_worker)
+        size_worker = self._size_worker
+        self._size_worker = None
+        if size_worker is not None:
+            size_worker.cancel()
+            workers.append(size_worker)
         client_worker = self._client_worker
         self._client_worker = None
         if client_worker is not None:

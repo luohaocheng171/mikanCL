@@ -7,7 +7,9 @@ import json
 import os
 import platform
 import re
+import shutil
 import struct
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -566,3 +568,140 @@ def logging_file_path(game_dir: Path, logging: dict[str, Any] | None) -> Path:
         file_info = {}
     file_id = str(file_info.get("id") or "client-log.xml")
     return game_dir / "assets" / "log_configs" / Path(file_id).name
+
+
+# ----------------------------------------------------------------------
+# 游戏目录清理
+LOG_KEEP_FILES = 3
+CRASH_REPORT_KEEP_DAYS = 7
+
+
+def _directory_stats(folder: Path) -> tuple[int, int]:
+    """统计目录内文件数量与总字节数。"""
+    count = 0
+    size = 0
+    try:
+        for path in folder.rglob("*"):
+            if not path.is_file():
+                continue
+            count += 1
+            try:
+                size += path.stat().st_size
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return count, size
+
+
+def clean_game_dir_targets(config) -> tuple[list[Path], int, int]:
+    """统计可清理的内容，返回 (待删除路径, 文件数, 总字节)。
+
+    范围：启动器日志保留最近 3 个（含 crashes 归档）、versions/<id>/natives 整体、
+    versions/<id> 下的 *.tmp / *.part、crash-reports 内 7 天前的旧文件。
+    目录以整体删除计，数量按其中文件数累加。
+    """
+    from .config import LOG_DIR
+
+    targets: list[Path] = []
+    seen: set[Path] = set()
+    count = 0
+    size = 0
+
+    def add_file(path: Path) -> None:
+        nonlocal count, size
+        try:
+            key = path.resolve()
+        except OSError:
+            key = path
+        if key in seen:
+            return
+        seen.add(key)
+        targets.append(path)
+        count += 1
+        try:
+            size += path.stat().st_size
+        except OSError:
+            pass
+
+    def add_dir(folder: Path) -> None:
+        nonlocal count, size
+        try:
+            key = folder.resolve()
+        except OSError:
+            key = folder
+        if key in seen:
+            return
+        seen.add(key)
+        files, total = _directory_stats(folder)
+        targets.append(folder)
+        count += files
+        size += total
+
+    if LOG_DIR.is_dir():
+        logs: list[tuple[float, Path]] = []
+        for path in LOG_DIR.rglob("*.log"):
+            try:
+                if path.is_file():
+                    logs.append((path.stat().st_mtime, path))
+            except OSError:
+                continue
+        logs.sort(key=lambda item: item[0], reverse=True)
+        for _mtime, path in logs[LOG_KEEP_FILES:]:
+            add_file(path)
+
+    versions_dir = config.game_path / "versions"
+    if versions_dir.is_dir():
+        for version_dir in versions_dir.iterdir():
+            try:
+                if not version_dir.is_dir():
+                    continue
+            except OSError:
+                continue
+            natives = version_dir / "natives"
+            if natives.is_dir():
+                add_dir(natives)
+            for pattern in ("*.tmp", "*.part"):
+                for path in version_dir.glob(pattern):
+                    if path.is_file():
+                        add_file(path)
+
+    crash_dir = config.game_path / "crash-reports"
+    if crash_dir.is_dir():
+        deadline = time.time() - CRASH_REPORT_KEEP_DAYS * 86400
+        for path in crash_dir.rglob("*"):
+            try:
+                if not path.is_file() or path.stat().st_mtime >= deadline:
+                    continue
+            except OSError:
+                continue
+            add_file(path)
+
+    return targets, count, size
+
+
+def clean_game_dir(config) -> tuple[int, int, int]:
+    """执行游戏目录清理，返回 (删除文件数, 释放字节, 失败数)。"""
+    targets, _count, _size = clean_game_dir_targets(config)
+    deleted = 0
+    freed = 0
+    failed = 0
+    for target in targets:
+        files = 0
+        total = 0
+        try:
+            if target.is_dir():
+                files, total = _directory_stats(target)
+                shutil.rmtree(target)
+            else:
+                files = 1
+                try:
+                    total = target.stat().st_size
+                except OSError:
+                    total = 0
+                target.unlink()
+            deleted += files
+            freed += total
+        except OSError:
+            failed += max(files, 1)
+    return deleted, freed, failed

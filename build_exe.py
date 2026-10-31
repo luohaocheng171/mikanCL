@@ -67,6 +67,13 @@ def main() -> int:
             "--add-data",
             f"{translations}{os.pathsep}mc_launcher/translations",
         ]
+    data_dir = ROOT / "mc_launcher" / "data"
+    if data_dir.is_dir():
+        command += ["--add-data", f"{data_dir}{os.pathsep}mc_launcher/data"]
+    resources = ROOT / "mc_launcher" / "resources"
+    if resources.is_dir():
+        # WebView2Loader.dll 必须原样打到 mc_launcher/resources，供内置浏览器调用 Edge 内核
+        command += ["--add-data", f"{resources}{os.pathsep}mc_launcher/resources"]
     plugins = ROOT / "plugins"
     if plugins.is_dir():
         command += ["--add-data", f"{plugins}{os.pathsep}plugins"]

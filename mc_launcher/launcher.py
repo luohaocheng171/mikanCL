@@ -323,6 +323,71 @@ def rename_game_window(pid: int, title: str, timeout: float = 180.0) -> bool:
     return False
 
 
+def has_game_window(pid: int) -> bool:
+    """检测该进程是否已创建可见窗口（仅 Windows）。
+
+    非 Windows 或检测出错时返回 True（视为已就绪），避免启动看门狗误报卡死。
+    """
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        matched: dict[str, int] = {}
+
+        def callback(hwnd, _lparam):
+            proc_id = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(proc_id))
+            if proc_id.value == int(pid) and user32.IsWindowVisible(hwnd):
+                matched["hwnd"] = int(hwnd or 0)
+                return False
+            return True
+
+        user32.EnumWindows(enum_proc(callback), 0)
+        return bool(matched.get("hwnd"))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def process_cpu_seconds(pid: int) -> float | None:
+    """读取进程累计 CPU 时间（秒）；非 Windows 或读取失败返回 None。"""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x0400, False, int(pid))  # PROCESS_QUERY_INFORMATION
+        if not handle:
+            return None
+        try:
+            created = wintypes.FILETIME()
+            exited = wintypes.FILETIME()
+            kernel = wintypes.FILETIME()
+            user = wintypes.FILETIME()
+            ok = kernel32.GetProcessTimes(
+                handle,
+                ctypes.byref(created),
+                ctypes.byref(exited),
+                ctypes.byref(kernel),
+                ctypes.byref(user),
+            )
+            if not ok:
+                return None
+            total = 0
+            for item in (kernel, user):
+                total += (int(item.dwHighDateTime) << 32) + int(item.dwLowDateTime)
+            return total / 10_000_000  # FILETIME 以 100ns 为单位
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def post_launch(process: subprocess.Popen, priority: str = "normal", title: str = "") -> None:
     """启动后应用进程优先级与自定义窗口标题。"""
     apply_process_priority(process.pid, priority)

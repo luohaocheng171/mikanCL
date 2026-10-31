@@ -50,6 +50,48 @@ SOURCE_MAPPINGS = {
     "none": "不重写（仅用于清单）",
 }
 
+# 功能开关默认值：标签页 key 与主窗口 nav_items 对齐（设置页不可关闭，不含在内），
+# 另加功能入口开关（离线登录 / 离线皮肤）。
+FEATURE_DEFAULTS: dict[str, bool] = {
+    "home": True,
+    "download": True,
+    "downloads": True,
+    "content": True,
+    "modpack": True,
+    "account": True,
+    "control": True,
+    "loaders": True,
+    "multiplayer": True,
+    "browser": True,
+    "forbric": True,
+    "java": True,
+    "wiki": True,
+    "bedrock": True,
+    "offline_login": True,
+    "offline_skin": True,
+    "skin_factory": True,
+    "seed_terrain": True,
+}
+# 可在设置里开关的侧边栏标签页（顺序与主窗口导航一致）
+FEATURE_PAGE_KEYS: tuple[str, ...] = (
+    "home",
+    "download",
+    "downloads",
+    "content",
+    "modpack",
+    "account",
+    "control",
+    "loaders",
+    "multiplayer",
+    "browser",
+    "forbric",
+    "java",
+    "wiki",
+    "bedrock",
+    "skin_factory",
+    "seed_terrain",
+)
+
 
 def default_game_dir() -> Path:
     """默认使用官方/HMCL 通用的 %APPDATA%\\.minecraft。"""
@@ -347,10 +389,20 @@ class Config:
     selected_source_id: str = "official"
     sources: list[DownloadSource] = field(default_factory=builtin_sources)
 
+    # ---- 用户协议（同意状态与启动前提示开关） ----
+    agreement_version: str = ""
+    agreement_accepted_at: str = ""
+    agreement_prompt: bool = True
+
+    # ---- 功能开关（标签页隐藏 + 离线登录/皮肤入口，见 FEATURE_DEFAULTS） ----
+    features: dict[str, bool] = field(default_factory=lambda: dict(FEATURE_DEFAULTS))
+
     # ---- 界面 ----
     language: str = "zh_CN"
     accent_color: str = "#65d46e"
     background_image: str = ""
+    ui_animations: bool = True   # 页面切换淡入淡出等动画（关闭可降低 GPU 占用）
+    ui_acrylic: bool = False     # 毛玻璃背景（依赖 Windows DWM 合成，GPU 加速、低 CPU）
 
     # ---- 版本隔离与单版本设置 ----
     isolation_mode: str = "none"
@@ -396,6 +448,16 @@ class Config:
     _save_guard: threading.Lock = field(
         default_factory=threading.Lock, repr=False, compare=False
     )
+
+    # ------------------------------------------------------------------
+    # 功能开关
+    def feature_enabled(self, key: str) -> bool:
+        """未知 key 默认开启，避免新增功能被旧配置误判为关闭。"""
+        return bool(self.features.get(key, FEATURE_DEFAULTS.get(key, True)))
+
+    def set_feature(self, key: str, enabled: bool) -> None:
+        self.features[str(key)] = bool(enabled)
+        self.save()
 
     def source_list(self) -> list[DownloadSource]:
         """启用中的源，按 priority 升序。"""
@@ -640,6 +702,8 @@ class Config:
             sources=list(self.sources),
             accent_color=self.accent_color,
             background_image=self.background_image,
+            ui_animations=self.ui_animations,
+            ui_acrylic=self.ui_acrylic,
             isolation_mode=self.isolation_mode,
             process_priority=self.process_priority,
             window_title=self.window_title,
@@ -659,6 +723,7 @@ class Config:
             microsoft_client_id=self.microsoft_client_id,
             authlib_injector_url=self.authlib_injector_url,
             authlib_injector_path=self.authlib_injector_path,
+            features=dict(self.features),
         )
         return clone
 
@@ -682,9 +747,15 @@ class Config:
                 "keep_launcher_on_game_exit": bool(self.keep_launcher_on_game_exit),
                 "close_to_tray": bool(self.close_to_tray),
                 "start_animation": bool(self.start_animation),
+                "agreement_version": self.agreement_version,
+                "agreement_accepted_at": self.agreement_accepted_at,
+                "agreement_prompt": bool(self.agreement_prompt),
+                "features": {str(k): bool(v) for k, v in self.features.items()},
                 "language": self.language,
                 "accent_color": self.accent_color,
                 "background_image": self.background_image,
+                "ui_animations": bool(self.ui_animations),
+                "ui_acrylic": bool(self.ui_acrylic),
                 "selected_source_id": self.selected_source_id,
                 "sources": [s.to_dict() for s in self.sources],
                 "isolation_mode": self.isolation_mode,
@@ -804,6 +875,13 @@ class Config:
         cfg.keep_launcher_on_game_exit = bool(data.get("keep_launcher_on_game_exit", True))
         cfg.close_to_tray = bool(data.get("close_to_tray", False))
         cfg.start_animation = bool(data.get("start_animation", True))
+        cfg.agreement_version = str(data.get("agreement_version") or "")
+        cfg.agreement_accepted_at = str(data.get("agreement_accepted_at") or "")
+        cfg.agreement_prompt = bool(data.get("agreement_prompt", True))
+        raw_features = data.get("features")
+        if isinstance(raw_features, dict):
+            for key, value in raw_features.items():
+                cfg.features[str(key)] = bool(value)
         # 延迟导入，避免 config 模块在导入时就依赖 Qt
         from .i18n import SUPPORTED_LANGUAGES
 
@@ -812,6 +890,8 @@ class Config:
             cfg.language = "zh_CN"
         cfg.accent_color = str(data.get("accent_color") or "#65d46e")
         cfg.background_image = str(data.get("background_image") or "")
+        cfg.ui_animations = bool(data.get("ui_animations", True))
+        cfg.ui_acrylic = bool(data.get("ui_acrylic", False))
         cfg.after_launch_action = str(data.get("after_launch_action") or "")
         if cfg.after_launch_action not in AFTER_LAUNCH_ACTIONS:
             cfg.after_launch_action = "hide" if cfg.hide_after_launch else "nothing"
@@ -983,6 +1063,8 @@ __all__ = [
     "BMCLAPI_BASE",
     "BMCLAPI_MANIFEST",
     "SOURCE_MAPPINGS",
+    "FEATURE_DEFAULTS",
+    "FEATURE_PAGE_KEYS",
     "MODRINTH_API_BASE",
     "MODRINTH_CDN_BASE",
     "CURSEFORGE_API_BASE",
