@@ -197,6 +197,9 @@ class BrowserPage(QWidget):
 
     # ------------------------------------------------------------------
     def _build(self) -> None:
+        # 浏览器页不包滚动区，直接铺满底色避免切页重影（_apply_appearance 会按需改为透明）。
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet("background-color: #0c1310;")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(18, 16, 18, 10)
         outer.setSpacing(8)

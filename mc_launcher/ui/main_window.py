@@ -38,6 +38,7 @@ from .page_bedrock import BedrockPage
 from .page_browser import BrowserPage
 from .page_content import ContentPage
 from .page_control import ControlPage
+from .page_dependencies import DependenciesPage
 from .page_download import DownloadPage
 from .page_download_center import DownloadCenterPage
 from .page_forbric import ForbricPage
@@ -382,6 +383,7 @@ class MainWindow(QMainWindow):
             # theme.py 的 make_nav_icon 没有 "forbric" 分支，走默认图标（不要改 theme.py）
             ("forbric", self.tr("Forbric")),
             ("java", self.tr("Java 中心")),
+            ("deps", self.tr("依赖补全")),
             ("wiki", self.tr("教程中心")),
             ("bedrock", self.tr("基岩版")),
             ("skin_factory", self.tr("皮肤工厂")),
@@ -419,10 +421,13 @@ class MainWindow(QMainWindow):
 
         # 侧边栏导航放进滚动容器：窗口变矮时用滚轮上下滑动，而不是把按钮压扁丢失文字
         nav_scroll = QScrollArea()
+        nav_scroll.setObjectName("SidebarScroll")
         nav_scroll.setWidgetResizable(True)
         nav_scroll.setFrameShape(QFrame.NoFrame)
         nav_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        nav_scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
+        nav_scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget { background-color: #0a100c; }")
+        nav_scroll.viewport().setAttribute(Qt.WA_OpaquePaintEvent, False)
+        nav_scroll.viewport().setAttribute(Qt.WA_StyledBackground, True)
         nav_scroll.setWidget(nav_host)
         side.addWidget(nav_scroll, 1)
 
@@ -476,6 +481,7 @@ class MainWindow(QMainWindow):
         self.browser_page = BrowserPage(self.ctx, self) if _on("browser") else None
         self.forbric_page = ForbricPage(self.ctx, self) if _on("forbric") else None
         self.java_center_page = JavaCenterPage(self.ctx, self) if _on("java") else None
+        self.dependencies_page = DependenciesPage(self.ctx, self) if _on("deps") else None
         self.wiki_page = WikiPage(self.ctx, self) if _on("wiki") else None
         self.bedrock_page = BedrockPage(self.ctx, self) if _on("bedrock") else None
         self.skin_factory_page = SkinFactoryPage(self.ctx, self) if _on("skin_factory") else None
@@ -494,6 +500,7 @@ class MainWindow(QMainWindow):
             ("browser", self.browser_page),
             ("forbric", self.forbric_page),
             ("java", self.java_center_page),
+            ("deps", self.dependencies_page),
             ("wiki", self.wiki_page),
             ("bedrock", self.bedrock_page),
             ("skin_factory", self.skin_factory_page),
@@ -520,6 +527,7 @@ class MainWindow(QMainWindow):
             ("multiplayer", self.multiplayer_page, "refresh"),
             ("forbric", self.forbric_page, "refresh"),
             ("java", self.java_center_page, "refresh"),
+            ("deps", self.dependencies_page, "refresh"),
             ("wiki", self.wiki_page, "refresh"),
             ("bedrock", self.bedrock_page, "refresh"),
             ("skin_factory", self.skin_factory_page, None),
@@ -620,6 +628,29 @@ class MainWindow(QMainWindow):
         if self.ctx.config.ui_acrylic:
             stylesheet += acrylic_stylesheet()
         self.setStyleSheet(stylesheet)
+        # 滚动区视口与页面用 inline 样式表绘制背景；有背景图时改为透明以露出底图。
+        bg = "background-color: transparent;" if has_image else "background-color: #0c1310;"
+        side_bg = "background-color: rgba(10, 16, 12, 200);" if has_image else "background-color: #0a100c;"
+        for sa in self.findChildren(QScrollArea):
+            if sa.objectName() == "SidebarScroll":
+                vp = sa.viewport()
+                if vp is not None:
+                    vp.setStyleSheet(side_bg)
+                w = sa.widget()
+                if w is not None:
+                    w.setStyleSheet(side_bg)
+                continue
+            vp = sa.viewport()
+            if vp is not None:
+                vp.setStyleSheet(bg)
+            w = sa.widget()
+            if w is not None:
+                w.setStyleSheet(bg)
+        # 浏览器页直接放在堆叠层里，不走滚动区，单独更新。
+        for i in range(self.pages.count()):
+            pw = self.pages.widget(i)
+            if pw is not None and not isinstance(pw, QScrollArea):
+                pw.setStyleSheet(bg)
         self._apply_acrylic()
 
     def _apply_acrylic(self) -> None:
@@ -839,6 +870,7 @@ class MainWindow(QMainWindow):
             self.browser_page,
             self.forbric_page,
             self.java_center_page,
+            self.dependencies_page,
             self.wiki_page,
             self.bedrock_page,
             self.settings_page,

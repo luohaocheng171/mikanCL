@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-AGREEMENT_VERSION = "1.3"
+AGREEMENT_VERSION = "1.4"
 
 # 每种语言：标题、确认文案、按钮文案、条款标签页（标签名 + 正文）
 _TEXTS: dict[str, dict] = {
@@ -105,6 +105,17 @@ _TEXTS: dict[str, dict] = {
                 "以降低 GPU 与内存占用。\n"
                 "毛玻璃效果依赖 Windows 桌面窗口管理器（DWM）合成，不额外启动进程、不联网；"
                 "在不支持的系统上会自动回退为半透明深色背景。",
+            ),
+            (
+                "十一、第三方模块",
+                "「依赖补全」页会列出陶瓦联机（Terracotta）、authlib-injector 等第三方模块，"
+                "并由您点击后从各自官方发布地址下载。这些模块由各自作者独立开发与维护，"
+                "MikanCL 与其作者无隶属、授权、赞助或担保关系，也不对其代码、更新与可用性负责。\n"
+                "提供下载入口仅为方便用户；下载、安装或使用过程中出现的任何问题（包括但不限于"
+                "游戏崩溃、存档或文件损坏、联机中断、账号或安全风险、设备损害等）由您自行承担，"
+                "MikanCL 作者概不负责。\n"
+                "第三方模块适用其自身的开源许可（如 AGPL-3.0），请自行确认来源、版本与许可后再使用；"
+                "如不需要，可忽略该页面而完全不影响启动器其余功能。",
             ),
         ],
     },
@@ -222,6 +233,22 @@ _TEXTS: dict[str, dict] = {
                 "for composition; it does not spawn extra processes or access the network. On "
                 "unsupported systems it falls back to a translucent dark background.",
             ),
+            (
+                "11. Third-party modules",
+                "The Dependency Completion page lists third-party modules such as Terracotta and "
+                "authlib-injector, which are downloaded from their own official release pages only "
+                "after you click download. These modules are developed and maintained solely by their "
+                "respective authors; MikanCL has no affiliation, authorisation, sponsorship or "
+                "endorsement relationship with them and is not responsible for their code, updates or "
+                "availability.\n"
+                "The download entry is provided merely for your convenience. Any problem arising from "
+                "downloading, installing or using such modules (including but not limited to game "
+                "crashes, damaged saves or files, interrupted multiplayer sessions, account or security "
+                "risks, or device damage) is borne by you alone; the MikanCL author accepts no liability.\n"
+                "Third-party modules are governed by their own open-source licences (e.g. AGPL-3.0). "
+                "Verify the source, version and licence before use; ignoring this page does not affect "
+                "any other feature of the launcher.",
+            ),
         ],
     },
     "ru_RU": {
@@ -337,6 +364,23 @@ _TEXTS: dict[str, dict] = {
                 "Эффект матового стекла использует композицию DWM (диспетчер окон рабочего "
                 "стола Windows), не запускает дополнительные процессы и не обращается к сети. "
                 "На неподдерживаемых системах он заменяется полупрозрачным тёмным фоном.",
+            ),
+            (
+                "11. Сторонние модули",
+                "На странице «Дополнение зависимостей» перечислены сторонние модули, такие как "
+                "Terracotta и authlib-injector; загрузка начинается с их официальных страниц релизов "
+                "только после нажатия кнопки вами. Эти модули разрабатывают и поддерживают "
+                "исключительно их авторы; MikanCL не связан с ними, не авторизован и не даёт никаких "
+                "гарантий в отношении их кода, обновлений и доступности.\n"
+                "Ссылка для загрузки предоставлена исключительно для удобства. Любые проблемы, "
+                "возникшие при загрузке, установке или использовании таких модулей (включая, помимо "
+                "прочего, сбои игры, повреждение миров или файлов, обрыв сетевой игры, риски для "
+                "аккаунта или безопасности, повреждение оборудования), несёте вы; автор MikanCL "
+                "ответственности не несёт.\n"
+                "На сторонние модули распространяются их собственные открытые лицензии "
+                "(например, AGPL-3.0). Перед использованием проверьте источник, версию и лицензию; "
+                "если они не нужны, страницу можно просто игнорировать — остальные функции лаунчера "
+                "работают как обычно.",
             ),
         ],
     },
@@ -461,6 +505,23 @@ _TEXTS: dict[str, dict] = {
                 "n'accède pas au réseau. Sur les systèmes non pris en charge, il est remplacé "
                 "par un fond sombre translucide.",
             ),
+            (
+                "11. Modules tiers",
+                "La page « Complétion des dépendances » répertorie des modules tiers tels que "
+                "Terracotta et authlib-injector, téléchargés depuis leurs propres pages de publication "
+                "officielles uniquement après votre clic. Ces modules sont développés et maintenus "
+                "exclusivement par leurs auteurs respectifs ; MikanCL n'a aucun lien d'affiliation, "
+                "d'autorisation, de parrainage ou de garantie avec eux et n'est pas responsable de leur "
+                "code, de leurs mises à jour ni de leur disponibilité.\n"
+                "L'accès au téléchargement n'est fourni que pour votre commodité. Tout problème "
+                "découlant du téléchargement, de l'installation ou de l'utilisation de ces modules "
+                "(notamment plantages du jeu, sauvegardes ou fichiers endommagés, interruption du "
+                "multijoueur, risques pour le compte ou la sécurité, dommages matériels) est à votre "
+                "charge ; l'auteur de MikanCL décline toute responsabilité.\n"
+                "Ces modules relèvent de leurs propres licences open source (par exemple AGPL-3.0). "
+                "Vérifiez la source, la version et la licence avant utilisation ; ignorer cette page "
+                "n'affecte aucune autre fonction du lanceur.",
+            ),
         ],
     },
     "ja_JP": {
@@ -570,6 +631,22 @@ _TEXTS: dict[str, dict] = {
                 "すりガラス効果は Windows のデスクトップ ウィンドウ マネージャー（DWM）に"
                 "よる合成に依存し、追加のプロセス起動やネットワーク通信は行いません。"
                 "非対応システムでは半透明の濃い背景に自動でフォールバックします。",
+            ),
+            (
+                "十一、第三者モジュール",
+                "「依存関係の補完」ページには、Terracotta（陶瓦联机）や authlib-injector などの"
+                "第三者モジュールが一覧表示され、あなたがクリックした場合にのみ各公式リリースページから"
+                "ダウンロードされます。これらのモジュールは各作者が独自に開発・保守しており、"
+                "MikanCL はその作者と提携・許諾・スポンサー・保証の関係を一切持たず、"
+                "コード・更新・提供状況について責任を負いません。\n"
+                "ダウンロード入口の提供はあくまで利便性のためです。これらのモジュールのダウンロード・"
+                "インストール・使用に起因するあらゆる問題（ゲームのクラッシュ、セーブデータや"
+                "ファイルの破損、マルチプレイの中断、アカウントやセキュリティ上のリスク、"
+                "機器の故障などを含みますがこれらに限りません）は利用者自身が負担し、"
+                "MikanCL の作者は一切責任を負いません。\n"
+                "第三者モジュールには各々のオープンソースライセンス（AGPL-3.0 など）が適用されます。"
+                "使用前に提供元・バージョン・ライセンスを確認してください。不要な場合はこのページを"
+                "無視してもランチャーの他の機能には影響しません。",
             ),
         ],
     },

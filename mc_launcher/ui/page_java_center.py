@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from ..config import DATA_DIR
 from ..context import AppContext, wait_thread
+from ..hardware import recommend_memory_mb
 from ..java import (
     detect_java_installed,
     download_java,
@@ -63,17 +64,25 @@ class ResolveWorker(QThread):
     done = Signal(str, object)  # (请求 key, 版本列表)
     failed = Signal(str, str)  # (请求 key, 错误信息)
 
-    def __init__(self, dist_id: str, major: int, force: bool = False, parent=None):
+    def __init__(
+        self,
+        dist_id: str,
+        major: int,
+        force: bool = False,
+        package: str = "jdk",
+        parent=None,
+    ):
         super().__init__(parent)
         self.dist_id = dist_id
         self.major = int(major)
         self.force = force
+        self.package = "jre" if str(package).lower() == "jre" else "jdk"
 
     def run(self) -> None:
-        key = f"{self.dist_id}:{self.major}"
+        key = f"{self.dist_id}:{self.major}:{self.package}"
         try:
             versions = fetch_distribution_versions(
-                self.dist_id, self.major, force=self.force
+                self.dist_id, self.major, force=self.force, package=self.package
             )
             self.done.emit(key, versions)
         except Exception as exc:  # noqa: BLE001
@@ -156,6 +165,7 @@ class JavaCenterPage(QWidget):
         self._versions: list[dict] = []
         self._request_key = ""
         self._workers: list[QThread] = []
+        self._task_packages: dict[str, str] = {}
         self._build()
         self.refresh()
 
@@ -190,6 +200,16 @@ class JavaCenterPage(QWidget):
             self._dist_combo.addItem(f"{dist['name']}（{dist['vendor']}）", dist["id"])
         toolbar.addWidget(self._dist_combo)
 
+        type_label = QLabel("安装类型")
+        type_label.setObjectName("Tiny")
+        toolbar.addWidget(type_label)
+
+        self._type_combo = QComboBox()
+        self._type_combo.setMinimumWidth(170)
+        self._type_combo.setToolTip("运行时 JRE 仅包含运行游戏所需组件，体积更小；完整 JDK 额外包含开发与调试工具。")
+        self._populate_types()
+        toolbar.addWidget(self._type_combo)
+
         major_label = QLabel("主版本")
         major_label.setObjectName("Tiny")
         toolbar.addWidget(major_label)
@@ -213,6 +233,7 @@ class JavaCenterPage(QWidget):
 
         # 选择变化只触发一次查询（构造完成后再接线，避免初始化期重复请求）
         self._dist_combo.currentIndexChanged.connect(self._on_distribution_changed)
+        self._type_combo.currentIndexChanged.connect(self._on_type_changed)
         self._major_combo.currentIndexChanged.connect(self._on_major_changed)
 
         table = QTableWidget(0, 5)
@@ -230,7 +251,9 @@ class JavaCenterPage(QWidget):
         card.body.addWidget(table, 1)
         self._table = table
 
-        hint = QLabel(f"安装目录：{JAVA_ROOT}（按发行版与版本分目录，互不覆盖）")
+        hint = QLabel(
+            f"安装目录：{JAVA_ROOT}（JRE / JDK 与不同发行版、版本分目录安装，互不覆盖）"
+        )
         hint.setObjectName("Tiny")
         hint.setWordWrap(True)
         card.body.addWidget(hint)
@@ -251,6 +274,24 @@ class JavaCenterPage(QWidget):
         except (TypeError, ValueError):
             return None
 
+    def _current_package(self) -> str:
+        value = self._type_combo.currentData() if hasattr(self, "_type_combo") else "jdk"
+        return "jre" if str(value or "jdk").lower() == "jre" else "jdk"
+
+    def _populate_types(self) -> None:
+        """按当前发行版重建安装类型选项；不支持 JRE 的发行版只保留完整 JDK。"""
+        dist = self._current_distribution()
+        supports_jre = bool((dist or {}).get("supports_jre"))
+        previous = self._type_combo.currentData() if self._type_combo.count() else "jre"
+        self._type_combo.blockSignals(True)
+        self._type_combo.clear()
+        if supports_jre:
+            self._type_combo.addItem("运行时 JRE（轻量，推荐）", "jre")
+        self._type_combo.addItem("完整 JDK（含开发工具）", "jdk")
+        index = self._type_combo.findData(previous)
+        self._type_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._type_combo.blockSignals(False)
+
     def _populate_majors(self, default: int = 21) -> None:
         dist = self._current_distribution()
         if dist is None:
@@ -269,7 +310,11 @@ class JavaCenterPage(QWidget):
         self._major_combo.blockSignals(False)
 
     def _on_distribution_changed(self, _index: int = -1) -> None:
+        self._populate_types()
         self._populate_majors()
+        self.refresh()
+
+    def _on_type_changed(self, _index: int = -1) -> None:
         self.refresh()
 
     def _on_major_changed(self, _index: int = -1) -> None:
@@ -288,6 +333,7 @@ class JavaCenterPage(QWidget):
                 self._dist_combo.blockSignals(True)
                 self._dist_combo.setCurrentIndex(index)
                 self._dist_combo.blockSignals(False)
+                self._populate_types()
         # 复用现有 populate 路径重建主版本项，保证下拉已填充后再精确选择
         self._populate_majors(default=wanted)
         index = self._major_combo.findData(wanted)
@@ -311,12 +357,16 @@ class JavaCenterPage(QWidget):
         major = self._current_major()
         if dist is None or major is None:
             return
-        self._request_key = f"{dist['id']}:{major}"
+        pkg = self._current_package()
+        self._request_key = f"{dist['id']}:{major}:{pkg}"
         self._refresh_btn.setEnabled(False)
-        self._status_label.setText(f"正在获取 {dist['name']} Java {major} 版本…")
+        type_text = "运行时 JRE" if pkg == "jre" else "完整 JDK"
+        self._status_label.setText(
+            f"正在获取 {dist['name']} Java {major} {type_text} 版本…"
+        )
         self._show_placeholder("正在获取版本…")
 
-        worker = ResolveWorker(dist["id"], major, force=force, parent=self)
+        worker = ResolveWorker(dist["id"], major, force=force, package=pkg, parent=self)
         worker.done.connect(self._on_versions)
         worker.failed.connect(self._on_versions_failed)
         worker.finished.connect(lambda w=worker: self._discard_worker(w))
@@ -428,7 +478,10 @@ class JavaCenterPage(QWidget):
     def _installed_path(self, item: dict) -> str:
         major = int(item.get("major") or self._current_major() or 0)
         name = java_runtime_name(
-            major, str(item.get("id") or ""), str(item.get("version") or "")
+            major,
+            str(item.get("id") or ""),
+            str(item.get("version") or ""),
+            package=str(item.get("package") or "jdk"),
         )
         return find_java_in(JAVA_ROOT / name)
 
@@ -441,8 +494,12 @@ class JavaCenterPage(QWidget):
         if not url:
             return
         major = int(item.get("major") or self._current_major() or 0)
+        pkg = "jre" if str(item.get("package") or "jdk").lower() == "jre" else "jdk"
         target_name = java_runtime_name(
-            major, str(item.get("id") or ""), str(item.get("version") or "")
+            major,
+            str(item.get("id") or ""),
+            str(item.get("version") or ""),
+            package=pkg,
         )
         dist_name = str(item.get("dist_name") or "")
         version_label = str(item.get("version") or "")
@@ -453,6 +510,7 @@ class JavaCenterPage(QWidget):
             pause_event = threading.Event()
             task.cancel = cancel_event.set
             task.pause_event = pause_event
+            self._task_packages[task.id] = pkg
             worker = JavaCenterInstallWorker(
                 major,
                 JAVA_ROOT,
@@ -481,17 +539,20 @@ class JavaCenterPage(QWidget):
             return worker
 
         detail = str(item.get("note") or item.get("channel") or "")
+        type_text = "JRE" if pkg == "jre" else "JDK"
+        display_name = f"{dist_name} Java {version_label} · {type_text}"
         self.ctx.downloads.submit(
             kind="Java",
-            name=f"{dist_name} Java {version_label}",
+            name=display_name,
             factory=factory,
             rebuild=factory,
             target_dir=str(JAVA_ROOT),
             detail=detail,
         )
-        self.ctx.bus.toast.emit(f"已加入下载中心：{dist_name} Java {version_label}")
+        self.ctx.bus.toast.emit(f"已加入下载中心：{display_name}")
 
     def _on_installed(self, task_id: str, info) -> None:
+        pkg = self._task_packages.pop(task_id, "jdk")
         self.ctx.downloads.finish(task_id, ok=True)
         self.ctx.javas = detect_java_installed()
         if info is not None and all(
@@ -502,9 +563,28 @@ class JavaCenterPage(QWidget):
         self.ctx.bus.toast.emit(
             f"Java {getattr(info, 'version', '')} 已安装完成。"
         )
+        if pkg == "jre":
+            # 安装轻量运行时意味着开始使用游戏环境，顺手按本机配置分配内存
+            self._apply_recommended_memory()
         self.refresh()
 
+    def _apply_recommended_memory(self) -> None:
+        """按本机物理内存推荐值写入配置（内存条数量差异大的机器也能给出合适值）。"""
+        recommended = recommend_memory_mb()
+        if recommended <= 0:
+            return
+        current = int(getattr(self.ctx.config, "memory_mb", 0) or 0)
+        if current == recommended:
+            return
+        self.ctx.config.memory_mb = recommended
+        self.ctx.config.save_debounced()
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit(
+            f"已按本机配置自动分配内存：{recommended} MB（{recommended / 1024:.1f} GB）"
+        )
+
     def _on_install_failed(self, task_id: str, message: str) -> None:
+        self._task_packages.pop(task_id, None)
         self.ctx.downloads.finish(task_id, ok=False, message=message)
         self.ctx.bus.log.emit(f"[Java 中心] Java 安装失败：{message}")
         QMessageBox.warning(self, "Java 安装失败", message)

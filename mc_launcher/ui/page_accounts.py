@@ -675,6 +675,7 @@ class AccountsPage(QWidget):
         right_scroll.setWidgetResizable(True)
         right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         right_scroll.setFixedWidth(382)
+        right_scroll.viewport().setAttribute(Qt.WA_OpaquePaintEvent, False)
         right_scroll.setWidget(right_column)
         body.addWidget(right_scroll)
 

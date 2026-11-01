@@ -1424,6 +1424,7 @@ class HomePage(QWidget):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.viewport().setAttribute(Qt.WA_OpaquePaintEvent, False)
         self.version_host = QWidget()
         self.version_layout = QVBoxLayout(self.version_host)
         self.version_layout.setContentsMargins(0, 0, 6, 0)

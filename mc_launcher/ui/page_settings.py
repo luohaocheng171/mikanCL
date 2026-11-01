@@ -47,6 +47,7 @@ from ..config import (
     DownloadSource,
 )
 from ..context import AppContext, wait_thread
+from ..hardware import memory_summary, recommend_memory_mb
 from ..i18n import SUPPORTED_LANGUAGES, t
 from ..java import detect_java_installed, download_java, java_key
 from ..net import Cancelled, apply_proxy, test_source
@@ -275,7 +276,17 @@ class SettingsPage(QWidget):
         self.general_memory_spin.setRange(512, 65536)
         self.general_memory_spin.setSingleStep(512)
         self.general_memory_spin.setSuffix(" MB")
-        form.addRow(self.tr("默认最大内存"), self.general_memory_spin)
+        detect_memory = QPushButton(self.tr("自动检测"))
+        detect_memory.setObjectName("Ghost")
+        detect_memory.setToolTip(
+            self.tr("读取本机物理内存，按 25% 规则建议游戏可用内存并立即生效")
+        )
+        detect_memory.clicked.connect(self._on_detect_memory)
+        memory_row = QHBoxLayout()
+        memory_row.setSpacing(8)
+        memory_row.addWidget(self.general_memory_spin, 1)
+        memory_row.addWidget(detect_memory)
+        form.addRow(self.tr("默认最大内存"), memory_row)
 
         self.general_threads_spin = QSpinBox()
         self.general_threads_spin.setRange(1, 328)
@@ -396,6 +407,7 @@ class SettingsPage(QWidget):
             "browser": "内置浏览器",
             "forbric": "Forbric",
             "java": "Java 中心",
+            "deps": "依赖补全",
             "wiki": "教程中心",
             "bedrock": "基岩版",
             "skin_factory": "皮肤工厂",
@@ -1320,6 +1332,21 @@ class SettingsPage(QWidget):
         finally:
             os.environ.update(inherited)
         QApplication.quit()
+
+    def _on_detect_memory(self) -> None:
+        """按本机物理内存推荐内存上限，填入输入框并立即写入配置。"""
+        recommended = recommend_memory_mb()
+        self.general_memory_spin.blockSignals(True)
+        self.general_memory_spin.setValue(max(512, int(recommended)))
+        self.general_memory_spin.blockSignals(False)
+        self.ctx.config.memory_mb = int(recommended)
+        self.ctx.config.save()
+        self.ctx.bus.config_changed.emit()
+        summary = memory_summary()
+        detail = f"（{summary}）" if summary else ""
+        self.ctx.bus.toast.emit(
+            f"已按本机配置自动分配内存：{recommended} MB{detail}"
+        )
 
     def _save_general_settings(self) -> None:
         cfg = self.ctx.config

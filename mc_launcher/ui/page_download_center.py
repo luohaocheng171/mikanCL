@@ -294,6 +294,7 @@ class DownloadCenterPage(QWidget):
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QScrollArea.NoFrame)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.viewport().setAttribute(Qt.WA_OpaquePaintEvent, False)
         container = QWidget()
         self.list_layout = QVBoxLayout(container)
         self.list_layout.setContentsMargins(0, 0, 4, 0)

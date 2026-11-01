@@ -1,4 +1,4 @@
-# MikanCL v4.6.2 官方文档
+# MikanCL v4.7.0 官方文档
 
 <div align="center">
 
@@ -24,7 +24,7 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 
 ### 版本信息
 
-- **当前版本**：v4.6.2
+- **当前版本**：v4.7.0
 - **框架**：PySide6（Qt6，Fusion 深色主题 + 自绘标题栏）
 - **Python 要求**：3.10+
 - **运行平台**：Windows 10 / 11（x64）
@@ -33,6 +33,7 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 - **内容平台**：Modrinth、CurseForge（内置默认 API Key，可替换）
 - **下载源**：Mojang 官方源、BMCLAPI 镜像、自定义源（可增删、可排序）
 - **界面语言**：简体中文 / English / Русский / Français / 日本語（5 种，设置内切换）
+- **依赖管理**：「依赖补全」页集中管理所有不可内置的第三方依赖（联机、登录、运行时、加载器），并支持缺失依赖体检与静默补全
 - **许可证**：GPL-3.0（GNU General Public License v3.0，见[许可证](#许可证)章节）
 
 ---
@@ -41,11 +42,11 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 
 | 皮肤工厂（像素编辑器 + 3D 预览） | 世界种子 · 3D 地形预览 |
 | :---: | :---: |
-|  |
+| ![皮肤工厂](assets/screenshots/skin_factory.png) | ![地形预览](assets/screenshots/terrain_preview.png) |
 
 | 毛玻璃（Acrylic）界面 | 主界面（深色主题） |
 | :---: | :---: |
-|  | ![Logo](assets/mikan.png) |
+| ![毛玻璃界面](assets/screenshots/acrylic_ui.png) | ![Logo](assets/mikan.png) |
 
 > 上图为功能效果示意图；皮肤工厂、种子地形、毛玻璃均可在「设置 → 外观 / 功能开关」中开启或关闭，关闭动画可进一步降低 GPU 占用。
 
@@ -64,7 +65,9 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 | 找 Mod、整合包、资源包、光影包、材质包 | 「内容中心」双平台搜索，可按 MC 版本 / 加载器 / 材质分辨率过滤，一键装进实例或另存为 |
 | 用中文找 Mod | 直接搜「机械动力」「物品管理器」等中文关键词，卡片自动显示中文译名 |
 | 和朋友联机 | 「多人联机」用陶瓦（Terracotta）房间码组网，无需端口映射或公网 IP |
-| 换 Java / 装 Java | 「Java 中心」一键下载 6 家发行版；「设置」里手动指定或自动匹配 |
+| 换 Java / 装 Java | 「Java 中心」一键下载 10 家发行版，可只装轻量 JRE 或完整 JDK；「设置」里手动指定或自动匹配，并可一键检测硬件推荐内存 |
+| 看有哪些第三方依赖没装 | 「依赖补全」页按联机 / 登录 / 运行环境 / 加载器分类列出陶瓦、authlib-injector、Java 运行时、Mod 加载器与 Forbric，显示已安装 / 缺失 / 按需安装，缺失的可直接下载或前往对应页面 |
+| 游戏缺文件 / 缺 Java | 「依赖补全」选版本 → 检查 Java、客户端 Jar、依赖库、资源与日志配置 → 弹窗确认后静默补全，任务全部进入下载中心 |
 | 管账号与皮肤 | 微软正版设备码登录、皮肤站外置登录、离线账号，皮肤查询 / 上传 / 本地皮肤 |
 | 排查「装上了但起不来」 | 启动预检 5 项拦截 + Mod 冲突检测 + 崩溃弹窗一键「去装对应 Java」「补全缺失文件」「修复版本」+ 启动卡死看门狗 + 界面日志与 `install_error.log` 落盘 |
 | 不会装 / 装崩了想查教程 | 「教程中心」内置 8 篇 Markdown 攻略（Forge / Fabric / 光影 / 内存 / Mod 冲突 / Java / NBT / 离线皮肤），支持标题与正文搜索 |
@@ -160,10 +163,19 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
     版本设置里可一键清理启动器日志（保留最近 3 个）、`versions/*/natives`、`*.tmp` / `*.part` 与 7 天前的 `crash-reports`；还能把当前版本导出为 `.bat` / `.ps1` 启动脚本（含完整命令行与工作目录），方便脱离启动器直接运行或排查是否是启动器问题。
 
 27. **首次启动强制同意用户协议**
-    未同意当前协议版本时，启动会先弹出协议确认框：全部条款以标签页并列展示（非官方声明、账号与登录、内容与下载、数据与运行风险、隐私、免责、协议变更共 7 项），确认勾选框与「同意 / 不同意」按钮固定在标签页下方，未勾选时「同意」不可点击；点「不同意」直接退出，不进入主界面。同意后把版本号与时间写入 `data/config.json`，此后不再打扰；协议文档随程序内置 5 种语言。设置 → 关于页可随时重新查看全文，也可关闭「启动前提示」（协议版本升级时会再次要求确认）。
+    未同意当前协议版本时，启动会先弹出协议确认框：全部条款以标签页并列展示（非官方声明、账号与登录、内容与下载、数据与运行风险、隐私、免责、协议变更、世界种子、界面效果、第三方模块等共 11 项，当前版本 v1.4），确认勾选框与「同意 / 不同意」按钮固定在标签页下方，未勾选时「同意」不可点击；点「不同意」直接退出，不进入主界面。同意后把版本号与时间写入 `data/config.json`，此后不再打扰；协议文档随程序内置 5 种语言。设置 → 关于页可随时重新查看全文，也可关闭「启动前提示」（协议版本升级时会再次要求确认）。
 
 28. **更多细节**
     NBT 编辑器顶部搜索框可按 key 跳转并高亮匹配节点；皮肤预览补上披风层（64×64 皮肤的 `(0,0,10,16)` 区域，配合皮肤站 `cape_url` 一起贴）；多人联机房间码 26px 等宽大字并支持一键复制（2 秒内显示「已复制 ✓」）；教程中心支持「新建教程」，在 `data/wiki/<语言代码>/` 下创建空 Markdown 并调用系统编辑器打开，刷新后出现在列表里。
+
+29. **依赖补全页（不可内置依赖统一管理）**
+    侧边栏新增独立页面，集中列出所有因许可、体积或官方分发渠道限制而**不能随启动器内置**的第三方依赖：陶瓦联机、authlib-injector、Java 运行时、Forge / Fabric / NeoForge / Quilt 加载器与 Forbric。按「联机组件 / 登录组件 / 运行环境 / Mod 加载器」分类展示，标明版本、许可、安装路径与不可内置原因；可直接下载的缺失项显示「下载」，已安装显示「定位」，需官方安装器的显示「前往」对应页面。页面顶部固定展示免责声明，并同步写入《用户协议》第十一条。
+
+30. **缺失依赖体检与询问式静默补全**
+    选择任意已安装版本即可检查所需 Java、客户端 Jar、`libraries` 依赖库、`assets` 资源索引与对象、log4j 日志配置与版本文件；结果表格逐项标注「缺失 / 完整」及具体路径。发现缺失时先弹窗询问「是否现在自动补全」，确认后缺 Java 自动下载 Adoptium JRE、缺文件走 `ensure_version()` 只补缺口，任务全部进入下载中心，可暂停 / 取消 / 重试，补全过程不阻塞启动器继续使用。
+
+31. **Java 轻量安装与硬件推荐内存**
+    Java 中心新增「安装类型」选择：Adoptium Temurin 等发行版可只装 JRE（体积小、适合仅运行游戏），也可装完整 JDK；安装完成后自动按硬件推荐值写入最大内存。设置 → 通用页新增「自动检测」按钮，按物理内存与 CPU 核心数推荐最大内存并写回配置，避免手动填出超过物理内存 70% 的值。
 
 ---
 
@@ -198,7 +210,7 @@ def setup(api):
 | `api.data_dir` / `api.plugins_dir` | 数据目录与插件目录 |
 | `api.add_page(标题, QWidget)` | 新增侧边栏页面；页面可提供 `refresh()`，切页时自动调用 |
 | `api.log(文本)` / `api.toast(文本)` | 写控制台日志 / 状态栏提示 |
-| `api.navigate(名称)` | 跳转内置页：`home` `download` `downloads` `content` `modpack` `account` `control` `loaders` `multiplayer` `browser` `forbric` `java` `wiki` `settings` |
+| `api.navigate(名称)` | 跳转内置页：`home` `download` `downloads` `content` `modpack` `account` `control` `loaders` `multiplayer` `browser` `forbric` `java` `deps` `wiki` `bedrock` `skin_factory` `seed_terrain` `settings` |
 | `api.open_url(网址)` / `api.open_folder(路径)` | 用内置浏览器打开网址 / 打开本地目录 |
 | `api.list_instances()` | 实例列表（id / 名称 / MC 版本 / 加载器 / 路径 / 是否选中） |
 | `api.list_versions(实例 id)` | 已安装版本列表（id / 类型 / 加载器 / 基础版本 / 路径） |
@@ -249,6 +261,7 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 - **启动动画**：启动时草方块按进度逐格填充、随机彩蛋词条、淡入淡出，可在设置中关闭
 - **自动连接服务器**：启动时自动进入配置好的服务器地址
 - **代理支持**：HTTP 代理可同时应用于下载与游戏 JVM 参数
+- **内存自动分配**：设置 → 通用页「自动检测」按物理内存与 CPU 逻辑核心数推荐最大内存并写回配置；Java 中心安装完成后也自动应用推荐值，避免超过物理内存 70%
 - **系统托盘**：最小化到托盘、托盘快捷启动
 
 ### 下载与内容生态
@@ -296,7 +309,7 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 - **内置浏览器**：优先用 ctypes 托管系统 Edge WebView2 内核（完整 Chromium，H.264/AAC 齐全），B 站等站点视频直接在启动器内播放并支持全屏，多标签、弹窗转标签、Ctrl+T / Ctrl+W 快捷键齐备；用户数据目录固定在 `data/browser/webview2`，Cookie 与登录态自动持久化。系统缺失 WebView2 运行时（Windows 10/11 一般已预装）时自动回退到 QtWebEngine，并亮出「视频可能无法播放 / 用系统浏览器打开」提示条
 - **教程中心**：内置 8 篇 Markdown 攻略，左侧目录 + 右侧渲染，支持搜索、内部锚点与外链跳转，可从教程页直接打开 NBT 编辑器
 - **NBT 编辑器**：纯手写 NBT 读写（13 种标签、gzip 自动识别、类型完整保留），树形查看 / 编辑 `level.dat` 与 `playerdata`，右键增删标签，首次保存自动生成 `.bak`
-- **Java 中心**：Adoptium Temurin、Microsoft OpenJDK、Azul Zulu、Amazon Corretto、Alibaba Dragonwell、Tencent Kona 六大发行版，按主版本（8 / 11 / 17 / 21）下载安装，自动解压到 `data/` 并在设置中选中
+- **Java 中心**：Adoptium Temurin、Microsoft OpenJDK、Azul Zulu、Amazon Corretto、Alibaba Dragonwell、Tencent Kona、BellSoft Liberica、IBM Semeru、SAP SapMachine、GraalVM Community 共 10 个发行版，按主版本（8 / 11 / 17 / 21）下载安装；支持选择「JRE（仅运行）」或「JDK（含开发工具）」，JRE 体积更小；自动解压到 `data/` 并在设置中选中，安装完成后按硬件推荐值自动写入最大内存
 - **Forbric 引导式安装**：实验性 Fabric/Forge/NeoForge 三合一加载器，通过 GitHub Releases 自动获取最新安装器与 `Forbric-Installer.bat`，用 Java 21 拉起官方 GUI，后台轮询 `versions/26.2-forbric/26.2-forbric.json`，生成后自动注册实例
 
 ### 界面与联机
@@ -307,6 +320,16 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 - **陶瓦联机**：内置 Terracotta（房间码 P2P 组网），自动下载 / 校验官方发行包，创建房间、加入房间、复制房间码、结束联机
 - **中文内容检索**：本地词表 + MC百科在线词典，支持中文名展示与中文关键词搜索
 - **系统托盘与单实例**：可最小化到托盘，重复启动会提示而不是开两个进程
+
+### 依赖补全与第三方组件
+
+- **不可内置依赖清单**：「依赖补全」页按「联机组件 / 登录组件 / 运行环境 / Mod 加载器」分类列出陶瓦联机（Terracotta）、authlib-injector、Java 运行时、Forge / Fabric / NeoForge / Quilt 加载器与 Forbric，标明版本、许可、安装路径与不可内置原因
+- **状态一目了然**：已安装项显示绿色「已安装」并可「定位」打开目录；缺失项显示红色「缺失」并可「下载」；加载器这类需按版本使用官方安装器的项显示「按需安装」并可「前往」对应页面
+- **第三方模块下载**：陶瓦联机与 authlib-injector 由本页直接下载安装，任务登记到下载中心，与普通下载一致支持暂停 / 取消 / 失败重试
+- **缺失依赖体检**：选择已安装版本后一键检查所需 Java、客户端 Jar、`libraries` 依赖库、`assets` 资源索引与对象、log4j 日志配置与版本文件，表格逐项标注状态与具体路径
+- **询问式静默补全**：检测到缺失时弹窗询问是否立即补全；确认后缺 Java 下载 Adoptium JRE、缺文件只补缺口，全部任务显示在下载中心，补全期间可继续使用启动器
+- **免责声明与协议**：依赖页顶部展示第三方模块免责声明，并同步写入《用户协议 v1.4》第十一条（5 种语言），明确第三方模块与 MikanCL 无隶属 / 授权 / 担保关系，提供入口仅为便利
+- **功能开关**：设置 → 功能开关中的「依赖补全」可隐藏该页；关闭后不创建页面、不启动后台任务
 
 ---
 
@@ -394,6 +417,8 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 - **扫描**：注册表 + 常见安装路径（`Program Files\Java`、`Program Files\Eclipse Adoptium`、`%LOCALAPPDATA%\Programs` 等）+ 启动器自管目录
 - **匹配**：`pick_java()` 优先完全匹配所需主版本，其次取高于需求的最近版本，最后回退任意可用 Java
 - **下载**：`download_java()` 支持 `on_bytes` 进度回调、取消与暂停，解压后返回可执行路径；Java 中心统一登记到下载中心，可暂停 / 取消 / 重试
+- **安装类型**：Java 中心可切换「JRE / JDK」，请求 key 形如 `temurin:21:jre`；Adoptium 按 `image_type` 拉取 JRE 包，部分只提供 JDK 的发行版会自动回退
+- **内存推荐**：`hardware.py` 读取物理内存与 CPU 逻辑核心数，按「物理内存约 1/4、上限随内存增长」的规则给出最大内存建议；Java 安装完成后与设置页「自动检测」按钮共用同一套推荐逻辑
 
 ### 8. 单实例、落盘与退出
 
@@ -430,6 +455,29 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | 启动 | `Get-AppxPackageManifest` 解析 `包族名!应用Id` → `explorer.exe shell:AppsFolder\<AUMID>`；20 秒后检查主进程是否真的起来 |
 | 失败诊断 | 读取 `Microsoft-Windows-TWinUI/Operational` 的激活失败事件（Id 5961），把 `0x803F8001`（无授权）等 HRESULT 译成可读提示 |
 
+### 11. 缺失依赖扫描与静默补全
+
+依赖体检全部集中在 `mc_launcher/dependencies.py`，页面只负责展示与提交下载任务：
+
+| 环节 | 实现 |
+| :--- | :--- |
+| 版本读取 | `load_version(game_dir, version_id)` 合并继承链；失败返回 `kind="version"`，不弹补全 |
+| Java | `required_java()` 取版本 JSON 的 `javaVersion.majorVersion`（缺省 21），`AppContext.javas` 中没有任何 `major >= required` 即缺失 |
+| 客户端 | `client_jar_path()` 指向 `versions/<id>/<id>.jar`，文件不存在且 JSON 含 `downloads.client.url` 时记为缺失 |
+| 依赖库 | 逐个检查 `merged.libraries` 中带 URL 的 `path` 是否存在于 `config.libraries_path`，缺多个时聚合为一行并给出示例路径 |
+| 资源 | 读取 `assets/indexes/<assets_id>.json` 的 `objects`，逐个检查 `objects/<sha1[:2]>/<sha1>`；索引文件本身缺失也单独上报 |
+| 日志配置 | `logging_file_path()` 对应的 log4j XML 不存在且版本声明了 logging 时记为缺失 |
+
+补全流程：
+
+1. `CheckWorker` 在后台线程完成扫描，结果表格逐项列出缺失项；全部完整时显示「完整」
+2. 有缺失则弹出 `QMessageBox.question`：「是否现在自动补全？补全任务会显示在下载中心，可暂停或取消」
+3. 用户确认后按类型拆分任务：Java 缺失 → `JavaInstallWorker`（Adoptium JRE，落盘 `data/runtime`）；文件缺失 → `VersionRepairWorker`（`GameInstaller.ensure_version()` 只补缺口）
+4. 两类任务都走 `DownloadManager.submit()`，与普通下载共享排队、暂停 / 取消 / 重试与进度展示
+5. 完成后刷新 `AppContext.javas` 与版本列表，提示可重新检查或直接启动；失败时任务标记为失败并写入日志
+
+> 扫描只读文件系统，不联网、不修改游戏目录；只有用户确认补全后才会发起下载。
+
 ---
 
 ## 内部接口参考
@@ -446,7 +494,8 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | `mc_launcher/auth.py` | 账号存储、微软设备码登录、外置登录、皮肤查询 / 上传 / 本地皮肤 |
 | `mc_launcher/content.py` | Modrinth / CurseForge 客户端、整合包解析与安装、Mod 元数据扫描与冲突检测 |
 | `mc_launcher/downloads.py` | 下载中心任务模型与调度（并发上限、暂停 / 恢复 / 取消 / 重试） |
-| `mc_launcher/java.py` | Java 探测、版本匹配、Java 下载与解压 |
+| `mc_launcher/java.py` | Java 探测、版本匹配、Java 下载与解压（支持 JRE / JDK 安装类型） |
+| `mc_launcher/dependencies.py` | 不可内置第三方依赖清单（联机 / 登录 / Java 运行时 / 加载器）、游戏缺失依赖扫描（Java / 客户端 / 依赖库 / 资源 / 日志） |
 | `mc_launcher/forbric.py` | Forbric 安装器获取 / 下载 / 启动、版本结果轮询 |
 | `mc_launcher/bedrock.py` | 基岩版：离线版本目录加载、微软商店文件接口、多线程分块下载、`Add-AppxPackage` 安装、AUMID 解析与启动 / 卸载 |
 | `mc_launcher/terrain_java.py` | 内嵌 TerrainGen.java（与 Minecraft 相同的 ImprovedNoise 柏林噪声 + persistence 0.5 / lacunarity 2 多层叠加），自动 `javac` 编译或 Java 11+ 单文件启动，输出高度图与彩色 PNG |
@@ -475,12 +524,13 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | 多人联机 | `MultiplayerPage` | 陶瓦联机安装、创建 / 加入房间、房间码复制、联机日志 |
 | 内置浏览器 | `BrowserPage` + `webview2.py` | Edge WebView2 内核（可直接播放 B 站视频）、多标签、Cookie 持久化、QtWebEngine 回退 |
 | Forbric | `ForbricPage` | 版本兼容拦截、安装器下载与 GUI 启动、结果监控 |
-| Java 中心 | `JavaCenterPage` | 六大 Java 发行版下载与安装 |
+| Java 中心 | `JavaCenterPage` | 10 个 Java 发行版下载与安装，支持选择 JRE（仅运行）/ JDK 与主版本 |
+| 依赖补全 | `DependenciesPage` | 不可内置第三方依赖清单（陶瓦 / authlib-injector / Java 运行时 / 加载器 / Forbric）、缺失依赖检查、询问式静默补全、下载中心任务 |
 | 教程中心 | `WikiPage` | 内置 8 篇 Markdown 教程（中/英/俄/法/日）、目录浏览、标题与正文搜索、NBT 编辑器入口 |
 | 基岩版 | `BedrockPage` | 三类来源（MCAPPX 历史 / 商店正式版 / 商店预览版）分类列表、架构与搜索过滤、内置浏览器（Edge 内核）下载、下载目录监听归档、安装 / 启动 / 卸载、打开下载目录 |
 | 皮肤工厂 | `SkinFactoryPage` | 64×64 像素皮肤编辑器：画笔 / 橡皮 / 填充 / 取色 / 加亮 / 加深 / 直线 / 矩形 / 椭圆 / 喷枪、镜像对称、撤销重做（整份图层快照）、缩放与网格、按部位高亮底层与第二层 UV；最多 8 层多层绘画，列表勾选显隐、点击切换活动层，导出 PNG / 保存皮肤库 / 应用账号时自动合并；右侧 3D 模型（等轴测投影 + 第二层半透明叠加）可选中部位后直接作画，支持图层切换、左转 / 右转 / 复位视角按钮、视角滑块、自动旋转、Shift + 拖动旋转，多皮肤库保存 / 载入 / 删除、应用到当前账号 |
 | 世界种子 | `SeedTerrainPage` | 输入种子 → 本机 Java 执行内嵌 TerrainGen（与 Minecraft 相同的柏林噪声算法与参数）生成高度图 → 内联 WebGL 把地形渲染为 Minecraft 风格方块（体素柱：平顶 + 阶梯侧面，海平面压平，侧面按朝向压暗），视角 / 缩放 / 平移按钮 + 拖动旋转 / 滚轮缩放 / 右键平移 / 双击复位 / 自动旋转，可调尺寸与起伏、导出高度图 PNG |
-| 设置 | `SettingsPage` | 数据目录、下载源、线程数（1–328）、代理、API Key、镜像、界面选项（含启动动画 / 页面切换动画 / 毛玻璃开关）、主题色与背景、插件目录、功能开关 |
+| 设置 | `SettingsPage` | 数据目录、下载源、线程数（1–328）、代理、API Key、镜像、界面选项（含启动动画 / 页面切换动画 / 毛玻璃开关）、主题色与背景、插件目录、功能开关、自动检测推荐内存 |
 
 > 注意区分两个加载器页：`LoaderPage`（`page_loader.py`）是「下载安装」页里的**表单式**加载器安装区（手动填 MC 版本 + 加载器版本）；`LoadersPage`（`page_loaders.py`）是导航栏独立入口「Mod 加载器」，按 MC 版本**浏览列表**后选择安装。两者共用同一套安装 worker 与 `modloader.install_loader()`。
 
@@ -525,7 +575,8 @@ MikanCL/
 │   ├── auth.py                 # 账号与皮肤
 │   ├── content.py              # 内容平台与整合包
 │   ├── downloads.py            # 下载中心
-│   ├── java.py                  # Java 探测与下载
+│   ├── java.py                  # Java 探测与下载（JRE / JDK）
+│   ├── dependencies.py          # 不可内置第三方依赖清单与缺失依赖扫描
 │   ├── forbric.py              # Forbric
 │   ├── bedrock.py              # 基岩版（目录 / 商店接口 / 下载 / 安装 / 启动）
 │   ├── terrain_java.py         # 世界种子地形（内嵌原版同算法柏林噪声 Java 程序）
@@ -557,7 +608,8 @@ MikanCL/
 │       ├── page_browser.py     # 内置浏览器
 │       ├── webview2.py         # Edge WebView2 内核（ctypes 直调 COM）
 │       ├── page_forbric.py     # Forbric（+ forbric_worker.py）
-│       ├── page_java_center.py # Java 中心
+│       ├── page_java_center.py # Java 中心（JRE / JDK）
+│       ├── page_dependencies.py # 依赖补全（第三方依赖 + 缺失扫描 / 静默补全）
 │       ├── page_wiki.py        # 教程中心（内置 Markdown Wiki）
 │       ├── page_bedrock.py     # 基岩版（分类列表 / 下载 / 安装 / 启动）
 │       ├── dialog_nbt.py       # NBT 编辑器对话框
@@ -604,8 +656,13 @@ MikanCL/
 | 依赖 | 说明 |
 | :--- | :--- |
 | Java 8 / 11 / 17 / 21 | 由版本 JSON 与加载器决定，可在 Java 中心下载 |
+| 陶瓦联机（Terracotta） | 房间码 P2P 联机运行时，可在「依赖补全」页下载 |
+| authlib-injector | 外置登录 / 皮肤站注入组件，可在「依赖补全」页下载 |
+| Mod 加载器 / Forbric | 需按版本调用官方安装器，入口统一收录在「依赖补全」页 |
 | Visual C++ Redistributable | 部分加载器安装器与游戏运行需要 |
 | CustomSkinLoader（可选 Mod） | 让离线皮肤在游戏内生效 |
+
+> 以上第三方依赖因许可、体积或官方分发渠道限制均不随启动器内置，「依赖补全」页集中展示其安装状态并提供下载或跳转入口。
 
 ---
 
@@ -614,7 +671,7 @@ MikanCL/
 ### 方式一：已打包 exe（推荐）
 
 1. 从 [Releases](https://github.com/luohaocheng171/mikanCL/releases) 下载 `MikanCL.exe` 放到任意目录
-2. 双击运行，程序会在 exe 同目录自动创建 `data/` 保存配置与缓存
+2. 双击运行，程序会在 exe 同目录自动创建 `data/` 保存配置与缓存；首次启动需确认《用户协议 v1.4》
 3. 首次运行可能触发 SmartScreen 提示，点击「更多信息」→「仍要运行」
 4. 如被杀毒软件误报，请将程序所在目录加入白名单
 
@@ -646,7 +703,7 @@ pyinstaller --noconfirm --clean --onefile --windowed --name MikanCL \
   run.py
 ```
 
-产物位于 `dist/MikanCL.exe`，单文件、免安装。
+脚本会自动收集 PySide6 / QtWebEngine 全部模块、`mc_launcher/translations`、`mc_launcher/data` 与 `mc_launcher/resources`，产物位于 `dist/MikanCL.exe`（约 210.8 MB），单文件、免安装，不依赖本机 Python 环境。
 
 ---
 
@@ -665,6 +722,8 @@ pyinstaller --noconfirm --clean --onefile --windowed --name MikanCL \
 11. **基岩版下载**：点「在浏览器下载」会切到内置浏览器（优先 Edge 内核）打开该版本的下载页，在页面上点下载按钮即可；下载完成的 `.appx` / `.msix` 会由启动器自动归档到基岩版下载目录，随后点「从本地安装」安装
 12. **基岩版启动要求**：手动安装的安装包本身不含授权，启动时需用拥有 Minecraft 的微软账号登录商店（或加入 Game Pass），否则系统会报 `0x803F8001`；启动 20 秒后未检测到进程时会给出该提示
 13. **基岩版降级**：安装低版本会替换现有版本（`-ForceUpdateFromAnyVersion`），想回到新版重新下载安装即可
+14. **第三方依赖**：陶瓦联机、authlib-injector、Java 运行时、Mod 加载器与 Forbric 均不随启动器内置，统一在「依赖补全」页查看状态并下载或跳转；这些模块由各自作者独立维护，下载 / 使用风险由使用者自行承担，详见《用户协议 v1.4》第十一条
+15. **依赖补全**：检查本身只读本地文件、不联网；只有用户确认后才会把补全任务加入下载中心。加载器类依赖需按游戏版本使用官方安装器，页面只提供跳转入口
 
 ---
 
@@ -717,9 +776,9 @@ MikanCL 以 **GNU General Public License v3.0（GPL-3.0）** 发布。完整许�
 
 本程序按「现状」提供，不附带任何明示或暗示的担保（详见许可证第 15、16 条）。
 
-> **许可边界**：GPL-3.0 只覆盖 MikanCL 自身的代码。Minecraft 游戏本体、Mod、整合包、资源包、光影包、材质包、Java 运行时，以及第三方组件（如陶瓦联机 Terracotta，其自身为 AGPL-3.0）均适用各自的权利与许可，请分别遵守。
+> **许可边界**：GPL-3.0 只覆盖 MikanCL 自身的代码。Minecraft 游戏本体、Mod、整合包、资源包、光影包、材质包、Java 运行时，以及第三方组件（陶瓦联机 Terracotta 与 authlib-injector 均为 AGPL-3.0、Forbric 以作者仓库声明为准、各 Mod 加载器适用各自开源许可）均适用各自的权利与许可，请分别遵守。
 
-**法律声明**：MikanCL 仅提供版本下载、启动与内容管理的客户端功能，不包含任何 Minecraft 游戏本体、Mod 二进制文件或账号凭据。Minecraft 为 Mojang / Microsoft 的商标与版权作品，请通过正版渠道购买与使用；Mod、整合包、资源包、光影包的版权归各自作者所有，请遵守其授权协议。首次使用前程序会要求阅读并同意内置的《用户协议》（7 项条款，含非官方声明与免责条款），不同意则不会进入主界面。
+**法律声明**：MikanCL 仅提供版本下载、启动与内容管理的客户端功能，不包含任何 Minecraft 游戏本体、Mod 二进制文件或账号凭据。Minecraft 为 Mojang / Microsoft 的商标与版权作品，请通过正版渠道购买与使用；Mod、整合包、资源包、光影包的版权归各自作者所有，请遵守其授权协议。首次使用前程序会要求阅读并同意内置的《用户协议 v1.4》（11 项条款，含非官方声明、第三方模块免责与风险说明），不同意则不会进入主界面。陶瓦联机、authlib-injector、Java 运行时、Mod 加载器与 Forbric 等第三方依赖均不随启动器内置，仅在「依赖补全」页提供下载或跳转入口，其许可与使用风险由使用者自行确认与承担。
 
 ---
 

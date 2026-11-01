@@ -36,6 +36,7 @@ STYLESHEET = """
 * { outline: none; }
 QWidget { color: #e8f1ea; font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif; font-size: 13px; }
 QMainWindow, QWidget#Root { background-color: #0c1310; }
+QStackedWidget, QStackedWidget > QWidget { background-color: #0c1310; }
 QFrame#Sidebar { background-color: #0a100c; border-right: 1px solid #1b2920; }
 QLabel#LogoTitle { font-size: 19px; font-weight: 700; color: #eef7f0; letter-spacing: 1px; }
 QLabel#LogoSub { font-size: 10px; color: #6d8876; letter-spacing: 2px; }
@@ -103,7 +104,8 @@ QCheckBox { color: #b7cbbd; spacing: 8px; }
 QCheckBox::indicator { width: 16px; height: 16px; border-radius: 4px; border: 1px solid #33493b; background: #0e1712; }
 QCheckBox::indicator:checked { background-color: #65d46e; border-color: #65d46e; }
 QTextEdit#Console, QPlainTextEdit#Console { background-color: #080e0a; border: 1px solid #1c2a21; border-radius: 10px; color: #a9c4b2; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
-QScrollArea { border: none; background: transparent; }
+QScrollArea { border: none; background-color: #0c1310; }
+QScrollArea > QWidget, QScrollArea > QWidget > QWidget { background-color: #0c1310; }
 QScrollBar:vertical { background: transparent; width: 8px; margin: 2px; }
 QScrollBar::handle:vertical { background: #2b4033; border-radius: 4px; min-height: 24px; }
 QScrollBar::handle:vertical:hover { background: #3c5a47; }
@@ -209,7 +211,7 @@ def background_overlay_stylesheet(has_image: bool) -> str:
         return ""
     return (
         "QMainWindow, QWidget#Root { background: transparent; }\n"
-        "QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }\n"
+        "QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget { background: transparent; }\n"
         "QStackedWidget, QStackedWidget > QWidget { background: transparent; }\n"
         "QFrame#Sidebar { background-color: rgba(10, 16, 12, 200); }\n"
         "QFrame#TitleBar { background-color: rgba(10, 16, 12, 200); }\n"
@@ -221,7 +223,7 @@ def acrylic_stylesheet() -> str:
     """毛玻璃开启时：把主窗体与根容器改为半透明，让 DWM 合成的模糊背景透出来。"""
     return (
         "QMainWindow, QWidget#Root { background-color: rgba(12, 19, 16, 170); }\n"
-        "QScrollArea, QScrollArea > QWidget > QWidget { background-color: transparent; }\n"
+        "QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget { background-color: transparent; }\n"
         "QStackedWidget, QStackedWidget > QWidget { background-color: transparent; }\n"
         "QFrame#Sidebar { background-color: rgba(10, 16, 12, 180); }\n"
         "QFrame#TitleBar { background-color: rgba(10, 16, 12, 180); }\n"

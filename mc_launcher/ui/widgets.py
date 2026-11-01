@@ -88,6 +88,15 @@ def scroll_page(page: QWidget) -> QWidget:
     # 纵向始终允许滚轮；横向仅在页面比窗口更宽时出现，避免内容被硬裁切
     scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+    # 关键：视口默认 WA_OpaquePaintEvent=True 且样式表 background: transparent，
+    # 滚动/切页时不擦除旧像素，导致文字重影。设为 False 让 Qt 先清空再绘制。
+    scroll.viewport().setAttribute(Qt.WA_OpaquePaintEvent, False)
+    scroll.viewport().setAttribute(Qt.WA_StyledBackground, True)
+    page.setAttribute(Qt.WA_StyledBackground, True)
+    # 用 inline 样式表确保背景一定被绘制（普通 QWidget 默认不绘制应用级背景）。
+    # 有自定义背景图时由 MainWindow._apply_appearance 统一改为 transparent。
+    scroll.viewport().setStyleSheet("background-color: #0c1310;")
+    page.setStyleSheet("background-color: #0c1310;")
     scroll.setWidget(page)
     return scroll
 

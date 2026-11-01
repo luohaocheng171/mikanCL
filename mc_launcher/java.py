@@ -259,6 +259,7 @@ JAVA_DISTRIBUTIONS: tuple[dict, ...] = (
         "description": "Eclipse 基金会维护的 OpenJDK 构建，社区使用最广。",
         "majors": (8, 11, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27),
         "channel": "Adoptium 官方 API",
+        "jre": True,
     },
     {
         "id": "microsoft",
@@ -268,6 +269,7 @@ JAVA_DISTRIBUTIONS: tuple[dict, ...] = (
         "description": "微软构建的 OpenJDK，Windows 平台优化较好。",
         "majors": (11, 17, 21, 25),
         "channel": "aka.ms 官方稳定链接",
+        "jre": False,
     },
     {
         "id": "azul",
@@ -277,6 +279,7 @@ JAVA_DISTRIBUTIONS: tuple[dict, ...] = (
         "description": "Azul 提供的 Zulu OpenJDK，版本覆盖 8 到最新。",
         "majors": (8, 11, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25),
         "channel": "Azul 元数据 API",
+        "jre": True,
     },
     {
         "id": "corretto",
@@ -286,6 +289,7 @@ JAVA_DISTRIBUTIONS: tuple[dict, ...] = (
         "description": "亚马逊长期免费支持的 OpenJDK 发行版。",
         "majors": (8, 11, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26),
         "channel": "GitHub Releases + 官方下载地址",
+        "jre": True,
     },
     {
         "id": "dragonwell",
@@ -295,6 +299,7 @@ JAVA_DISTRIBUTIONS: tuple[dict, ...] = (
         "description": "阿里巴巴面向云场景优化的 OpenJDK。",
         "majors": (8, 11, 17, 21, 25),
         "channel": "GitHub Releases",
+        "jre": False,
     },
     {
         "id": "kona",
@@ -304,6 +309,7 @@ JAVA_DISTRIBUTIONS: tuple[dict, ...] = (
         "description": "腾讯开源的 OpenJDK 发行版。",
         "majors": (8, 11, 17, 21, 25),
         "channel": "GitHub Releases",
+        "jre": False,
     },
     {
         "id": "liberica",
@@ -313,6 +319,7 @@ JAVA_DISTRIBUTIONS: tuple[dict, ...] = (
         "description": "BellSoft 维护的 Liberica JDK，覆盖 8 到最新版本。",
         "majors": (8, 11, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27),
         "channel": "BellSoft 官方 API",
+        "jre": True,
     },
     {
         "id": "semeru",
@@ -322,6 +329,7 @@ JAVA_DISTRIBUTIONS: tuple[dict, ...] = (
         "description": "IBM 基于 OpenJ9 的 OpenJDK 发行版，内存占用较低。",
         "majors": (8, 11, 17, 21, 25, 26),
         "channel": "IBM GitHub Releases",
+        "jre": False,
     },
     {
         "id": "sapmachine",
@@ -331,6 +339,7 @@ JAVA_DISTRIBUTIONS: tuple[dict, ...] = (
         "description": "SAP 维护的 OpenJDK 构建，长期同步上游更新。",
         "majors": (11, 17, 21, 25, 26),
         "channel": "SAP GitHub Releases",
+        "jre": False,
     },
     {
         "id": "graalvm",
@@ -340,12 +349,13 @@ JAVA_DISTRIBUTIONS: tuple[dict, ...] = (
         "description": "GraalVM 社区版，包含高性能 JIT 与原生镜像工具。",
         "majors": (17, 20, 21, 22, 23, 24, 25),
         "channel": "GraalVM GitHub Releases",
+        "jre": False,
     },
 )
 
 _DISTRIBUTIONS_BY_ID = {item["id"]: item for item in JAVA_DISTRIBUTIONS}
 
-_VERSION_CACHE: dict[tuple[str, int], tuple[float, list[dict]]] = {}
+_VERSION_CACHE: dict[tuple[str, int, str], tuple[float, list[dict]]] = {}
 _ATOM_CACHE: dict[str, tuple[float, list[str]]] = {}
 _ASSET_CACHE: dict[tuple[str, str], tuple[float, list[tuple[str, str]]]] = {}
 _VERSION_CACHE_LOCK = threading.Lock()
@@ -354,21 +364,29 @@ _GITHUB_HEADERS = {"Accept": "application/vnd.github+json"}
 
 
 def list_java_distributions() -> list[dict]:
-    """返回支持的 Java 发行版元信息（id / 名称 / 主页 / 说明 / 可选主版本）。"""
+    """返回支持的 Java 发行版元信息（id / 名称 / 主页 / 说明 / 可选主版本 / 是否提供 JRE）。"""
     result: list[dict] = []
     for item in JAVA_DISTRIBUTIONS:
         entry = dict(item)
         entry["majors"] = list(item["majors"])
+        entry["supports_jre"] = bool(item.get("jre"))
         result.append(entry)
     return result
 
 
-def java_runtime_name(major: int, dist_id: str = "", version: str = "") -> str:
-    """本地运行时目录名：未指定发行版时沿用 jre-<major>，否则 jre-<major>-<dist>-<version>。"""
+def java_runtime_name(major: int, dist_id: str = "", version: str = "", package: str = "jdk") -> str:
+    """本地运行时目录名：未指定发行版时沿用 jre-<major>，否则 jre-<major>-<dist>-<version>。
+
+    安装类型为 JRE 时追加 -jre 后缀，避免与同版本的 JDK 目录互相覆盖。
+    """
     if dist_id and version:
         safe = re.sub(r"[^0-9A-Za-z._-]+", "_", f"{dist_id}-{version}").strip("_")
-        return f"jre-{int(major)}-{safe}"
-    return f"jre-{int(major)}"
+        name = f"jre-{int(major)}-{safe}"
+    else:
+        name = f"jre-{int(major)}"
+    if str(package or "jdk").lower() == "jre":
+        name += "-jre"
+    return name
 
 
 def _version_key(text: str) -> tuple[int, ...]:
@@ -401,6 +419,7 @@ def _version_entry(
     note: str = "",
     latest: bool = False,
     fallback: bool = False,
+    package: str = "jdk",
 ) -> dict:
     dist = _DISTRIBUTIONS_BY_ID.get(dist_id, {})
     return {
@@ -417,13 +436,15 @@ def _version_entry(
         "note": note,
         "latest": bool(latest),
         "fallback": bool(fallback),
+        "package": "jre" if str(package).lower() == "jre" else "jdk",
     }
 
 
-def _fetch_adoptium_versions(major: int, timeout: int, limit: int) -> list[dict]:
+def _fetch_adoptium_versions(major: int, timeout: int, limit: int, package: str = "jdk") -> list[dict]:
+    image_type = "jre" if str(package).lower() == "jre" else "jdk"
     url = (
         "https://api.adoptium.net/v3/assets/feature_releases/"
-        f"{int(major)}/ga?architecture=x64&heap_size=normal&image_type=jdk"
+        f"{int(major)}/ga?architecture=x64&heap_size=normal&image_type={image_type}"
         "&jvm_impl=hotspot&os=windows&page=0&page_size={limit}&project=jdk"
         "&sort_method=DEFAULT&sort_order=DESC&vendor=eclipse"
     ).format(limit=max(1, limit))
@@ -439,8 +460,8 @@ def _fetch_adoptium_versions(major: int, timeout: int, limit: int) -> list[dict]
         for binary in release.get("binaries") or []:
             if not isinstance(binary, dict):
                 continue
-            package = binary.get("package") or {}
-            link = str(package.get("link") or "")
+            pkg_info = binary.get("package") or {}
+            link = str(pkg_info.get("link") or "")
             if not link.lower().endswith(".zip"):
                 continue
             rows.append(
@@ -449,10 +470,11 @@ def _fetch_adoptium_versions(major: int, timeout: int, limit: int) -> list[dict]
                     major,
                     version or str(release.get("id") or ""),
                     link,
-                    name=str(package.get("name") or ""),
-                    size=int(package.get("size") or 0),
-                    checksum=str(package.get("checksum") or ""),
+                    name=str(pkg_info.get("name") or ""),
+                    size=int(pkg_info.get("size") or 0),
+                    checksum=str(pkg_info.get("checksum") or ""),
                     note=f"Adoptium 官方 API · {release_name}",
+                    package=package,
                 )
             )
             break
@@ -461,16 +483,17 @@ def _fetch_adoptium_versions(major: int, timeout: int, limit: int) -> list[dict]
     return rows
 
 
-def _fallback_adoptium(major: int, timeout: int) -> list[dict]:
+def _fallback_adoptium(major: int, timeout: int, package: str = "jdk") -> list[dict]:
+    image_type = "jre" if str(package).lower() == "jre" else "jdk"
     url = (
         ADOPTIUM_LATEST.format(major=int(major))
-        + "?os=windows&architecture=x64&image_type=jdk"
+        + f"?os=windows&architecture=x64&image_type={image_type}"
     )
     data = Http(timeout=timeout).get_json_url(url)
     if not isinstance(data, list) or not data:
         return []
-    package = ((data[0].get("binary") or {}).get("package") or {}) if isinstance(data[0], dict) else {}
-    link = str(package.get("link") or "")
+    pkg_info = ((data[0].get("binary") or {}).get("package") or {}) if isinstance(data[0], dict) else {}
+    link = str(pkg_info.get("link") or "")
     if not link:
         return []
     return [
@@ -479,17 +502,18 @@ def _fallback_adoptium(major: int, timeout: int) -> list[dict]:
             major,
             f"{major}.x（最新）",
             link,
-            name=str(package.get("name") or ""),
-            size=int(package.get("size") or 0),
-            checksum=str(package.get("checksum") or ""),
+            name=str(pkg_info.get("name") or ""),
+            size=int(pkg_info.get("size") or 0),
+            checksum=str(pkg_info.get("checksum") or ""),
             note="Adoptium 官方 latest 稳定链接",
             latest=True,
             fallback=True,
+            package=package,
         )
     ]
 
 
-def _fetch_microsoft_versions(major: int, timeout: int, limit: int) -> list[dict]:
+def _fetch_microsoft_versions(major: int, timeout: int, limit: int, package: str = "jdk") -> list[dict]:
     template = (
         f"https://aka.ms/download-jdk/microsoft-jdk-{int(major)}-windows-x64.zip"
     )
@@ -512,14 +536,15 @@ def _fetch_microsoft_versions(major: int, timeout: int, limit: int) -> list[dict
     ]
 
 
-def _fallback_microsoft(major: int, timeout: int) -> list[dict]:
-    return _fetch_microsoft_versions(major, timeout, 1)
+def _fallback_microsoft(major: int, timeout: int, package: str = "jdk") -> list[dict]:
+    return _fetch_microsoft_versions(major, timeout, 1, package)
 
 
-def _fetch_azul_versions(major: int, timeout: int, limit: int) -> list[dict]:
+def _fetch_azul_versions(major: int, timeout: int, limit: int, package: str = "jdk") -> list[dict]:
+    pkg = "jre" if str(package).lower() == "jre" else "jdk"
     url = (
         "https://api.azul.com/metadata/v1/zulu/packages/"
-        f"?java_version={int(major)}&os=windows&arch=x64&java_package_type=jdk"
+        f"?java_version={int(major)}&os=windows&arch=x64&java_package_type={pkg}"
         "&archive_type=zip&availability_types=CA&page=1&page_size=40"
     )
     data = Http(timeout=timeout).get_json_url(url)
@@ -528,7 +553,7 @@ def _fetch_azul_versions(major: int, timeout: int, limit: int) -> list[dict]:
         if not isinstance(row, dict):
             continue
         name = str(row.get("name") or "")
-        if "-ca-jdk" not in name:  # 排除 crac / fx 等特殊包
+        if f"-ca-{pkg}" not in name:  # 排除 crac / fx 等特殊包
             continue
         link = str(row.get("download_url") or "")
         if not link.lower().endswith(".zip"):
@@ -544,6 +569,7 @@ def _fetch_azul_versions(major: int, timeout: int, limit: int) -> list[dict]:
                 link,
                 name=name,
                 note=f"Azul 元数据 API · Zulu {'.'.join(str(p) for p in row.get('distro_version') or [])}".strip(),
+                package=pkg,
             )
         )
     candidates.sort(key=lambda item: _version_key(item["version"]), reverse=True)
@@ -560,10 +586,11 @@ def _fetch_azul_versions(major: int, timeout: int, limit: int) -> list[dict]:
     return selected
 
 
-def _fallback_azul(major: int, timeout: int) -> list[dict]:
+def _fallback_azul(major: int, timeout: int, package: str = "jdk") -> list[dict]:
+    pkg = "jre" if str(package).lower() == "jre" else "jdk"
     url = (
         "https://api.azul.com/metadata/v1/zulu/packages/"
-        f"?java_version={int(major)}&os=windows&arch=x64&java_package_type=jdk"
+        f"?java_version={int(major)}&os=windows&arch=x64&java_package_type={pkg}"
         "&archive_type=zip&latest=true&availability_types=CA"
     )
     data = Http(timeout=timeout).get_json_url(url)
@@ -572,7 +599,7 @@ def _fallback_azul(major: int, timeout: int) -> list[dict]:
             continue
         name = str(row.get("name") or "")
         link = str(row.get("download_url") or "")
-        if "-ca-jdk" not in name or not link.lower().endswith(".zip"):
+        if f"-ca-{pkg}" not in name or not link.lower().endswith(".zip"):
             continue
         version = ".".join(str(part) for part in (row.get("java_version") or []))
         _, size = _head_url(link, timeout=min(timeout, 12))
@@ -587,19 +614,22 @@ def _fallback_azul(major: int, timeout: int) -> list[dict]:
                 note="Azul 官方 latest 稳定链接",
                 latest=True,
                 fallback=True,
+                package=pkg,
             )
         ]
     return []
 
 
-def _corretto_url(tag: str) -> str:
+def _corretto_url(tag: str, package: str = "jdk") -> str:
+    pkg = "jre" if str(package).lower() == "jre" else "jdk"
     return (
         f"https://corretto.aws/downloads/resources/{tag}/"
-        f"amazon-corretto-{tag}-windows-x64-jdk.zip"
+        f"amazon-corretto-{tag}-windows-x64-{pkg}.zip"
     )
 
 
-def _fetch_corretto_versions(major: int, timeout: int, limit: int) -> list[dict]:
+def _fetch_corretto_versions(major: int, timeout: int, limit: int, package: str = "jdk") -> list[dict]:
+    pkg = "jre" if str(package).lower() == "jre" else "jdk"
     data = Http(timeout=timeout).get_json_url(
         f"https://api.github.com/repos/corretto/corretto-{int(major)}/releases"
         f"?per_page={max(2, limit + 2)}",
@@ -612,7 +642,7 @@ def _fetch_corretto_versions(major: int, timeout: int, limit: int) -> list[dict]
         tag = str(release.get("tag_name") or "")
         if not re.fullmatch(r"\d+(\.\d+)+", tag):
             continue
-        link = _corretto_url(tag)
+        link = _corretto_url(tag, pkg)
         _, size = _head_url(link, timeout=min(timeout, 12))
         if not size:  # 旧版本资源可能已下线
             continue
@@ -622,9 +652,10 @@ def _fetch_corretto_versions(major: int, timeout: int, limit: int) -> list[dict]
                 major,
                 tag,
                 link,
-                name=f"amazon-corretto-{tag}-windows-x64-jdk.zip",
+                name=f"amazon-corretto-{tag}-windows-x64-{pkg}.zip",
                 size=size,
                 note=f"Amazon Corretto {tag}（版本特定下载地址）",
+                package=pkg,
             )
         )
         if len(rows) >= limit:
@@ -632,15 +663,16 @@ def _fetch_corretto_versions(major: int, timeout: int, limit: int) -> list[dict]
     return rows
 
 
-def _fallback_corretto(major: int, timeout: int) -> list[dict]:
+def _fallback_corretto(major: int, timeout: int, package: str = "jdk") -> list[dict]:
+    pkg = "jre" if str(package).lower() == "jre" else "jdk"
     template = (
         f"https://corretto.aws/downloads/latest/"
-        f"amazon-corretto-{int(major)}-x64-windows-jdk.zip"
+        f"amazon-corretto-{int(major)}-x64-windows-{pkg}.zip"
     )
     final, size = _head_url(template, timeout=timeout)
     if not final:
         return []
-    match = re.search(r"amazon-corretto-([\d.]+)-windows-x64-jdk", final)
+    match = re.search(rf"amazon-corretto-([\d.]+)-windows-x64-{pkg}", final)
     version = match.group(1).rstrip(".") if match else f"{major}.x"
     return [
         _version_entry(
@@ -653,6 +685,7 @@ def _fallback_corretto(major: int, timeout: int) -> list[dict]:
             note="Amazon Corretto 官方 latest 稳定链接",
             latest=True,
             fallback=True,
+            package=pkg,
         )
     ]
 
@@ -705,7 +738,7 @@ def _github_windows_zip(releases: list, dist_id: str, major: int) -> list[dict]:
     return rows
 
 
-def _fetch_dragonwell_versions(major: int, timeout: int, limit: int) -> list[dict]:
+def _fetch_dragonwell_versions(major: int, timeout: int, limit: int, package: str = "jdk") -> list[dict]:
     data = Http(timeout=timeout).get_json_url(
         f"https://api.github.com/repos/dragonwell-project/dragonwell{int(major)}"
         f"/releases?per_page={max(2, limit)}",
@@ -715,13 +748,13 @@ def _fetch_dragonwell_versions(major: int, timeout: int, limit: int) -> list[dic
     return rows[: max(1, limit)]
 
 
-def _fallback_dragonwell(major: int, timeout: int) -> list[dict]:
+def _fallback_dragonwell(major: int, timeout: int, package: str = "jdk") -> list[dict]:
     return _atom_fallback(
         "dragonwell", f"dragonwell-project/dragonwell{int(major)}", major, timeout
     )
 
 
-def _fetch_kona_versions(major: int, timeout: int, limit: int) -> list[dict]:
+def _fetch_kona_versions(major: int, timeout: int, limit: int, package: str = "jdk") -> list[dict]:
     data = Http(timeout=timeout).get_json_url(
         f"https://api.github.com/repos/Tencent/TencentKona-{int(major)}"
         f"/releases?per_page={max(2, limit)}",
@@ -731,7 +764,7 @@ def _fetch_kona_versions(major: int, timeout: int, limit: int) -> list[dict]:
     return rows[: max(1, limit)]
 
 
-def _fallback_kona(major: int, timeout: int) -> list[dict]:
+def _fallback_kona(major: int, timeout: int, package: str = "jdk") -> list[dict]:
     return _atom_fallback("kona", f"Tencent/TencentKona-{int(major)}", major, timeout)
 
 
@@ -824,8 +857,9 @@ def _atom_fallback(dist_id: str, repo: str, major: int, timeout: int, max_tags: 
     return rows[:4]
 
 
-def _fetch_liberica_versions(major: int, timeout: int, limit: int) -> list[dict]:
+def _fetch_liberica_versions(major: int, timeout: int, limit: int, package: str = "jdk") -> list[dict]:
     """BellSoft Liberica：官方 releases API 直接给出 zip 下载地址、大小与 sha1。"""
+    pkg = "jre" if str(package).lower() == "jre" else "jdk"
     url = (
         "https://api.bell-sw.com/v1/liberica/releases?"
         f"version-feature={int(major)}&os=windows&arch=x86&bitness=64&output=json"
@@ -838,8 +872,8 @@ def _fetch_liberica_versions(major: int, timeout: int, limit: int) -> list[dict]
         link = str(row.get("downloadUrl") or "")
         if not link.lower().endswith(".zip"):
             continue
-        if str(row.get("bundleType") or "") != "jdk":
-            continue  # 只要标准 JDK，排除 jdk-full / lite 等变体
+        if str(row.get("bundleType") or "") != pkg:
+            continue  # 只要标准 JDK/JRE，排除 jdk-full / lite 等变体
         rows.append(
             _version_entry(
                 "liberica",
@@ -851,14 +885,15 @@ def _fetch_liberica_versions(major: int, timeout: int, limit: int) -> list[dict]
                 checksum=str(row.get("sha1") or ""),
                 note="BellSoft Liberica 官方 API",
                 latest=bool(row.get("latest")),
+                package=pkg,
             )
         )
     rows.sort(key=lambda item: _version_key(item["version"]), reverse=True)
     return rows[: max(1, limit)]
 
 
-def _fallback_liberica(major: int, timeout: int) -> list[dict]:
-    rows = _fetch_liberica_versions(major, timeout, 1)
+def _fallback_liberica(major: int, timeout: int, package: str = "jdk") -> list[dict]:
+    rows = _fetch_liberica_versions(major, timeout, 1, package)
     for item in rows:
         item["latest"] = True
         item["fallback"] = True
@@ -900,7 +935,7 @@ def _semeru_rows(releases: list, major: int) -> list[dict]:
     return rows
 
 
-def _fetch_semeru_versions(major: int, timeout: int, limit: int) -> list[dict]:
+def _fetch_semeru_versions(major: int, timeout: int, limit: int, package: str = "jdk") -> list[dict]:
     data = Http(timeout=timeout).get_json_url(
         f"https://api.github.com/repos/ibmruntimes/semeru{int(major)}-binaries"
         f"/releases?per_page={max(2, limit)}",
@@ -910,7 +945,7 @@ def _fetch_semeru_versions(major: int, timeout: int, limit: int) -> list[dict]:
     return rows[: max(1, limit)]
 
 
-def _fallback_semeru(major: int, timeout: int) -> list[dict]:
+def _fallback_semeru(major: int, timeout: int, package: str = "jdk") -> list[dict]:
     return _atom_fallback(
         "semeru", f"ibmruntimes/semeru{int(major)}-binaries", major, timeout
     )
@@ -951,7 +986,7 @@ def _sapmachine_rows(releases: list, major: int) -> list[dict]:
     return rows
 
 
-def _fetch_sapmachine_versions(major: int, timeout: int, limit: int) -> list[dict]:
+def _fetch_sapmachine_versions(major: int, timeout: int, limit: int, package: str = "jdk") -> list[dict]:
     # SapMachine 的 release 列表跨多个 Java 版本，需要多取一些再按主版本过滤
     data = Http(timeout=timeout).get_json_url(
         f"https://api.github.com/repos/SAP/SapMachine/releases?per_page={max(10, limit * 6)}",
@@ -961,7 +996,7 @@ def _fetch_sapmachine_versions(major: int, timeout: int, limit: int) -> list[dic
     return rows[: max(1, limit)]
 
 
-def _fallback_sapmachine(major: int, timeout: int) -> list[dict]:
+def _fallback_sapmachine(major: int, timeout: int, package: str = "jdk") -> list[dict]:
     return _atom_fallback("sapmachine", "SAP/SapMachine", major, timeout)
 
 
@@ -1000,7 +1035,7 @@ def _graalvm_rows(releases: list, major: int) -> list[dict]:
     return rows
 
 
-def _fetch_graalvm_versions(major: int, timeout: int, limit: int) -> list[dict]:
+def _fetch_graalvm_versions(major: int, timeout: int, limit: int, package: str = "jdk") -> list[dict]:
     # 同一个 release 列表里混有多个 JDK 主版本，多取一些再过滤
     data = Http(timeout=timeout).get_json_url(
         "https://api.github.com/repos/graalvm/graalvm-ce-builds/releases?per_page=80",
@@ -1010,13 +1045,13 @@ def _fetch_graalvm_versions(major: int, timeout: int, limit: int) -> list[dict]:
     return rows[: max(1, limit)]
 
 
-def _fallback_graalvm(major: int, timeout: int) -> list[dict]:
+def _fallback_graalvm(major: int, timeout: int, package: str = "jdk") -> list[dict]:
     return _atom_fallback(
         "graalvm", "graalvm/graalvm-ce-builds", major, timeout, max_tags=6
     )
 
 
-_FETCHERS: dict[str, Callable[[int, int, int], list[dict]]] = {
+_FETCHERS: dict[str, Callable[[int, int, int, str], list[dict]]] = {
     "temurin": _fetch_adoptium_versions,
     "microsoft": _fetch_microsoft_versions,
     "azul": _fetch_azul_versions,
@@ -1029,7 +1064,7 @@ _FETCHERS: dict[str, Callable[[int, int, int], list[dict]]] = {
     "graalvm": _fetch_graalvm_versions,
 }
 
-_FALLBACK_FETCHERS: dict[str, Callable[[int, int], list[dict]]] = {
+_FALLBACK_FETCHERS: dict[str, Callable[[int, int, str], list[dict]]] = {
     "temurin": _fallback_adoptium,
     "microsoft": _fallback_microsoft,
     "azul": _fallback_azul,
@@ -1049,18 +1084,23 @@ def fetch_distribution_versions(
     limit: int = 8,
     timeout: int = 20,
     force: bool = False,
+    package: str = "jdk",
 ) -> list[dict]:
-    """查询某发行版某主版本的可用版本列表。
+    """查询某发行版某主版本、某安装类型（jdk / jre）的可用版本列表。
 
-    返回 dict 列表（version / url / size / name / checksum / note / latest / fallback 等）。
+    返回 dict 列表（version / url / size / name / checksum / note / latest / fallback / package 等）。
+    不支持 JRE 的发行版会直接返回空列表，避免把 JDK 当成 JRE 安装。
     任何一个源失败都会尝试官方 latest 稳定链接降级；仍然失败则返回空列表，不抛异常。
     """
     key_dist = str(dist_id or "").strip().lower()
+    pkg = "jre" if str(package).lower() == "jre" else "jdk"
     try:
         key_major = int(major)
     except (TypeError, ValueError):
         return []
-    key = (key_dist, key_major)
+    if pkg == "jre" and not _DISTRIBUTIONS_BY_ID.get(key_dist, {}).get("jre"):
+        return []
+    key = (key_dist, key_major, pkg)
     if not force:
         with _VERSION_CACHE_LOCK:
             hit = _VERSION_CACHE.get(key)
@@ -1072,7 +1112,7 @@ def fetch_distribution_versions(
         return []
     rows: list[dict] = []
     try:
-        rows = list(fetcher(key_major, timeout, limit) or [])
+        rows = list(fetcher(key_major, timeout, limit, pkg) or [])
     except Exception:  # noqa: BLE001 - 单个源异常时降级到 latest 链接
         rows = []
     rows = [row for row in rows if isinstance(row, dict) and str(row.get("url") or "")]
@@ -1080,7 +1120,7 @@ def fetch_distribution_versions(
         fallback = _FALLBACK_FETCHERS.get(key_dist)
         if fallback is not None:
             try:
-                rows = list(fallback(key_major, timeout) or [])
+                rows = list(fallback(key_major, timeout, pkg) or [])
             except Exception:  # noqa: BLE001 - 降级也失败时返回空列表
                 rows = []
     unique: list[dict] = []

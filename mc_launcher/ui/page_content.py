@@ -1307,6 +1307,7 @@ class ContentPage(QWidget):
         chip_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         chip_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         chip_scroll.setFixedHeight(40)
+        chip_scroll.viewport().setAttribute(Qt.WA_OpaquePaintEvent, False)
         chip_scroll.setWidget(chip_host)
         category_row.addWidget(chip_scroll, 1)
         filters.body.addLayout(category_row)
@@ -1340,6 +1341,7 @@ class ContentPage(QWidget):
         self.results_scroll = QScrollArea()
         self.results_scroll.setMinimumHeight(220)
         self.results_scroll.setWidgetResizable(True)
+        self.results_scroll.viewport().setAttribute(Qt.WA_OpaquePaintEvent, False)
         self.results_host = QWidget()
         host_layout = QVBoxLayout(self.results_host)
         host_layout.setContentsMargins(0, 0, 4, 0)
@@ -1445,6 +1447,7 @@ class ContentPage(QWidget):
 
         self.detail_scroll = QScrollArea()
         self.detail_scroll.setWidgetResizable(True)
+        self.detail_scroll.viewport().setAttribute(Qt.WA_OpaquePaintEvent, False)
         self.versions_host = QWidget()
         self.versions_layout = QVBoxLayout(self.versions_host)
         self.versions_layout.setContentsMargins(2, 2, 4, 2)
