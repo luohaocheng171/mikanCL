@@ -60,12 +60,13 @@ from PySide6.QtWidgets import (
 
 from .. import APP_NAME
 from .. import bedrock
-from ..auth import AuthError, MicrosoftAuth, apply_local_skin, apply_skin_resourcepack, ensure_authlib_injector
+from ..auth import AuthError, MicrosoftAuth, apply_local_skin, ensure_authlib_injector
 from ..config import DATA_DIR, ISOLATION_LABELS, ServerEntry
 from ..context import AppContext, wait_thread
 from ..i18n import t
 from ..installer import GameInstaller, Progress
 from ..java import pick_java, probe_java
+from ..jvm import jvm_summary, version_jvm_args
 from ..launcher import (
     LaunchOptions,
     archive_crash_log,
@@ -1013,17 +1014,11 @@ class LaunchWorker(QThread):
             proxy = cfg.effective_proxy if cfg.proxy_jvm else ""
             if account is not None and account.type == "offline":
                 try:
-                    applied = apply_local_skin(account, game_dir)
+                    applied = apply_local_skin(account, game_dir, self.version_id)
                     if applied:
-                        self.log.emit(f"[皮肤] 已应用离线皮肤：{applied}")
+                        self.log.emit(f"[皮肤] 已应用离线皮肤并生成 {self.version_id} 兜底皮肤包：{applied}")
                 except Exception as exc:  # noqa: BLE001
                     self.log.emit(f"[皮肤] 离线皮肤应用失败：{exc}")
-                try:
-                    pack = apply_skin_resourcepack(account, game_dir)
-                    if pack:
-                        self.log.emit(f"[皮肤] 已生成离线皮肤资源包（单人模式生效）：{pack}")
-                except Exception as exc:  # noqa: BLE001
-                    self.log.emit(f"[皮肤] 皮肤资源包生成失败：{exc}")
             plan = build_launch_plan(
                 LaunchOptions(
                     version=merged,
@@ -1032,6 +1027,7 @@ class LaunchWorker(QThread):
                     player_name=self.player_name,
                     java=self.java,
                     memory_mb=memory,
+                    smart_jvm=bool(cfg.smart_jvm),
                     width=self.width,
                     height=self.height,
                     extra_jvm_args=extra_jvm,
@@ -1053,6 +1049,14 @@ class LaunchWorker(QThread):
             for warning in plan.warnings:
                 self.log.emit(f"[提示] {warning}")
             self.log.emit(f"[启动] Java：{self.java.path}")
+            if cfg.smart_jvm:
+                self.log.emit(
+                    f"[启动] 智能 JVM："
+                    f"{jvm_summary(self.java.major, memory, merged.id, extra_jvm)}"
+                )
+            compat = version_jvm_args(merged.id, self.java.major, extra_jvm)
+            if compat:
+                self.log.emit(f"[启动] 版本兼容参数：{' '.join(compat)}")
             self.log.emit(f"[启动] 日志文件：{plan.log_path}")
             session = start_game(plan, on_line=self.log.emit)
             post_launch(session.process, priority=priority, title=window_title)
@@ -1064,7 +1068,10 @@ class LaunchWorker(QThread):
             self.started.emit(session)
             # QThread 到此结束；进程退出由守护线程监听，避免退出启动器时留下运行中的 QThread。
             threading.Thread(
-                target=self._watch_session, args=(session,), name="mc-exit-watcher", daemon=True
+                target=self._watch_session,
+                args=(session, self.ctx.bus),
+                name="mc-exit-watcher",
+                daemon=True,
             ).start()
             threading.Thread(
                 target=self._watch_startup,
@@ -1106,12 +1113,12 @@ class LaunchWorker(QThread):
         except RuntimeError:  # 页面/worker 已销毁
             pass
 
-    def _watch_session(self, session) -> None:
+    def _watch_session(self, session, bus) -> None:
         """守护线程只通过总线发信号，不引用 LaunchWorker，避免其已析构。"""
         try:
             code = int(session.process.wait() or 0)
             tail = "\n".join(session.lines()[-12:])
-            self.ctx.bus.game_exited.emit(code, tail)
+            bus.game_exited.emit(code, tail)
         except Exception:  # noqa: BLE001 - 启动器可能已经退出
             pass
 
@@ -2550,4 +2557,6 @@ class HomePage(QWidget):
                 wait_thread(worker, 2500)
         self._bedrock_worker = None
         self._bedrock_launch_worker = None
+        # 关闭后让延迟的基岩版校验回调直接返回，避免访问已销毁的页面
+        self._bedrock_pending_launch = 0.0
         self._covers.shutdown()

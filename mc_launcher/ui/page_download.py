@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_NAME
+from ..auth import import_offline_skin
 from ..content import ContentError, pick_best_version
 from ..context import AppContext, wait_thread
 from ..installer import (
@@ -45,6 +46,7 @@ from ..installer import (
     estimate_version_size,
 )
 from ..java import pick_java
+from ..launcher import isolated_game_dir
 from ..modloader import (
     LOADER_LABELS,
     LoaderError,
@@ -803,9 +805,9 @@ class DownloadPage(QWidget):
         self._retired_scans: list[LoaderScanWorker] = []
         self._install_worker: ChainInstallWorker | None = None
         self._size_worker: SizeEstimateWorker | None = None
-        self._install_task_id = ""
-        self._install_pause = threading.Event()
-        self._pending_install: tuple[dict, str, str] | None = None
+        # 同一个页面最多同时安装 5 个版本，每个版本一份独立任务与 worker
+        self._install_jobs: dict[str, dict] = {}
+        self._progress_key = ""
         self._client_worker: ClientJarSaveWorker | None = None
         self._client_task_id = ""
         self._client_pause = threading.Event()
@@ -1541,10 +1543,14 @@ class DownloadPage(QWidget):
         self._update_install_button()
 
     def _update_install_button(self) -> None:
-        running = self._install_worker is not None and self._install_worker.isRunning()
         estimating = self._size_worker is not None and self._size_worker.isRunning()
+        selected = str((self._detail_entry or {}).get("id") or "")
+        selected_active = self._install_job_active(selected)
         self.install_button.setEnabled(
-            not running and not estimating and self._detail_entry is not None
+            not estimating
+            and self._detail_entry is not None
+            and not selected_active
+            and self._active_install_count() < 5
         )
         saving = self._client_worker is not None and self._client_worker.isRunning()
         self.client_jar_button.setEnabled(
@@ -1556,8 +1562,24 @@ class DownloadPage(QWidget):
         for button in self._loader_save_buttons.values():
             button.setEnabled(not saving_loader)
 
+    def _install_job_active(self, version_id: str) -> bool:
+        """该版本是否已有未结束的安装任务。"""
+        job = self._install_jobs.get(version_id)
+        if not job:
+            return False
+        task = self.ctx.downloads.find(job.get("task_id", ""))
+        if task is not None and not task.finished:
+            return True
+        worker = job.get("worker")
+        return bool(worker is not None and worker.isRunning())
+
+    def _active_install_count(self) -> int:
+        return sum(
+            1 for version_id in self._install_jobs if self._install_job_active(version_id)
+        )
+
     # ------------------------------------------------------------------
-    # 串行安装
+    # 并发安装（最多 5 个版本同时进行）
     # ------------------------------------------------------------------
     def _local_install_size(self, version_id: str) -> int | None:
         """本地已有版本 JSON 时直接估算；没有（全新安装）返回 None。"""
@@ -1590,7 +1612,20 @@ class DownloadPage(QWidget):
 
     def _start_install(self) -> None:
         entry = self._detail_entry
-        if entry is None or (self._install_worker is not None and self._install_worker.isRunning()):
+        if entry is None:
+            return
+        version_id = str(entry.get("id") or "")
+        if self._install_job_active(version_id):
+            QMessageBox.information(
+                self, APP_NAME, f"{version_id} 已在安装中，请等待完成或先取消。"
+            )
+            return
+        if self._active_install_count() >= 5:
+            QMessageBox.information(
+                self,
+                APP_NAME,
+                "最多同时安装 5 个版本，请等待已有任务完成或先取消其中一个。",
+            )
             return
         if self._size_worker is not None and self._size_worker.isRunning():
             return
@@ -1605,7 +1640,6 @@ class DownloadPage(QWidget):
                 QMessageBox.warning(self, "缺少加载器版本", "请先选择一个加载器版本。")
                 return
 
-        version_id = str(entry.get("id") or "")
         need = self._local_install_size(version_id)
         if need is None:
             # 全新安装：本地没有版本 JSON，改为在线按清单估算后再继续
@@ -1632,6 +1666,11 @@ class DownloadPage(QWidget):
     ) -> None:
         if self._size_worker is None:
             return  # 页面已收尾，忽略迟到的结果
+        if self._selected_kind != kind:
+            # 估算期间用户已改选加载器：放弃本次安装，避免把选择回退
+            self._select_loader(self._selected_kind)
+            self._update_install_button()
+            return
         self._select_loader(kind)  # 恢复“当前选择”文案与按钮状态
         if not self._confirm_disk_space(need):
             return
@@ -1645,67 +1684,111 @@ class DownloadPage(QWidget):
         self._update_install_button()
 
     def _begin_install(self, entry: dict, kind: str, loader_version: str) -> None:
-        self._installing_mc = str(entry.get("id") or "")
+        version_id = str(entry.get("id") or "")
+        if self._install_job_active(version_id) or self._active_install_count() >= 5:
+            return
+        self._installing_mc = version_id
         self._installing_kind = kind
-        self._pending_install = (dict(entry), kind, loader_version)
-        self._install_pause.clear()
-        label = LOADER_LABELS.get(kind, kind) if kind != _ORIGINAL else "原版"
-        task = self.ctx.downloads.submit(
-            "版本",
-            f"{self._installing_mc} · {label}",
-            lambda _task: self._spawn_install(),
-            cancel=lambda: self._install_worker.cancel() if self._install_worker else None,
-            pause=self._install_pause,
-            rebuild=lambda _task: self._spawn_install(_task.id),
-            detail="准备安装",
+        job = self._install_jobs.get(version_id)
+        if job is None:
+            job = {"pause": threading.Event()}
+            self._install_jobs[version_id] = job
+        job.update(
+            entry=dict(entry),
+            kind=kind,
+            loader_version=loader_version,
+            task_id="",
+            worker=None,
+            fresh=True,
         )
-        self._install_task_id = task.id
-        self._update_install_button()
-
-    def _spawn_install(self, task_id: str = "") -> ChainInstallWorker:
-        """创建（或重试时重建）串行安装线程。"""
-        if self._pending_install is None:
-            raise RuntimeError("没有待安装的版本")
-        entry, kind, loader_version = self._pending_install
-        if task_id:
-            self._install_task_id = task_id
-            self._installing_mc = str(entry.get("id") or "")
-            self._installing_kind = kind
-            self._append_log("[安装] 重新开始安装流程。")
+        job["pause"].clear()
+        self._progress_key = version_id
         self.progress_box.setVisible(True)
         self.progress_stage.setText("准备安装")
         self.progress_bar.setValue(0)
         self.progress_detail.setText("")
         self.cancel_button.setEnabled(True)
-        worker = ChainInstallWorker(
-            self.ctx, entry, kind, loader_version, self._install_pause, self
+        label = LOADER_LABELS.get(kind, kind) if kind != _ORIGINAL else "原版"
+        task = self.ctx.downloads.submit(
+            "版本",
+            f"{version_id} · {label}",
+            lambda _task, key=version_id: self._spawn_install(key, _task.id),
+            cancel=lambda key=version_id: self._cancel_job(key),
+            pause=job["pause"],
+            rebuild=lambda _task, key=version_id: self._spawn_install(key, _task.id),
+            detail="准备安装",
         )
-        worker.progress.connect(self._on_progress)
+        job["task_id"] = task.id
+        self._update_install_button()
+
+    def _spawn_install(self, key: str, task_id: str = "") -> ChainInstallWorker:
+        """为指定版本创建（或重试时重建）安装线程。"""
+        job = self._install_jobs.get(key)
+        if job is None or not job.get("entry"):
+            raise RuntimeError("没有待安装的版本")
+        task_id = task_id or job.get("task_id", "")
+        if task_id:
+            job["task_id"] = task_id
+        if not self._progress_key:
+            self._progress_key = key
+        if key == self._progress_key:
+            self.progress_box.setVisible(True)
+            self.progress_stage.setText("准备安装")
+            self.progress_bar.setValue(0)
+            self.progress_detail.setText("")
+            self.cancel_button.setEnabled(True)
+        if not job.get("fresh", False):
+            self._append_log("[安装] 重新开始安装流程。")
+        job["fresh"] = False
+        worker = ChainInstallWorker(
+            self.ctx,
+            job["entry"],
+            job["kind"],
+            job["loader_version"],
+            job["pause"],
+            self,
+        )
+        worker.progress.connect(lambda progress, k=key: self._on_progress(k, progress))
         worker.log.connect(self._append_log)
-        worker.done.connect(self._on_install_done)
-        worker.failed.connect(self._on_install_failed)
-        worker.finished.connect(self._on_install_finished)
-        self._install_worker = worker
+        worker.done.connect(lambda final, k=key: self._on_install_done(k, final))
+        worker.failed.connect(lambda message, k=key: self._on_install_failed(k, message))
+        worker.finished.connect(lambda k=key: self._on_install_finished(k))
+        job["worker"] = worker
+        self._install_worker = worker if key == self._progress_key else self._install_worker
         self._update_install_button()
         return worker
 
-    def _cancel_install(self) -> None:
-        if self._install_worker is not None and self._install_worker.isRunning():
-            self._install_worker.cancel()
-            self._append_log("[安装] 已请求取消。")
-            self.cancel_button.setEnabled(False)
+    def _cancel_job(self, key: str) -> None:
+        job = self._install_jobs.get(key)
+        if not job:
+            return
+        worker = job.get("worker")
+        if worker is not None and worker.isRunning():
+            worker.cancel()
+        elif job.get("task_id"):
+            self.ctx.downloads.cancel(job["task_id"])
 
-    def _on_progress(self, progress: Progress) -> None:
-        self.progress_box.setVisible(True)
-        self.progress_stage.setText(progress.stage)
-        self.progress_bar.setValue(int(progress.percent * 1000))
-        detail = progress.detail
-        if progress.speed > 0:
-            detail += f" · {progress.speed / 1048576:.1f} MB/s"
-        self.progress_detail.setText(detail)
-        if getattr(self, "_install_task_id", ""):
+    def _cancel_install(self) -> None:
+        key = self._progress_key
+        if not key or not self._install_job_active(key):
+            key = next(
+                (item for item in self._install_jobs if self._install_job_active(item)), ""
+            )
+        if not key:
+            return
+        self._cancel_job(key)
+        self._append_log("[安装] 已请求取消。")
+        self.cancel_button.setEnabled(False)
+
+    def _on_progress(self, key: str, progress: Progress) -> None:
+        job = self._install_jobs.get(key)
+        task_id = job.get("task_id", "") if job else ""
+        if task_id:
+            detail = progress.detail
+            if progress.speed > 0:
+                detail += f" · {progress.speed / 1048576:.1f} MB/s"
             self.ctx.downloads.update(
-                self._install_task_id,
+                task_id,
                 percent=progress.percent,
                 status="安装中",
                 stage=progress.stage,
@@ -1714,14 +1797,23 @@ class DownloadPage(QWidget):
                 files_done=progress.files_done,
                 files_total=progress.files_total,
             )
+        if key != self._progress_key and self._progress_key:
+            return
+        self._progress_key = key
+        self.progress_box.setVisible(True)
+        self.progress_stage.setText(progress.stage)
+        self.progress_bar.setValue(int(progress.percent * 1000))
+        detail = progress.detail
+        if progress.speed > 0:
+            detail += f" · {progress.speed / 1048576:.1f} MB/s"
+        self.progress_detail.setText(detail)
 
-    def _on_install_done(self, final_version_id: str) -> None:
-        self.progress_box.setVisible(False)
-        self.cancel_button.setEnabled(True)
-        mc_version = self._installing_mc
+    def _on_install_done(self, key: str, final_version_id: str) -> None:
+        job = self._install_jobs.get(key) or {}
+        mc_version = str((job.get("entry") or {}).get("id") or key)
         loader_label = (
-            LOADER_LABELS.get(self._installing_kind, self._installing_kind)
-            if self._installing_kind
+            LOADER_LABELS.get(job.get("kind", ""), job.get("kind", ""))
+            if job.get("kind")
             else "原版"
         )
         self._append_log(f"[安装] {final_version_id} 安装完成。")
@@ -1736,29 +1828,58 @@ class DownloadPage(QWidget):
             )
             config.select_instance(instance.id)
             self.ctx.bus.instances_changed.emit()
+        self._import_offline_skin(final_version_id)
         self.refresh()
         self.ctx.bus.versions_changed.emit()
         self.ctx.bus.toast.emit(f"{final_version_id} 安装完成，可在主页启动。")
-        if getattr(self, "_install_task_id", ""):
-            self.ctx.downloads.finish(self._install_task_id, True, final_version_id)
+        if job.get("task_id"):
+            self.ctx.downloads.finish(job["task_id"], True, final_version_id)
+        if key == self._progress_key:
+            self._progress_key = ""
+            self.progress_box.setVisible(False)
+            self.cancel_button.setEnabled(True)
 
-    def _on_install_failed(self, message: str) -> None:
-        self.progress_box.setVisible(False)
-        self.cancel_button.setEnabled(True)
-        worker = self._install_worker
+    def _import_offline_skin(self, version_id: str) -> None:
+        """新版本安装完成后，把当前离线账号的皮肤自动导入新游戏目录。
+
+        没有材质包文件夹时由 import_offline_skin() 自动生成。
+        """
+        account = self.ctx.current_account()
+        config = self.ctx.config
+        dirs = [config.game_path]
+        if config.isolation_for(version_id) == "all":
+            dirs.append(isolated_game_dir(config.game_path, version_id, "all"))
+        for game_dir in dirs:
+            paths = import_offline_skin(
+                account, game_dir, log=self.ctx.bus.log.emit, version_id=version_id
+            )
+            if paths:
+                self.ctx.bus.log.emit(
+                    f"[皮肤] 已自动导入离线皮肤到 {version_id}：{paths[-1]}"
+                )
+
+    def _on_install_failed(self, key: str, message: str) -> None:
+        job = self._install_jobs.get(key) or {}
+        worker = job.get("worker")
+        task_id = job.get("task_id", "")
+        was_current = key == self._progress_key
+        if was_current:
+            self._progress_key = ""
+            self.progress_box.setVisible(False)
+            self.cancel_button.setEnabled(True)
         if worker is not None and worker.cancel_event.is_set():
             # 用户取消：不当作安装失败
             self._append_log("[安装] 已取消。")
-            if getattr(self, "_install_task_id", ""):
-                self.ctx.downloads.finish_cancelled(self._install_task_id, "安装已取消。")
-                self._install_task_id = ""
-            self.cancel_button.setEnabled(True)
+            if task_id:
+                self.ctx.downloads.finish_cancelled(task_id, "安装已取消。")
             self.ctx.bus.toast.emit("安装已取消。")
             return
         self._append_log(f"[安装] 失败：{message}")
-        if getattr(self, "_install_task_id", ""):
-            self.ctx.downloads.finish(self._install_task_id, False, message)
-            self._install_task_id = ""
+        if task_id:
+            self.ctx.downloads.finish(task_id, False, message)
+        if not was_current:
+            self.ctx.bus.toast.emit(f"{key} 安装失败，详情见下载中心与日志。")
+            return
         # 安装日志自动复制到剪贴板，方便用户直接反馈给开发者
         QGuiApplication.clipboard().setText(self.log_view.toPlainText())
         QMessageBox.critical(
@@ -1767,10 +1888,15 @@ class DownloadPage(QWidget):
             f"{message}\n\n安装日志已复制到剪贴板，请反馈给开发者。",
         )
 
-    def _on_install_finished(self) -> None:
-        worker = self._install_worker
-        self._install_worker = None
+    def _on_install_finished(self, key: str) -> None:
+        job = self._install_jobs.get(key)
+        if not job:
+            return
+        worker = job.get("worker")
+        job["worker"] = None
         if worker is not None:
+            if self._install_worker is worker:
+                self._install_worker = None
             worker.deleteLater()
         self._update_install_button()
 
@@ -2001,11 +2127,16 @@ class DownloadPage(QWidget):
         self._manifest_worker_cleanup()
         workers: list[QThread] = [*self._retired_scans]
         self._retired_scans = []
-        install_worker = self._install_worker
+        install_workers: list[QThread] = []
+        for job in self._install_jobs.values():
+            worker = job.get("worker")
+            job["worker"] = None
+            if worker is not None:
+                worker.cancel()
+                install_workers.append(worker)
+        self._install_jobs.clear()
         self._install_worker = None
-        if install_worker is not None:
-            install_worker.cancel()
-            workers.append(install_worker)
+        workers.extend(install_workers)
         size_worker = self._size_worker
         self._size_worker = None
         if size_worker is not None:

@@ -48,7 +48,7 @@ from ..config import (
 )
 from ..context import AppContext, wait_thread
 from ..hardware import memory_summary, recommend_memory_mb
-from ..i18n import SUPPORTED_LANGUAGES, t
+from ..i18n import SUPPORTED_LANGUAGES, t, translation_file
 from ..java import detect_java_installed, download_java, java_key
 from ..net import Cancelled, apply_proxy, test_source
 from . import theme
@@ -288,6 +288,14 @@ class SettingsPage(QWidget):
         memory_row.addWidget(detect_memory)
         form.addRow(self.tr("默认最大内存"), memory_row)
 
+        self.smart_jvm_check = QCheckBox(
+            self.tr("智能 JVM 参数（自动启用 G1GC 等调优，减少卡顿）")
+        )
+        self.smart_jvm_check.setToolTip(
+            self.tr("按 Java 版本与内存自动追加 Aikar 风格 G1GC 参数；已自定义 GC 参数时自动跳过。")
+        )
+        form.addRow("", self.smart_jvm_check)
+
         self.general_threads_spin = QSpinBox()
         self.general_threads_spin.setRange(1, 328)
         self.general_threads_spin.setSuffix(f" {t('SettingsPage', '线程')}")
@@ -411,6 +419,7 @@ class SettingsPage(QWidget):
             "wiki": "教程中心",
             "bedrock": "基岩版",
             "skin_factory": "皮肤工厂",
+            "skin_pack": "皮肤包",
             "seed_terrain": "世界种子",
         }
         for key in FEATURE_PAGE_KEYS:
@@ -1269,6 +1278,7 @@ class SettingsPage(QWidget):
             (self.tray_check, cfg.close_to_tray),
             (self.general_hide_check, cfg.after_launch_action == "hide"),
             (self.start_anim_check, cfg.start_animation),
+            (self.smart_jvm_check, cfg.smart_jvm),
         ):
             check.blockSignals(True)
             check.setChecked(bool(value))
@@ -1303,6 +1313,15 @@ class SettingsPage(QWidget):
         code = str(self.language_combo.itemData(index) or "zh_CN")
         cfg = self.ctx.config
         if code == cfg.language:
+            return
+        if code != "zh_CN" and not translation_file(code).is_file():
+            QMessageBox.warning(
+                self, APP_NAME, self.tr("该语言的翻译文件缺失，已回退中文。")
+            )
+            self.language_combo.blockSignals(True)
+            index = self.language_combo.findData(cfg.language)
+            self.language_combo.setCurrentIndex(index if index >= 0 else 0)
+            self.language_combo.blockSignals(False)
             return
         cfg.language = code
         cfg.save()
@@ -1353,6 +1372,7 @@ class SettingsPage(QWidget):
         cfg.close_to_tray = self.tray_check.isChecked()
         cfg.start_animation = self.start_anim_check.isChecked()
         cfg.memory_mb = int(self.general_memory_spin.value())
+        cfg.smart_jvm = self.smart_jvm_check.isChecked()
         cfg.download_threads = int(self.general_threads_spin.value())
         if self.general_hide_check.isChecked():
             if cfg.after_launch_action != "hide":

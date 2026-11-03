@@ -48,7 +48,7 @@ from ..context import AppContext, wait_thread
 from ..i18n import t
 from .skin_view import SkinPreview3D
 from .theme import resolve_account_avatar
-from .widgets import Badge, Card, card_title_row, page_header
+from .widgets import Badge, Card, ask_skin_model, card_title_row, page_header
 
 
 class DeviceCodeWorker(QThread):
@@ -969,6 +969,9 @@ class AccountsPage(QWidget):
         except AuthError as exc:
             QMessageBox.warning(self, APP_NAME, str(exc))
             return
+        model = ask_skin_model(self, account.skin_model or "classic")
+        if model is None:
+            return
         skins_dir = DATA_DIR / "skins"
         skins_dir.mkdir(parents=True, exist_ok=True)
         target = skins_dir / f"{account.name}.png"
@@ -978,6 +981,7 @@ class AccountsPage(QWidget):
             QMessageBox.warning(self, APP_NAME, f"保存皮肤失败：{exc}")
             return
         account.skin_path = str(target)
+        account.skin_model = model
         self.ctx.accounts.update(account)
         self.ctx.bus.accounts_changed.emit()
         self.ctx.bus.toast.emit("本地皮肤已保存，启动游戏时会自动应用。")
@@ -1034,6 +1038,7 @@ class AccountsPage(QWidget):
         if answer != QMessageBox.Yes:
             return
         account.skin_path = local
+        account.skin_model = "slim" if info.get("model") == "slim" else "classic"
         self.ctx.accounts.update(account)
         self.ctx.bus.accounts_changed.emit()
         self.ctx.bus.toast.emit("正版皮肤已保存为本地皮肤。")

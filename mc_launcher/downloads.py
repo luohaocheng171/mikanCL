@@ -69,7 +69,7 @@ class DownloadManager(QObject):
 
     changed = Signal()
 
-    def __init__(self, max_concurrent: int = 2, parent: QObject | None = None):
+    def __init__(self, max_concurrent: int = 5, parent: QObject | None = None):
         super().__init__(parent)
         self.max_concurrent = max(1, int(max_concurrent))
         self._tasks: list[DownloadTask] = []

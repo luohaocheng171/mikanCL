@@ -19,21 +19,14 @@ from pathlib import Path
 from typing import Callable
 
 from . import APP_NAME, APP_VERSION
+from .auth import offline_uuid
 from .config import LOG_DIR
 from .java import JavaInfo
+from .jvm import memory_warning, smart_jvm_args, version_jvm_args
 from .version import MergedVersion, VersionError, client_jar_path, logging_file_path
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 CLASSPATH_SEP = ";" if sys.platform == "win32" else ":"
-
-
-def offline_uuid(player_name: str) -> str:
-    """与 Minecraft 离线模式一致：md5('OfflinePlayer:'+name)，版本 3 UUID。"""
-    digest = bytearray(hashlib.md5(f"OfflinePlayer:{player_name}".encode("utf-8")).digest())
-    digest[6] = (digest[6] & 0x0F) | 0x30
-    digest[8] = (digest[8] & 0x3F) | 0x80
-    hexed = digest.hex()
-    return f"{hexed[0:8]}-{hexed[8:12]}-{hexed[12:16]}-{hexed[16:20]}-{hexed[20:32]}"
 
 
 def offline_access_token() -> str:
@@ -48,6 +41,7 @@ class LaunchOptions:
     java: JavaInfo
     root_dir: Path | None = None
     memory_mb: int = 4096
+    smart_jvm: bool = True
     width: int = 0
     height: int = 0
     extra_jvm_args: str = ""
@@ -511,6 +505,21 @@ def build_launch_plan(options: LaunchOptions) -> LaunchPlan:
         jvm_args.insert(0, f"-Djava.library.path={natives_dir}")
 
     memory = max(512, int(options.memory_mb))
+    if options.smart_jvm:
+        warning = memory_warning(memory)
+        if warning:
+            warnings.append(warning)
+    # 小堆不用把 Xms 拉满，避免启动时一次性提交过多内存；大堆保持较大初始值减少扩容
+    heap_args = [f"-Xmx{memory}M", f"-Xms{min(memory, 2048)}M"]
+    tune_args = (
+        smart_jvm_args(
+            options.java.major, memory, options.extra_jvm_args, version.id
+        )
+        if options.smart_jvm
+        else []
+    )
+    # 版本兼容参数（旧版栈大小、legacy 排序、Forge 校验、Java 9+ add-opens）始终生效
+    compat_args = version_jvm_args(version.id, options.java.major, options.extra_jvm_args)
     agent_args: list[str] = []
     if options.authlib_jar and options.auth_server:
         agent_args = [
@@ -520,9 +529,7 @@ def build_launch_plan(options: LaunchOptions) -> LaunchPlan:
     else:
         if options.auth_server and not options.authlib_jar:
             warnings.append("未找到 authlib-injector，外置登录可能无法生效。")
-    jvm_args = agent_args + [
-        f"-Xmx{memory}M",
-        f"-Xms{min(memory, 1024)}M",
+    jvm_args = agent_args + heap_args + tune_args + compat_args + [
         "-Dfile.encoding=UTF-8",
         "-Dstdout.encoding=UTF-8",
         "-Dstderr.encoding=UTF-8",

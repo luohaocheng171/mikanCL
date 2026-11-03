@@ -50,6 +50,7 @@ from .page_multiplayer import MultiplayerPage
 from .page_seed_terrain import SeedTerrainPage
 from .page_settings import SettingsPage
 from .page_skin_factory import SkinFactoryPage
+from .page_skin_pack import SkinPackPage
 from .page_wiki import WikiPage
 from .covers import CoverLoader
 from .theme import (
@@ -387,6 +388,7 @@ class MainWindow(QMainWindow):
             ("wiki", self.tr("教程中心")),
             ("bedrock", self.tr("基岩版")),
             ("skin_factory", self.tr("皮肤工厂")),
+            ("skin_pack", self.tr("皮肤包")),
             ("seed_terrain", self.tr("世界种子")),
             ("settings", self.tr("设置")),
         ]
@@ -485,6 +487,7 @@ class MainWindow(QMainWindow):
         self.wiki_page = WikiPage(self.ctx, self) if _on("wiki") else None
         self.bedrock_page = BedrockPage(self.ctx, self) if _on("bedrock") else None
         self.skin_factory_page = SkinFactoryPage(self.ctx, self) if _on("skin_factory") else None
+        self.skin_pack_page = SkinPackPage(self.ctx, self) if _on("skin_pack") else None
         self.seed_terrain_page = SeedTerrainPage(self.ctx, self) if _on("seed_terrain") else None
         self.settings_page = SettingsPage(self.ctx, self)
         page_seq = (
@@ -504,6 +507,7 @@ class MainWindow(QMainWindow):
             ("wiki", self.wiki_page),
             ("bedrock", self.bedrock_page),
             ("skin_factory", self.skin_factory_page),
+            ("skin_pack", self.skin_pack_page),
             ("seed_terrain", self.seed_terrain_page),
             ("settings", self.settings_page),
         )
@@ -531,6 +535,7 @@ class MainWindow(QMainWindow):
             ("wiki", self.wiki_page, "refresh"),
             ("bedrock", self.bedrock_page, "refresh"),
             ("skin_factory", self.skin_factory_page, None),
+            ("skin_pack", self.skin_pack_page, "refresh"),
             ("seed_terrain", self.seed_terrain_page, None),
         )
         for key, page, method in refresh_candidates:
@@ -873,6 +878,7 @@ class MainWindow(QMainWindow):
             self.dependencies_page,
             self.wiki_page,
             self.bedrock_page,
+            self.skin_pack_page,
             self.settings_page,
         ):
             if page is None:

@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ..auth import import_offline_skin
 from ..config import (
     INSTANCES_DIR,
     LOG_DIR,
@@ -166,6 +167,17 @@ def _safe_extract(archive: zipfile.ZipFile, target: Path, prefix: str = "") -> i
             shutil.copyfileobj(source, output)
         count += 1
     return count
+
+
+def _import_offline_skin(
+    ctx: AppContext, game_dir: Path, log=None, version_id: str = ""
+) -> None:
+    """新实例导入完成后，把当前离线账号的皮肤自动带进新游戏目录（按版本适配资源包）。"""
+    paths = import_offline_skin(
+        ctx.current_account(), game_dir, log=log, version_id=version_id
+    )
+    if paths and log:
+        log(f"[皮肤] 已自动导入离线皮肤：{paths[-1]}")
 
 
 def _world_zip_prefix(names: list[str]) -> str:
@@ -516,6 +528,7 @@ class ModpackDropWorker(QThread):
             self.ctx.config.select_instance(instance.id)
             self.ctx.config.save()
             self.ctx.bus.instances_changed.emit()
+            _import_offline_skin(self.ctx, target, self.log.emit, version_id)
             self._emit(1.0, "整合包导入完成")
             self.done.emit(f"整合包「{instance.name}」已导入并切换为当前实例。")
         except Cancelled:
@@ -595,6 +608,7 @@ class ModpackDropWorker(QThread):
             self.ctx.config.select_instance(instance.id)
             self.ctx.config.save()
             self.ctx.bus.instances_changed.emit()
+            _import_offline_skin(self.ctx, target, self.log.emit, version_id)
             self._emit(1.0, "直装包导入完成")
             self.done.emit(
                 f"直装包「{instance.name}」已导入并切换为当前实例"
@@ -665,6 +679,7 @@ class ModpackDropWorker(QThread):
             self.ctx.config.select_instance(instance.id)
             self.ctx.config.save()
             self.ctx.bus.instances_changed.emit()
+            _import_offline_skin(self.ctx, target, self.log.emit, version_id)
             self._emit(1.0, "实例恢复完成")
             self.done.emit(f"实例「{instance.name}」已恢复并切换为当前实例。")
         except Cancelled:

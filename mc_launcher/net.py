@@ -39,6 +39,22 @@ _REWRITABLE_HOSTS = {
 }
 
 _SSL_CONTEXT = ssl.create_default_context()
+
+# 多个版本并发安装时，同一个依赖 / 资源文件可能被不同线程同时请求：
+# 按目标路径加可重入锁，避免两个线程同时写同一个 .part 文件造成损坏。
+_PATH_LOCKS: dict[str, threading.RLock] = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+def _download_lock(dest: Path) -> threading.RLock:
+    try:
+        key = str(dest.resolve()).lower()
+    except OSError:
+        key = str(dest).lower()
+    with _PATH_LOCKS_GUARD:
+        return _PATH_LOCKS.setdefault(key, threading.RLock())
+
+
 # 部分国内镜像的 CDN 节点证书链不完整（缺中间证书），校验会报 unable to get local issuer
 # certificate；这类请求在证书校验失败时回退到不校验模式，否则镜像整条链路不可用。
 _UNVERIFIED_SSL_CONTEXT: ssl.SSLContext | None = None
@@ -440,10 +456,25 @@ class Http:
         """下载到 dest，自动尝试多个源。返回文件大小；支持 .part 断点续传与暂停。"""
         dest = Path(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
+        # 并发安装时同一个文件可能被多个 worker 请求：按目标路径串行化，
+        # 拿到锁后再检查一次，避免重复下载与 .part 写冲突。
+        with _download_lock(dest):
+            if dest.exists() and self._valid(dest, size, sha1):
+                return dest.stat().st_size
+            return self._download_with_sources(
+                candidates, dest, size, sha1, cancel, on_bytes, pause
+            )
 
-        if dest.exists() and self._valid(dest, size, sha1):
-            return dest.stat().st_size
-
+    def _download_with_sources(
+        self,
+        candidates: Iterable[Candidate],
+        dest: Path,
+        size: int | None,
+        sha1: str | None,
+        cancel: threading.Event | None,
+        on_bytes: Callable[[int], None] | None,
+        pause: threading.Event | None,
+    ) -> int:
         def wait_if_paused() -> None:
             while pause is not None and pause.is_set():
                 if cancel is not None and cancel.is_set():

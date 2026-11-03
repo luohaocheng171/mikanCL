@@ -622,8 +622,17 @@ class ContentInstallWorker(QThread):
         self.cancel_event = threading.Event()
         self.pause_event = threading.Event()
 
-    def _emit(self, value: float, detail: str = "") -> None:
-        self.progress.emit(max(0.0, min(1.0, value)), detail)
+    def _emit(
+        self,
+        value: float,
+        detail: str = "",
+        stage: str = "",
+        files_done: int = 0,
+        files_total: int = 0,
+    ) -> None:
+        """进度信号只带百分比与说明；阶段与文件计数并入说明文本。"""
+        text = f"{stage} · {detail}" if stage and detail else (detail or stage)
+        self.progress.emit(max(0.0, min(1.0, value)), text)
 
     def run(self) -> None:
         try:

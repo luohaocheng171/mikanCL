@@ -1,6 +1,6 @@
-# MikanCL v4.7.0 发布说明
+# MikanCL v4.8.1 发布说明
 
-发布日期：2026-11-01
+发布日期：2026-11-03
 
 ## 新增
 
@@ -10,31 +10,55 @@
 - **游戏缺失依赖检查**：选择任意已安装版本后一键检查所需 Java、客户端 jar、`libraries` 依赖库、`assets` 资源索引与对象、log4j 日志配置与版本文件，结果表格逐项列出「缺失 / 完整」及具体说明
 - **询问式静默补全**：检查发现缺失时弹窗询问「是否现在自动补全」，确认后后台静默执行——缺 Java 自动下载 Adoptium JRE，缺文件走只补缺口的版本补全，任务全部显示在下载中心，完成前不影响继续使用启动器
 - **用户协议升级到 v1.4**：新增第十一条「第三方模块」，明确第三方模块与 MikanCL 无隶属、授权、赞助或担保关系，提供入口仅为便利，相关风险由使用者自负；中 / 英 / 俄 / 法 / 日 5 种语言同步
+- **「皮肤包」标签页**：侧边栏新增独立页面，按「目标玩家 + 手臂模型 + 游戏版本」生成可分享的皮肤包（`.zip`，含 `pack.json`、`skin.png`、版本适配资源包与说明），也可直接安装到本机；支持导入他人皮肤包或单张 PNG
+- **按玩家生效的皮肤**：不再全局替换默认皮肤纹理，而是写入 `CustomSkinLoader/LocalSkin/skins/<玩家名>.png` 并合并 `CustomSkinLoader.json` 的 `loadlist`（`{USERNAME}` 占位符），服务器上只让指定玩家显示这张皮肤，其他玩家不受影响
+- **全版本皮肤包适配**：1.0–1.5.2 生成 `texturepacks` 纹理包（`pack.txt` + `textures/entity/*.png`）；1.6.1–1.21.8 使用 `pack.mcmeta` 的 `pack_format`（按版本自动取 1 / 2 / 3 … 64）；1.21.9+ 与 26.x（含 26.4 测试版）改用 `min_format` / `max_format`；1.20.2+ 自动使用 `entity/player/wide|slim` 新路径
+- **手臂模型询问**：导入本地皮肤、应用皮肤工厂作品、导入皮肤包或导出皮肤包前，都会询问 Steve（经典）或 Alex（纤细）；选择结果保存到账号 `skin_model`，后续自动打包与下载新版本导入时沿用
+- **随版本自动打包**：下载安装新版本、导入整合包 / 直装包或恢复实例完成时，按该版本格式自动生成皮肤包并写入 `CustomSkinLoader/LocalSkin`，无需再启动一次
+- **一键添加并覆盖旧皮肤包**：皮肤包页新增按钮，先清理主目录与版本隔离目录下所有 `MikanCL-*.zip`（含旧版 `MikanCL-离线皮肤.zip`）及 `options.txt` 中的 `file/MikanCL-*` 启用项，再写入当前皮肤；普通安装新包时也会自动清理，避免旧包残留导致误以为新皮肤已生效
+- **智能 JVM 参数**：设置 → 通用页新增开关（默认开启），按 Java 主版本、游戏版本与堆大小自动追加参数：1.21 及更早使用 Aikar 风格 G1GC（新生代占比、Region、IHOP、停顿目标等），堆 ≥ 4 GB 才启用 `AlwaysPreTouch`、≥ 12 GB 使用 16 MB Region；26.x（官方要求 Java 25）改用分代 ZGC（`-XX:+UseZGC`）；已在额外 JVM 参数中指定 GC（含 `-XX:-UseG1GC` 负向写法）或同名参数时自动跳过，Java 7 及更早只补 `MaxPermSize=256M`；分配内存超过物理内存 60% 时提示换页风险
+- **版本兼容启动参数**：1.12.2 及更早自动追加 `-Xss1M`（MC-129374）与 `-Djava.util.Arrays.useLegacyMergeSort=true`（MC-61156）；旧版 Forge / 改过 jar 的整合包追加 `-Dfml.ignoreInvalidMinecraftCertificates=true`、`-Dfml.ignorePatchDiscrepancies=true`；旧版本被指定到 Java 9+ 自动补 `--add-opens` 模块开放参数；Java 24+ 追加 `--enable-native-access=ALL-UNNAMED`；macOS 1.13+ 追加 `-XstartOnFirstThread`。这些参数不受「智能 JVM」开关影响，始终生效
+- **版本号识别修复**：`infer_java_major` 对 26.x / 26w.. 年份版本号返回 Java 25（原错误返回 21），远古版本（`a1.2.6` / `b1.7.3` / `c0.30` / `inf-` / `rd-` / `1.rv` / `2.0`）与 1.14 前快照返回 Java 8，`3d shareware v1.34` 也归入 Java 8
+- **最多 5 个版本并发安装**：下载安装页解除「一次只能安装一个版本」的限制，最多同时安装 5 个版本，每个版本独立进度、暂停与取消；第 6 个版本需等待空位
 
 ## 修复与优化
 
+- **修复整合包安装必崩溃**：`ContentInstallWorker._emit()` 只接受进度与说明，却被传入 `stage / files_done / files_total`，抛 `TypeError` 后所有整合包安装都在下载内容阶段失败；现扩展签名并把阶段并入说明文本
+- 下载页异步估算磁盘占用期间若用户改选加载器，估算完成时不再把选择回退，直接放弃本次安装
+- 离线 UUID 统一由 `auth.offline_uuid()` 提供，`launcher.py` 不再维护第二份实现
+- 游戏退出监听线程改为传入总线对象，关闭启动器时不再引用可能已销毁的页面；关闭时同步清理基岩版延迟校验标记
+- 切换语言时若目标 `.qm` 翻译文件缺失，提示「翻译文件缺失，已回退中文」并恢复原选择，不再保存一个重启后仍是中文的语言
 - 设置 → 功能开关新增「依赖补全」标签开关，关闭后不创建页面、不启动任何后台任务；重启生效
 - 依赖补全任务复用下载中心队列与重试机制，重试前自动清除上一次取消标记，避免「取消后重试立即再次取消」
 - 依赖扫描对不支持的 CPU 架构、缺失资源索引、损坏版本 JSON 做防御处理，单页检查失败不会影响启动器其他功能
 - 补全完成后自动刷新 Java 列表与版本状态，并提示可重新检查或直接启动
+- 多个版本并发安装时，共享的依赖库 / 资源文件可能被多个线程同时请求：`Http.download()` 现在按目标路径加锁，拿到锁后复查文件是否已完整，避免 `.part` 写冲突与重复下载
+- 下载中心默认并发任务数由 2 调整为 5，与页面并发安装上限保持一致，其余任务自动排队
 
 ## 构建与验证
 
-- 产物：`dist/MikanCL.exe`（单文件，221,077,665 字节 ≈ 210.8 MB，已内置 PySide6 / QtWebEngine、`translations`、`data`、`resources` 全部依赖）
-- 构建时间：2026-11-01 21:01；打包日志显示 `Build complete`
-- 启动验证：直接运行 `dist/MikanCL.exe`，`data/logs/launcher.log` 于 21:01:54 输出「启动器已就绪」，窗口标题正常，进程保持运行（未强制结束）
+- 产物：`dist/MikanCL.exe`（单文件，221,114,222 字节 ≈ 210.9 MB，已内置 PySide6 / QtWebEngine、`translations`、`data`、`resources` 全部依赖）
+- 构建时间：2026-11-03 21:29:11；打包日志显示 `Build complete`
+- 启动验证：直接运行 `dist/MikanCL.exe`，`data/logs/launcher.log` 于 21:30:05 输出「启动器已就绪」，窗口标题正常显示，验证后已结束测试进程
 - 离屏冒烟测试通过：侧边栏出现「依赖补全」、页面创建、模块表 5 行（陶瓦 / authlib-injector / Java 运行时 / Mod 加载器 / Forbric）、设置页功能开关包含 `deps`、「前往 Java 中心」按钮正确发出导航信号
 - 依赖扫描测试通过：合成版本目录可正确识别 Java、客户端 Jar、依赖库、资源索引、日志配置 5 类缺失；不存在的版本返回 `kind="version"`
+- 并发与皮肤测试通过：`DownloadManager.max_concurrent == 5`、下载页 5 个任务并行且第 6 个被上限拦住、达上限时安装按钮禁用；`import_offline_skin()` 正确写入 `CustomSkinLoader/LocalSkin/skins/<玩家名>.png`、合并 `CustomSkinLoader.json` 的 `loadlist` 并生成对应版本的资源包；游戏目录缺少 `resourcepacks` 时会先自动创建
+- 皮肤包版本适配验证通过：1.5.2 → `pack.txt` + `textures/entity/alex.png`；1.8.9 → `pack_format=1`；1.20.1 → `pack_format=15`；1.20.4 → `pack_format=22` 且路径为 `entity/player/slim/alex.png`；1.21.8 → `pack_format=64`；1.21.9 → `min_format=[69,0]` / `max_format=[999,0]`；26.4-snapshot → `min_format=[97,0]` / `max_format=[999,0]`；重复安装不同玩家时 `LocalSkin` 条目不重复且保留用户原有 `MojangAPI` 等皮肤源
+- 旧皮肤包覆盖验证通过：`purge_old_packs()` 可删除 `resourcepacks` / `texturepacks` 下的 `MikanCL-*.zip`（保留其他资源包）并同步移除 `options.txt` 的启用项；安装新包前自动清理，最终只剩一个 `MikanCL-*` 兜底包
+- 智能 JVM 参数验证通过：Java 8 / 17 / 21 分别生成 19–20 个参数；2 GB 堆不含 `AlwaysPreTouch`、8 GB 含；16 GB 堆使用 `G1HeapRegionSize=16M`；用户指定 `-XX:+UseZGC` 或 `-XX:-UseG1GC` 时跳过 G1 预设；`-XX:MaxGCPauseMillis=300` 不被覆盖；Java 7 返回 `-XX:MaxPermSize=256M`；Java 版本未知时返回空列表
+- 版本兼容参数验证通过：1.7.10 → `-Xss1M` + legacy 排序；1.7.10-forge → 追加两个 fml 参数；1.12.2 + Java 17 → 追加 7 条 `--add-opens`；1.21.8 + Java 21 → 无兼容参数；26.1 / 26w01a + Java 25 → `-XX:+UseZGC` 且无 G1GC；Java 24+ 全部版本追加 `--enable-native-access=ALL-UNNAMED`
+- 完整命令拼装验证通过：`build_launch_plan()` 生成 `-Xmx/-Xms` → 调优参数 → 版本兼容参数 → 编码 / 品牌 → `-Djava.library.path` / `-cp` → 主类；1.12.2、1.21.8、26.1 三种组合顺序与内容均正确
+- 远古 / 特殊版本识别验证通过：`b1.7.3`、`a1.2.6`、`c0.30_01c`、`inf-20100618`、`rd-132211`、`1.rv-pre1`、`2.0`、`12w01a`、`17w43a` 均判定为 legacy；`20w14infinite` / `25w14craftmine` / `3d shareware v1.34` 归为 Java 8 且不追加旧版参数；`26w01a` 判定为 Java 25
 
 ## 文档
 
 - 完整功能、技术实现与接口说明见 [README.md](README.md)
-- 本版本变更摘要见本文件顶部 v4.7.0 章节
+- 本版本变更摘要见本文件顶部 v4.8.1 章节
 
 ## 升级提示
 
 - 直接下载新的 `MikanCL.exe` 覆盖旧文件即可，配置与数据保留在 exe 同目录的 `data/` 下
-- 首次启动 4.7.0 会要求确认升级后的《用户协议 v1.4》
+- 从 v4.7.0 升级无需重新确认《用户协议 v1.4》（协议版本未变）
 - 第三方模块按需下载，不下载也不影响启动器其余功能；请自行确认来源、版本与开源许可后再使用
 
 ---

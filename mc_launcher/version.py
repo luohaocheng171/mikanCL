@@ -424,7 +424,8 @@ def _dedupe_options(args: list[str]) -> list[str]:
 
 
 def infer_java_major(version_id: str) -> int:
-    match = re.match(r"^1\.(\d+)(?:\.(\d+))?", version_id)
+    text = (version_id or "").strip()
+    match = re.match(r"^1\.(\d+)(?:\.(\d+))?", text)
     if match:
         minor = int(match.group(1))
         patch = int(match.group(2) or 0)
@@ -433,6 +434,23 @@ def infer_java_major(version_id: str) -> int:
         if minor == 17:
             return 17
         if minor < 20 or (minor == 20 and patch < 5):
+            return 17
+        return 21
+    # 远古版本（a1.2.6 / b1.7.3 / c0.30 / inf- / rd- / 1.rv / 2.0）只能用 Java 8 及更早
+    if re.match(r"^[abc]\d|^inf-|^rd-|^1\.rv|^2\.0$", text):
+        return 8
+    # 3d shareware v1.34（1.14 愚人节版）同样基于 Java 8
+    if text.lower().startswith("3d shareware"):
+        return 8
+    # 2026 年起改用年份版本号（26.1 / 26w..），官方要求 Java 25
+    match = re.match(r"^(\d{2})w\d{2}", text) or re.match(r"^(\d{2})\.", text)
+    if match:
+        year = int(match.group(1))
+        if year >= 26:
+            return 25
+        if year <= 20:
+            return 8
+        if year <= 22:
             return 17
         return 21
     return 21

@@ -173,12 +173,16 @@ NBT（Named Binary Tag）是 Minecraft 的存档数据格式，`level.dat`、`pl
 ## 步骤
 1. 在「内容中心」搜 "CustomSkinLoader"，安装到实例
 2. 打开「账号管理」→ 选中离线账号 → "使用本地皮肤…"
-3. 选一张 64×64 或 64×32 的 PNG
+3. 选一张 64×64 或 64×32 的 PNG，并在弹窗里选择 Steve（经典）或 Alex（纤细）手臂模型
 4. 启动游戏，CustomSkinLoader 会自动应用
 
+## 分享给其他玩家
+「皮肤包」标签页可以把皮肤、目标玩家名和手臂模型打成一个 `.zip`：对方导入后会写入自己的 `CustomSkinLoader/LocalSkin/skins/<玩家名>.png`，在服务器里只有这名玩家显示该皮肤，不会影响其他人。打包时会按目标版本自动选择 `pack_format` 或 `min_format/max_format`。
+
 ## 注意
-- 皮肤文件会写入 `CustomSkinLoader/LocalSkin/skins/<玩家名>.png`
+- 皮肤文件会写入 `CustomSkinLoader/LocalSkin/skins/<玩家名>.png`，按玩家名加载
 - 只有装了 CustomSkinLoader 才会生效
+- 兜底资源包默认不启用，避免把服务器上其他默认皮肤玩家也变成这张皮肤
 - 正版账号不需要这个，直接上传皮肤即可
 """,
     },
@@ -323,12 +327,16 @@ Offline accounts have no Mojang skin service, so the CustomSkinLoader mod plus a
 ## Steps
 1. Search for "CustomSkinLoader" in the Content Center and install it into the instance
 2. Open "Accounts" → select the offline account → "Use local skin…"
-3. Pick a 64×64 or 64×32 PNG
+3. Pick a 64×64 or 64×32 PNG and choose the Steve (classic) or Alex (slim) arm model in the dialog
 4. Launch the game; CustomSkinLoader applies it automatically
 
+## Sharing with other players
+The "Skin Pack" tab bundles the skin, target player name and arm model into a `.zip`. When someone imports it, the skin is written to `CustomSkinLoader/LocalSkin/skins/<player name>.png`; only that player shows the skin on servers. The pack format is chosen automatically for the target version (`pack_format`, or `min_format`/`max_format` for 1.21.9+ / 26.x).
+
 ## Notes
-- The skin is written to `CustomSkinLoader/LocalSkin/skins/<player name>.png`
+- The skin is written to `CustomSkinLoader/LocalSkin/skins/<player name>.png` and loaded per player name
 - It only works when CustomSkinLoader is installed
+- The fallback resource pack is not enabled by default, so other default-skin players on a server keep their own skins
 - Official accounts do not need this — just upload the skin
 """,
     },

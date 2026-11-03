@@ -71,6 +71,7 @@ FEATURE_DEFAULTS: dict[str, bool] = {
     "offline_login": True,
     "offline_skin": True,
     "skin_factory": True,
+    "skin_pack": True,
     "seed_terrain": True,
 }
 # 可在设置里开关的侧边栏标签页（顺序与主窗口导航一致）
@@ -91,6 +92,7 @@ FEATURE_PAGE_KEYS: tuple[str, ...] = (
     "wiki",
     "bedrock",
     "skin_factory",
+    "skin_pack",
     "seed_terrain",
 )
 
@@ -379,6 +381,7 @@ class Config:
     player_name: str = "Steve"
     java_path: str = ""
     memory_mb: int = 4096
+    smart_jvm: bool = True   # 按 Java 版本自动启用 G1GC 等调优参数
     width: int = 0
     height: int = 0
     extra_jvm_args: str = ""
@@ -691,6 +694,7 @@ class Config:
             player_name=self.player_name,
             java_path=self.java_path,
             memory_mb=self.memory_mb,
+            smart_jvm=self.smart_jvm,
             width=self.width,
             height=self.height,
             extra_jvm_args=self.extra_jvm_args,
@@ -758,6 +762,7 @@ class Config:
                 "background_image": self.background_image,
                 "ui_animations": bool(self.ui_animations),
                 "ui_acrylic": bool(self.ui_acrylic),
+                "smart_jvm": bool(self.smart_jvm),
                 "selected_source_id": self.selected_source_id,
                 "sources": [s.to_dict() for s in self.sources],
                 "isolation_mode": self.isolation_mode,
@@ -869,6 +874,7 @@ class Config:
             cfg.memory_mb = max(512, int(data.get("memory_mb", cfg.memory_mb)))
         except (TypeError, ValueError):
             cfg.memory_mb = 4096
+        cfg.smart_jvm = bool(data.get("smart_jvm", True))
         cfg.width = int(data.get("width") or 0)
         cfg.height = int(data.get("height") or 0)
         cfg.extra_jvm_args = str(data.get("extra_jvm_args") or "")

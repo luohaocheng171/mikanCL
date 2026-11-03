@@ -48,7 +48,7 @@ from .. import APP_NAME
 from ..config import DATA_DIR
 from ..i18n import t
 from .skin_view import SkinPreview3D
-from .widgets import Card, card_title_row, page_header
+from .widgets import Card, ask_skin_model, card_title_row, page_header
 
 # 部位 → (底层 UV, 第二层 UV)；都是 (x, y, w, h)
 PARTS = {
@@ -1306,11 +1306,15 @@ class SkinFactoryPage(QWidget):
         if account is None:
             QMessageBox.information(self, APP_NAME, self.tr("请先选择一个账号。"))
             return
+        model = ask_skin_model(self, account.skin_model or "classic")
+        if model is None:
+            return
         target = skins_dir() / f"{account.name}.png"
         if not image.save(str(target), "PNG"):
             QMessageBox.warning(self, APP_NAME, self.tr("保存皮肤文件失败。"))
             return
         account.skin_path = str(target)
+        account.skin_model = model
         self.ctx.accounts.update(account)
         self.ctx.bus.accounts_changed.emit()
         self._reload_library()

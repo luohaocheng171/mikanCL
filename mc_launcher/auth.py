@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import shutil
 import sys
 import threading
 import time
@@ -90,6 +89,7 @@ class Account:
     last_refresh: float = 0.0
     skin_url: str = ""
     skin_path: str = ""
+    skin_model: str = "classic"
     note: str = ""
     token_endpoint: str = ""
 
@@ -119,6 +119,7 @@ class Account:
             "last_refresh": self.last_refresh,
             "skin_url": self.skin_url,
             "skin_path": self.skin_path,
+            "skin_model": self.skin_model,
             "note": self.note,
             "token_endpoint": self.token_endpoint,
         }
@@ -140,6 +141,7 @@ class Account:
             last_refresh=float(data.get("last_refresh") or 0.0),
             skin_url=str(data.get("skin_url") or ""),
             skin_path=str(data.get("skin_path") or ""),
+            skin_model=str(data.get("skin_model") or "classic"),
             note=str(data.get("note") or ""),
             token_endpoint=str(data.get("token_endpoint") or ""),
         )
@@ -683,93 +685,96 @@ def download_skin_image(url: str, dest: str | Path, http: Http | None = None) ->
     return target
 
 
-def apply_local_skin(account: Account, game_dir: str | Path) -> str:
-    """把离线账号的本地皮肤写入 CustomSkinLoader 的本地皮肤目录（尽力而为）。"""
+def apply_local_skin(account: Account, game_dir: str | Path, version_id: str = "") -> str:
+    """把账号的本地皮肤写入 CustomSkinLoader 的 LocalSkin（按玩家名生效）。"""
+    from .skinpack import SkinPackError, apply_player_skin
+
     source = Path(account.skin_path) if account.skin_path else None
     if source is None or not source.is_file():
         return ""
-    folder = Path(game_dir) / "CustomSkinLoader" / "LocalSkin" / "skins"
-    folder.mkdir(parents=True, exist_ok=True)
-    target = folder / f"{account.name}.png"
     try:
-        if not target.exists() or target.stat().st_size != source.stat().st_size:
-            shutil.copy2(source, target)
-    except OSError as exc:
+        result = apply_player_skin(
+            source,
+            account.name,
+            account.skin_model or "classic",
+            game_dir,
+            version_id,
+            install_pack=True,
+            enable_pack=False,
+        )
+    except SkinPackError as exc:
         raise AuthError(f"写入本地皮肤失败：{exc}") from exc
-    return str(target)
+    return result["skin"]
 
 
-SKIN_PACK_NAME = "MikanCL-离线皮肤.zip"
-# 覆盖经典/纤细两种模型在各个版本中的默认皮肤路径
-SKIN_PACK_ENTRIES = (
-    "assets/minecraft/textures/entity/steve.png",
-    "assets/minecraft/textures/entity/alex.png",
-    "assets/minecraft/textures/entity/player/wide/steve.png",
-    "assets/minecraft/textures/entity/player/slim/alex.png",
-)
-
-
-def _enable_resource_pack(game_dir: Path) -> None:
-    """把材质包写入 options.txt 的已启用列表，避免玩家手动勾选。"""
-    options = game_dir / "options.txt"
-    entry = f"file/{SKIN_PACK_NAME}"
-    try:
-        lines = options.read_text(encoding="utf-8", errors="replace").splitlines() if options.is_file() else []
-        updated = False
-        result: list[str] = []
-        for line in lines:
-            if not line.startswith("resourcePacks:"):
-                result.append(line)
-                continue
-            try:
-                packs = json.loads(line.split(":", 1)[1])
-            except ValueError:
-                packs = []
-            if not isinstance(packs, list):
-                packs = []
-            if entry in packs:
-                updated = True
-                result.append(line)
-                continue
-            packs.append(entry)
-            result.append("resourcePacks:" + json.dumps(packs, ensure_ascii=False))
-            updated = True
-        if not updated:
-            result.append("resourcePacks:" + json.dumps(["vanilla", entry], ensure_ascii=False))
-        options.write_text("\n".join(result) + "\n", encoding="utf-8")
-    except OSError:
-        pass
-
-
-def apply_skin_resourcepack(account: Account, game_dir: str | Path) -> str:
-    """把离线皮肤做成资源包，替换默认玩家皮肤（仅影响本机单人游戏）。"""
-    import zipfile
+def apply_skin_resourcepack(
+    account: Account,
+    game_dir: str | Path,
+    version_id: str = "",
+    enable: bool = False,
+) -> str:
+    """生成版本适配的兜底资源包。默认只写入不启用，避免替换服务器其他玩家的默认皮肤。"""
+    from .skinpack import SkinPackError, apply_player_skin
 
     source = Path(account.skin_path) if account.skin_path else None
     if source is None or not source.is_file():
         return ""
-    root = Path(game_dir)
-    folder = root / "resourcepacks"
-    folder.mkdir(parents=True, exist_ok=True)
-    target = folder / SKIN_PACK_NAME
     try:
-        if not target.is_file() or target.stat().st_mtime < source.stat().st_mtime:
-            image = source.read_bytes()
-            meta = {
-                "pack": {
-                    "pack_format": 15,
-                    "description": f"MikanCL 离线皮肤 · {account.name}",
-                    "supported_formats": {"min_inclusive": 1, "max_inclusive": 99},
-                }
-            }
-            with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
-                archive.writestr("pack.mcmeta", json.dumps(meta, ensure_ascii=False, indent=2))
-                for name in SKIN_PACK_ENTRIES:
-                    archive.writestr(name, image)
-        _enable_resource_pack(root)
-    except (OSError, ValueError) as exc:
+        result = apply_player_skin(
+            source,
+            account.name,
+            account.skin_model or "classic",
+            game_dir,
+            version_id,
+            install_pack=True,
+            enable_pack=enable,
+        )
+    except SkinPackError as exc:
         raise AuthError(f"生成本地皮肤资源包失败：{exc}") from exc
-    return str(target)
+    return result["pack"]
+
+
+def import_offline_skin(
+    account: Account | None,
+    game_dir: str | Path,
+    log: Callable[[str], None] | None = None,
+    version_id: str = "",
+    enable_pack: bool = False,
+) -> list[str]:
+    """把离线账号的皮肤导入指定游戏目录，返回写入的文件。
+
+    写入 CustomSkinLoader/LocalSkin 按玩家名生效，并生成适配该版本的兜底资源包
+    （默认不启用，避免服务器上其他默认皮肤玩家也变成这张皮肤）。
+    新版本 / 整合包导入完成后调用，避免玩家下载完新游戏还要重新启动一次才生效。
+    """
+    folder = Path(game_dir) / "resourcepacks"
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        if log:
+            log(f"[皮肤] 创建材质包文件夹失败：{exc}")
+    if account is None or account.type != "offline" or not account.skin_path:
+        return []
+    from .skinpack import SkinPackError, apply_player_skin
+
+    source = Path(account.skin_path)
+    if not source.is_file():
+        return []
+    try:
+        result = apply_player_skin(
+            source,
+            account.name,
+            account.skin_model or "classic",
+            game_dir,
+            version_id,
+            install_pack=True,
+            enable_pack=enable_pack,
+        )
+    except SkinPackError as exc:
+        if log:
+            log(f"[皮肤] 导入离线皮肤失败：{exc}")
+        return []
+    return list(result["paths"])
 
 
 # ----------------------------------------------------------------------

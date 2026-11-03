@@ -118,3 +118,27 @@ def page_header(title: str, subtitle: str) -> tuple[QWidget, QHBoxLayout]:
     layout.addLayout(texts)
     layout.addStretch(1)
     return wrapper, layout
+
+
+def ask_skin_model(parent=None, default: str = "classic", title: str = "") -> str | None:
+    """询问皮肤手臂模型：Steve（经典）或 Alex（纤细）；取消返回 None。
+
+    用户取消时调用方应中止后续打包。
+    """
+    from PySide6.QtWidgets import QInputDialog
+
+    from ..i18n import t
+
+    items = [t("SkinPack", "Steve（经典）"), t("SkinPack", "Alex（纤细）")]
+    current = 1 if (default or "").lower() == "slim" else 0
+    value, ok = QInputDialog.getItem(
+        parent,
+        title or t("SkinPack", "选择手臂模型"),
+        t("SkinPack", "请选择这张皮肤的手臂模型（导入后会按此模型打包）："),
+        items,
+        current,
+        False,
+    )
+    if not ok:
+        return None
+    return "slim" if value == items[1] else "classic"

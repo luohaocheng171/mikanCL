@@ -1,4 +1,4 @@
-# MikanCL v4.7.0 官方文档
+# MikanCL v4.8.1 官方文档
 
 <div align="center">
 
@@ -24,7 +24,7 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 
 ### 版本信息
 
-- **当前版本**：v4.7.0
+- **当前版本**：v4.8.1
 - **框架**：PySide6（Qt6，Fusion 深色主题 + 自绘标题栏）
 - **Python 要求**：3.10+
 - **运行平台**：Windows 10 / 11（x64）
@@ -177,6 +177,21 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 31. **Java 轻量安装与硬件推荐内存**
     Java 中心新增「安装类型」选择：Adoptium Temurin 等发行版可只装 JRE（体积小、适合仅运行游戏），也可装完整 JDK；安装完成后自动按硬件推荐值写入最大内存。设置 → 通用页新增「自动检测」按钮，按物理内存与 CPU 核心数推荐最大内存并写回配置，避免手动填出超过物理内存 70% 的值。
 
+32. **最多 5 个版本并发安装**
+    下载安装页不再限制「一次只能安装一个版本」：每个版本拥有独立的安装任务、进度、暂停与取消，最多同时进行 5 个；达到上限后按钮禁用并提示，空出槽位后自动恢复。下载中心默认并发同步为 5，其余任务排队。
+
+33. **离线皮肤下载后自动生效（按玩家名，不污染其他玩家）**
+    离线账号的皮肤写好以后，新版本安装完成、整合包 / 直装包导入完成或实例恢复完成时，会自动把皮肤写入 `CustomSkinLoader/LocalSkin/skins/<玩家名>.png` 并合并 `CustomSkinLoader.json` 的 `loadlist`，再按该版本格式生成兜底资源包；资源包默认不启用，避免把服务器上其他默认皮肤玩家也变成这张皮肤。游戏目录缺少 `resourcepacks` 时会先自动创建，版本隔离为「全部」时同时写入 `versions/<版本>/game`。
+
+34. **「皮肤包」标签页与全版本适配**
+    侧边栏新增「皮肤包」：选择皮肤来源、目标玩家、Steve / Alex 手臂模型与目标版本后，可导出可分享的 `.zip` 皮肤包或直接安装到本机；导入他人皮肤包 / PNG 时会先询问手臂模型。版本适配：1.0–1.5.2 生成 `texturepacks` 纹理包（`pack.txt`），1.6.1–1.21.8 使用 `pack_format`（1 / 2 / 3 … 64），1.21.9+ 与 26.x（含 26.4 测试版）使用 `min_format` / `max_format`，1.20.2+ 使用 `entity/player/wide|slim` 新路径。其他玩家安装同一个皮肤包并启用 CustomSkinLoader 后，就能在服务器按玩家名看到这张皮肤。页面提供「一键添加并覆盖旧皮肤包」：先清理主目录与版本隔离目录下所有旧 `MikanCL-*.zip`（含旧版 `MikanCL-离线皮肤.zip`）及 `options.txt` 中的启用项，再写入当前皮肤，避免旧包残留被误认为新皮肤已生效；普通安装新包时也会自动清理旧包。
+
+35. **智能 JVM 参数（按 Java 版本与游戏版本自适应）**
+    设置 → 通用页新增「智能 JVM 参数」开关（默认开启）。启动时按 Java 主版本、游戏版本与分配内存自动追加参数：1.21 及更早使用 Aikar 风格 G1GC（`G1NewSizePercent=30` / `G1MaxNewSizePercent=40`、`G1ReservePercent=20`、`InitiatingHeapOccupancyPercent=15`、`MaxGCPauseMillis=200`、`SurvivorRatio=32`、`MaxTenuringThreshold=1` 等），并关闭 `System.gc()` 显式回收与 perf 共享内存写入；堆 ≥ 4 GB 才启用 `AlwaysPreTouch`，≥ 12 GB 使用 16 MB Region，避免小堆启动变慢；26.x（官方要求 Java 25）改默认分代 ZGC（`-XX:+UseZGC`）。若用户已在额外 JVM 参数里指定 GC（G1 / ZGC / Shenandoah / Parallel / Serial / Epsilon，含 `-XX:-UseG1GC` 这类负向写法）或同名参数，则自动跳过对应项，不覆盖用户配置；Java 7 及更早只补 `MaxPermSize=256M`，Java 版本未知时不追加，防止参数不识别导致启动失败。分配内存超过物理内存 60% 时在启动日志与预检中提示换页风险。
+
+36. **版本兼容启动参数（不受「智能 JVM」开关影响）**
+    部分老版本与特殊版本需要额外参数，缺失时会直接崩溃，因此这些参数始终生效：1.12.2 及更早追加 `-Xss1M`（MC-129374 线程栈过小）与 `-Djava.util.Arrays.useLegacyMergeSort=true`（MC-61156 旧比较器排序崩溃）；旧版 Forge / 改过 jar 的整合包追加 `-Dfml.ignoreInvalidMinecraftCertificates=true`、`-Dfml.ignorePatchDiscrepancies=true`；旧版本被指定到 Java 9+ 时自动补 `--add-opens=java.base/java.lang` 等模块开放参数，避免 Forge 反射失败；Java 24+ 追加 `--enable-native-access=ALL-UNNAMED`，消除 LWJGL 受限 JNI 警告；macOS 上 1.13+ 追加 `-XstartOnFirstThread`（LWJGL3 要求主线程启动）。版本号识别覆盖远古版本（`a1.2.6` / `b1.7.3` / `c0.30` / `inf-` / `rd-` / `1.rv` / `2.0`）、愚人节版本与 26.4 / 26w.. 年份版本号，并按 1.21.9+ / 26.x 要求自动匹配 Java 21 / 25；启动日志会打印本次实际追加的版本兼容参数。
+
 ---
 
 ## 插件扩展
@@ -243,9 +258,9 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 
 ### 基础功能
 
-- **版本管理**：原版版本下载与安装、版本列表双击启动、多版本同时安装、版本重命名/删除
+- **版本管理**：原版版本下载与安装、版本列表双击启动、最多同时安装 5 个版本、版本重命名/删除
 - **版本分类**：正式版（草方块）、测试版（命令方块）、远古版（原石）、愚人节（TNT）四类标签，默认只显示正式版，点哪个标签加载哪一类；顶部常驻「最新正式版 / 最新测试版」卡片，可一键进入详情；所有版本图标均为自绘像素图
-- **下载中心**：独立任务页，统一管理原版安装、加载器安装、整合包、内容下载、Java 下载、纯文件下载等任务，支持暂停 / 恢复 / 取消 / 重试 / 打开目录
+- **下载中心**：独立任务页，统一管理原版安装、加载器安装、整合包、内容下载、Java 下载、纯文件下载等任务，默认最多 5 个任务并发、其余排队，支持暂停 / 恢复 / 取消 / 重试 / 打开目录
 - **版本隔离**：不隔离、仅隔离模组、仅隔离存档、全部隔离（独立游戏目录）四种模式，可按版本单独覆盖
 - **数据目录**：支持添加多个 `.minecraft` 目录，通过侧边栏下拉框快速切换
 - **多线程下载**：线程数可配置（1–328，默认 16），所有任务共用同一套并发与调度策略
@@ -262,6 +277,8 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 - **自动连接服务器**：启动时自动进入配置好的服务器地址
 - **代理支持**：HTTP 代理可同时应用于下载与游戏 JVM 参数
 - **内存自动分配**：设置 → 通用页「自动检测」按物理内存与 CPU 逻辑核心数推荐最大内存并写回配置；Java 中心安装完成后也自动应用推荐值，避免超过物理内存 70%
+- **智能 JVM 参数**：设置 → 通用页开关（默认开启）按 Java 版本、游戏版本与堆大小自动追加调优参数（1.21 及更早 G1GC，26.x 分代 ZGC），已在额外参数中指定 GC / 同名项时自动跳过；Java 7 及更早只补 PermGen；分配超过物理内存 60% 时提示换页风险
+- **版本兼容参数**：1.12.2 及更早自动加 `-Xss1M` 与 legacy 排序参数，旧版 Forge 加 fml 校验放宽参数，旧版本跑 Java 9+ 自动补 `--add-opens`，Java 24+ 自动加 `--enable-native-access`，macOS 1.13+ 自动加 `-XstartOnFirstThread`
 - **系统托盘**：最小化到托盘、托盘快捷启动
 
 ### 下载与内容生态
@@ -301,7 +318,8 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 - **微软正版登录**：设备码（Device Code）OAuth 流程，自动刷新令牌
 - **外置登录**：基于 authlib-injector，支持任意皮肤站 / 外置登录服务器；自动下载并注入 `authlib-injector.jar`
 - **离线账号**：自定义玩家名，生成离线 UUID
-- **皮肤管理**：正版皮肤查询、按用户名查找皮肤、上传皮肤；离线皮肤支持 Steve / Alex 手臂模型，写入 `CustomSkinLoader/LocalSkin/skins`，游戏内显示需搭配 CustomSkinLoader Mod
+- **皮肤管理**：正版皮肤查询、按用户名查找皮肤、上传皮肤；离线皮肤支持 Steve / Alex 手臂模型，导入时询问模型并保存到账号，写入 `CustomSkinLoader/LocalSkin/skins/<玩家名>.png` 并合并 `loadlist`；下载安装新版本、导入整合包 / 直装包或恢复实例完成后按该版本格式自动打包，无需再启动一次；游戏内显示需搭配 CustomSkinLoader Mod
+- **皮肤包**：独立「皮肤包」标签页，可按目标玩家 + 手臂模型 + 游戏版本导出可分享的 `.zip`，也可直接安装到本机或导入他人皮肤包；「一键添加并覆盖旧皮肤包」会先清理旧的 `MikanCL-*.zip` 与 `options.txt` 启用项再写入，避免旧包残留误导；服务器上只影响指定玩家，其他玩家外观不变
 - **皮肤头像**：主页卡片、侧边栏、账号详情直接使用皮肤「头部 + 帽子层」生成圆角头像，无本地皮肤时异步拉取 `skin_url`，失败回退像素头像
 
 ### 扩展与实验性功能
@@ -364,6 +382,7 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 - **重试策略**：每个候选地址最多 3 次尝试，仅对连接类异常（10053 / 10054 / 超时）重试并短暂等待，HTTP 4xx/5xx 直接切下一个源
 - **镜像改写**：`rewrite_url()` 按下载源配置把 Mojang 域名（`piston-*`、`resources.download.minecraft.net`、`libraries.minecraft.net`）改写为 BMCLAPI 镜像路径
 - **暂停与恢复**：任务级 `threading.Event` 控制，暂停时不销毁连接配额，恢复后继续；取消时保留未完成分片
+- **并发文件锁**：多版本同时安装时，同一个库 / 资源文件可能被多个 worker 请求；`Http.download()` 按目标路径取 `RLock` 后再复查文件是否完整，避免重复下载与 `.part` 写冲突
 
 ### 3. Mod 元数据扫描与冲突检测
 
@@ -491,7 +510,9 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | `mc_launcher/installer.py` | `GameInstaller`：版本 JSON 解析、类库与 natives、资源索引与资源文件批量下载 |
 | `mc_launcher/modloader.py` | 加载器版本查询与安装（Forge / NeoForge / Fabric / Quilt / LiteLoader）、`java_for_mc()` |
 | `mc_launcher/launcher.py` | 启动命令拼装、natives 准备、隔离目录处理、authlib-injector 注入、进程启动 |
+| `mc_launcher/jvm.py` | 智能 JVM 参数：按 Java 版本 / 游戏版本 / 堆大小生成 G1GC 或 26.x 分代 ZGC 参数，并生成旧版兼容参数（`-Xss1M`、legacy 排序、旧版 Forge 校验、Java 9+ `--add-opens`、Java 24+ `--enable-native-access`、macOS `-XstartOnFirstThread`），检测用户 GC 与同名参数、内存超配警告 |
 | `mc_launcher/auth.py` | 账号存储、微软设备码登录、外置登录、皮肤查询 / 上传 / 本地皮肤 |
+| `mc_launcher/skinpack.py` | 皮肤包：按玩家名写入 LocalSkin、合并 CustomSkinLoader 配置、全版本资源包 / 纹理包格式适配 |
 | `mc_launcher/content.py` | Modrinth / CurseForge 客户端、整合包解析与安装、Mod 元数据扫描与冲突检测 |
 | `mc_launcher/downloads.py` | 下载中心任务模型与调度（并发上限、暂停 / 恢复 / 取消 / 重试） |
 | `mc_launcher/java.py` | Java 探测、版本匹配、Java 下载与解压（支持 JRE / JDK 安装类型） |
@@ -603,6 +624,7 @@ MikanCL/
 │       ├── page_content.py     # 内容中心
 │       ├── page_modpack.py     # 整合包
 │       ├── page_accounts.py    # 账号与皮肤
+│       ├── page_skin_pack.py   # 皮肤包打包 / 导入
 │       ├── page_control.py     # 版本设置 / Mod 管理
 │       ├── page_multiplayer.py # 多人联机（陶瓦）
 │       ├── page_browser.py     # 内置浏览器
@@ -713,17 +735,18 @@ pyinstaller --noconfirm --clean --onefile --windowed --name MikanCL \
 2. **内存设置**：建议不超过物理内存的 70%，启动预检会提示超限；整合包体积较大时请确认磁盘空间 > 2GB
 3. **整合包安装耗时**：首次安装需要完整下载对应版本的库文件与 3000+ 资源文件，进度可在下载中心查看；中途取消不会丢失已下载分片，重新导入会续传
 4. **Mod 冲突**：同一 Mod 的多个版本同时存在会导致游戏崩溃，版本设置中会红色标记，建议只保留一个
-5. **离线皮肤**：需要把 CustomSkinLoader Mod 放入实例的 `mods/`，皮肤文件写入 `CustomSkinLoader/LocalSkin/skins` 后才会在游戏内显示
-6. **Forbric**：实验性功能，底层构建只支持特定 MC 版本（当前 26.2），不兼容的实例会禁用安装按钮；安装过程需要 Java 21
-7. **CurseForge API Key**：内置默认 Key 可能随时失效，可在设置中替换为自己的 Key
-8. **下载源**：国内网络建议把 BMCLAPI 镜像优先级调高；CurseForge / Modrinth 也支持自定义镜像地址
-9. **单实例限制**：同一时间只能运行一个 MikanCL；如需切换数据目录，请使用侧边栏的数据目录下拉框
-10. **杀毒软件**：PyInstaller 打包的 exe 常被误报，加入白名单即可
-11. **基岩版下载**：点「在浏览器下载」会切到内置浏览器（优先 Edge 内核）打开该版本的下载页，在页面上点下载按钮即可；下载完成的 `.appx` / `.msix` 会由启动器自动归档到基岩版下载目录，随后点「从本地安装」安装
-12. **基岩版启动要求**：手动安装的安装包本身不含授权，启动时需用拥有 Minecraft 的微软账号登录商店（或加入 Game Pass），否则系统会报 `0x803F8001`；启动 20 秒后未检测到进程时会给出该提示
-13. **基岩版降级**：安装低版本会替换现有版本（`-ForceUpdateFromAnyVersion`），想回到新版重新下载安装即可
-14. **第三方依赖**：陶瓦联机、authlib-injector、Java 运行时、Mod 加载器与 Forbric 均不随启动器内置，统一在「依赖补全」页查看状态并下载或跳转；这些模块由各自作者独立维护，下载 / 使用风险由使用者自行承担，详见《用户协议 v1.4》第十一条
-15. **依赖补全**：检查本身只读本地文件、不联网；只有用户确认后才会把补全任务加入下载中心。加载器类依赖需按游戏版本使用官方安装器，页面只提供跳转入口
+5. **离线皮肤**：需要把 CustomSkinLoader Mod 放入实例的 `mods/`，皮肤文件写入 `CustomSkinLoader/LocalSkin/skins/<玩家名>.png` 后才会在游戏内显示；下载新版本或导入整合包 / 实例完成时会自动写入对应玩家并生成该版本的兜底资源包，无需手动复制。资源包默认不启用，避免替换服务器其他默认皮肤玩家
+6. **并发安装**：下载安装页最多同时安装 5 个版本，第 6 个需等待空位；多个版本共享的库文件按目标路径加锁下载，不会互相覆盖
+7. **Forbric**：实验性功能，底层构建只支持特定 MC 版本（当前 26.2），不兼容的实例会禁用安装按钮；安装过程需要 Java 21
+8. **CurseForge API Key**：内置默认 Key 可能随时失效，可在设置中替换为自己的 Key
+9. **下载源**：国内网络建议把 BMCLAPI 镜像优先级调高；CurseForge / Modrinth 也支持自定义镜像地址
+10. **单实例限制**：同一时间只能运行一个 MikanCL；如需切换数据目录，请使用侧边栏的数据目录下拉框
+11. **杀毒软件**：PyInstaller 打包的 exe 常被误报，加入白名单即可
+12. **基岩版下载**：点「在浏览器下载」会切到内置浏览器（优先 Edge 内核）打开该版本的下载页，在页面上点下载按钮即可；下载完成的 `.appx` / `.msix` 会由启动器自动归档到基岩版下载目录，随后点「从本地安装」安装
+13. **基岩版启动要求**：手动安装的安装包本身不含授权，启动时需用拥有 Minecraft 的微软账号登录商店（或加入 Game Pass），否则系统会报 `0x803F8001`；启动 20 秒后未检测到进程时会给出该提示
+14. **基岩版降级**：安装低版本会替换现有版本（`-ForceUpdateFromAnyVersion`），想回到新版重新下载安装即可
+15. **第三方依赖**：陶瓦联机、authlib-injector、Java 运行时、Mod 加载器与 Forbric 均不随启动器内置，统一在「依赖补全」页查看状态并下载或跳转；这些模块由各自作者独立维护，下载 / 使用风险由使用者自行承担，详见《用户协议 v1.4》第十一条
+16. **依赖补全**：检查本身只读本地文件、不联网；只有用户确认后才会把补全任务加入下载中心。加载器类依赖需按游戏版本使用官方安装器，页面只提供跳转入口
 
 ---
 
