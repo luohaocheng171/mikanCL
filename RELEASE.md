@@ -1,6 +1,56 @@
-# MikanCL v4.8.1 发布说明
+# MikanCL v4.9.1 发布说明
+
+发布日期：2026-11-04
+
+## 新增
+
+- **Java 中心新增国内镜像源**：新增「清华 TUNA 镜像（Temurin）」与「华为云 OpenJDK 镜像」，发行版总数达到 12 家；标有「国内镜像」的源国内直连速度明显更快，清华镜像提供 JRE / JDK，华为云提供完整 JDK
+- **所有大文件下载启用多线程分段**：`Http.download()` 现对所有资源生效——文件 ≥ 4 MB 且服务器支持 Range 时自动切成 8 段并发下载、落盘合并，支持暂停、取消与按段断点续传；服务器不支持分段时自动回退单流，不影响原有源切换、校验与重试逻辑。Java 安装包下载固定启用分段
+- **手动添加 Java 路径**：设置 → 通用 → Java 运行时新增「手动添加…」，可选择 `javaw.exe` / `java.exe` 或直接填写安装目录；路径写入配置长期保存，重启后仍会识别
+- **从 PCL2 / HMCL 导入配置**：设置 → 游戏页新增「从 PCL / HMCL 导入…」，选择对方的配置目录（启动器根目录或直接选 `.minecraft`）后自动扫描版本；只导入本启动器没有的版本，勾选后登记为实例，实例直接指向原游戏目录，mod、存档、资源包无需搬移
+- **导入游戏设置**：读取 PCL 的 `Setup.ini` / `PCL.ini` 与 HMCL 的 `hmclversion.cfg` / `.hmcl.json`，把版本隔离、最大内存、JVM 参数、窗口标题、默认 Java 路径等映射到本启动器的版本设置；可勾选是否同时导入全局设置
+- **版本设置新增「整合包」侧边栏**：沿用 `.mikan` 包格式，可把当前版本导出为整合包，也可把 `.mikan` / CurseForge / Modrinth 整合包里的文件直接刷入当前实例——识别 `overrides/`、`client-overrides/` 前缀与直接放在根目录的 `mods` / `config` / `resourcepacks` / `shaderpacks` 等目录（按版本隔离规则写入），导入在后台线程执行、有进度显示，覆盖同名文件前会先统计并询问确认，不新建实例；「版本管理」页的导出按钮移至此处并保留迁移提示
+
+## 修复
+
+- **Java 检测时有时无**：根因是每次刷新都用一次扫描结果整体覆盖列表，且扫描时每个目录只取前 60 项，目录内容一变就可能漏掉某个 Java；现改为全量枚举 + 与已有列表按路径合并，并把检测结果持久化到 `java_known_paths`、手动路径保存到 `java_manual_paths`，刷新时先探测历史路径，不会再出现「这次有、下次没了」
+- Java 扫描范围扩大：新增 GraalVM、SapMachine、Dragonwell、Semeru、AdoptOpenJDK、Tencent、Alibaba 等发行版目录、`LOCALAPPDATA\Programs\Java`、`~/.gradle/jdks` 与 `~/.jdks`
+- 已卸载 / 路径失效的 Java 在刷新时自动从列表移除，避免残留无效项
+- **国内镜像源增加降级**：清华 TUNA 与华为云镜像都是爬取 HTML 目录列表，比 API 更易受目录改版或临时 503 影响；现两者都补上了 Adoptium 官方 latest 稳定链接作为兜底，源不可用时不再直接显示「获取失败」
+- **Java 扫描不再截断**：每个安装根目录的候选子目录上限由 400 提升到 2000、孙目录由 40 提升到 200，用户把 `JAVA_HOME` 指到长期累积的 JDK 目录（如 `~/.gradle/jdks`）时也不会漏检
+- **导入实例幂等判断改用规范化路径**：比较时先 `resolve()` 消解 `..`、尾斜杠再统一大小写，同一目录写成 `E:\1.20.1-Fabric`、`E:\1.20.1-Fabric\` 或大小写不同都不会再重复创建实例
+- **分段下载残留清理**：分段下载开始前先删除上次中断留下的 `.merge` 合并文件，避免强杀进程后残留占盘；`_segmented_download()` 的 `size` 显式接受 `None`，并在 `Http.download()` 文档中写明 `on_bytes` 为增量语义、续传时会先补一次已下载量
+- 整合包导入与 Mod 冲突检测的健壮性整理：冲突检测改为模块级导入，不再有静默跳过的 `ImportError` 分支；`_read_ini()` 的两段逐行兜底合并为 `_parse_flat()`；内存关键词由 `ram/memory/mem` 收窄为 `ram/memory`，避免误匹配；侧边栏改为 `(key, 标签)` 并按 key 映射页面，插入新页不再错位；Java 下载完成后不再重复重建表格
+
+## 构建与验证
+
+- 产物：`dist/MikanCL.exe`（单文件，220,325,593 字节 ≈ 210.1 MB，已内置 PySide6 / QtWebEngine、`translations`、`data`、`resources` 全部依赖）
+- 构建时间：2026-11-04 20:57:55；打包日志显示 `Build complete`
+- 启动验证：直接运行 `dist/MikanCL.exe`，`dist/data/logs/launcher.log` 于 20:58:41 输出「启动器已就绪」，进程保持运行，验证后已结束测试进程
+- 编译验证：`python -m compileall mc_launcher` 全量通过，离屏冒烟无报错
+- 功能验证：PCL 测试目录 `E:\1.20.1-Fabric 0.19.5-OptiFine_I6` 扫描识别到 1.16.5（PCL / 版本隔离 / 描述），导入后实例与版本设置写入正确，测试结束已还原配置
+- 下载验证：清华 TUNA 镜像 49 MB JRE 走 8 段并发下载，5.6 秒完成，分段临时文件全部清理
+- 界面冒烟：离屏创建 Java 中心（12 个发行版）、设置页、版本设置页（7 个侧边栏页签）与导入对话框，均正常构建
+- 审查修复验证：`tuna` / `huawei` 已在 `_FALLBACK_FETCHERS` 中；同一目录写成尾斜杠、不同大小写或含 `..` 时实例标识一致；`_parse_flat()` 可解析 PCL `Ram:8192` 与 HMCL `maxMemory=4096`，`remember` 这类键不再被误判为内存；合成的 `.mikan`（含 `overrides/`、`client-overrides/`、根目录 `mods/`）被识别为 3 个条目并全部落盘，覆盖计数正确，`ImportPackWorker` 进度 0→1 正常结束；侧边栏 7 项与页面 key 映射一致，`_select_nav()` 定位正确；`_segmented_download(size=None)` 不再抛 `TypeError`
+
+## 升级提示
+
+- 本版为 v4.9.0 的修订版本，版本号更新为 4.9.1；直接下载新的 `MikanCL.exe` 覆盖旧文件即可，配置与数据保留在 exe 同目录的 `data/` 下
+- 已通过模块导入登记过的 PCL / HMCL 实例无需重新导入；升级后同一目录不会再被判定为新实例
+
+---
+
+# MikanCL v4.8.2 发布说明
+
 
 发布日期：2026-11-03
+
+## 修复
+
+- **皮肤包加载失败**：改用旧版可用皮肤包的编写与加载方式——资源包同时写入 `textures/entity/steve.png`、`alex.png` 与 `textures/entity/player/wide/steve.png`、`slim/alex.png` 两套路径，不再按版本只写一条；`pack.mcmeta` 的 `supported_formats` 上限由「当前 pack_format」放宽回 1–99，相邻版本格式差异不会再被判为不兼容；1.21.9+ / 26.x 仍使用 `min_format` / `max_format`，多版本适配保持不变
+- **分享包不能直接加载**：导出的 `.zip` 不再把资源包嵌套在 `resourcepack/` 子目录里，而是把 `pack.mcmeta` / `pack.txt` 与纹理直接放在包根目录，文件本身即可放进 `resourcepacks`（或 1.5.2 及更早的 `texturepacks`）加载；启动器导入仍会读取根目录 `skin.png` 并按本机所选版本重新生成适配包
+- **皮肤包不生效的根因**：旧代码按手臂模型只写入单条纹理路径（实测旧版生成的 `MikanCL-luohaocheng-皮肤包.zip` 只有 `assets/minecraft/textures/entity/alex.png`，`pack_format=1`、`supported_formats` 1–1），玩家实际使用 Steve（wide）模型时这条路径不会被加载，所以资源包显示「已适配」但游戏内仍是默认皮肤；老包因为同时写了 `steve.png` 与 `alex.png` 四条路径，即使显示红色不兼容，强制启用后皮肤仍正常。现已恢复老包写法，四条路径同时写入，并与手臂模型无关
+- **升级后需重新安装一次**：旧代码已经写入游戏目录的 `MikanCL-*.zip` 不会自动重写，请用 4.8.2 的「一键添加并覆盖旧皮肤包」或重新点一次安装，生成包含四条纹理路径的新包
 
 ## 新增
 
@@ -12,7 +62,7 @@
 - **用户协议升级到 v1.4**：新增第十一条「第三方模块」，明确第三方模块与 MikanCL 无隶属、授权、赞助或担保关系，提供入口仅为便利，相关风险由使用者自负；中 / 英 / 俄 / 法 / 日 5 种语言同步
 - **「皮肤包」标签页**：侧边栏新增独立页面，按「目标玩家 + 手臂模型 + 游戏版本」生成可分享的皮肤包（`.zip`，含 `pack.json`、`skin.png`、版本适配资源包与说明），也可直接安装到本机；支持导入他人皮肤包或单张 PNG
 - **按玩家生效的皮肤**：不再全局替换默认皮肤纹理，而是写入 `CustomSkinLoader/LocalSkin/skins/<玩家名>.png` 并合并 `CustomSkinLoader.json` 的 `loadlist`（`{USERNAME}` 占位符），服务器上只让指定玩家显示这张皮肤，其他玩家不受影响
-- **全版本皮肤包适配**：1.0–1.5.2 生成 `texturepacks` 纹理包（`pack.txt` + `textures/entity/*.png`）；1.6.1–1.21.8 使用 `pack.mcmeta` 的 `pack_format`（按版本自动取 1 / 2 / 3 … 64）；1.21.9+ 与 26.x（含 26.4 测试版）改用 `min_format` / `max_format`；1.20.2+ 自动使用 `entity/player/wide|slim` 新路径
+- **全版本皮肤包适配**：1.0–1.5.2 生成 `texturepacks` 纹理包（`pack.txt` + `textures/entity/*.png`）；1.6.1–1.21.8 使用 `pack.mcmeta` 的 `pack_format`（按版本自动取 1 / 2 / 3 … 64）并配 `supported_formats` 1–99；1.21.9+ 与 26.x（含 26.4 测试版）改用 `min_format` / `max_format`；新旧两套玩家纹理路径（`textures/entity/steve|alex.png` 与 `entity/player/wide|slim`）同时写入，任一版本都能命中
 - **手臂模型询问**：导入本地皮肤、应用皮肤工厂作品、导入皮肤包或导出皮肤包前，都会询问 Steve（经典）或 Alex（纤细）；选择结果保存到账号 `skin_model`，后续自动打包与下载新版本导入时沿用
 - **随版本自动打包**：下载安装新版本、导入整合包 / 直装包或恢复实例完成时，按该版本格式自动生成皮肤包并写入 `CustomSkinLoader/LocalSkin`，无需再启动一次
 - **一键添加并覆盖旧皮肤包**：皮肤包页新增按钮，先清理主目录与版本隔离目录下所有 `MikanCL-*.zip`（含旧版 `MikanCL-离线皮肤.zip`）及 `options.txt` 中的 `file/MikanCL-*` 启用项，再写入当前皮肤；普通安装新包时也会自动清理，避免旧包残留导致误以为新皮肤已生效
@@ -37,13 +87,13 @@
 
 ## 构建与验证
 
-- 产物：`dist/MikanCL.exe`（单文件，221,114,222 字节 ≈ 210.9 MB，已内置 PySide6 / QtWebEngine、`translations`、`data`、`resources` 全部依赖）
-- 构建时间：2026-11-03 21:29:11；打包日志显示 `Build complete`
-- 启动验证：直接运行 `dist/MikanCL.exe`，`data/logs/launcher.log` 于 21:30:05 输出「启动器已就绪」，窗口标题正常显示，验证后已结束测试进程
+- 产物：`dist/MikanCL.exe`（单文件，221,115,875 字节 ≈ 210.9 MB，已内置 PySide6 / QtWebEngine、`translations`、`data`、`resources` 全部依赖）
+- 构建时间：2026-11-03 21:59:47；打包日志显示 `Build complete`
+- 启动验证：直接运行 `dist/MikanCL.exe`，`data/logs/launcher.log` 于 22:01:24 输出「启动器已就绪」，窗口标题正常显示，验证后已结束测试进程
 - 离屏冒烟测试通过：侧边栏出现「依赖补全」、页面创建、模块表 5 行（陶瓦 / authlib-injector / Java 运行时 / Mod 加载器 / Forbric）、设置页功能开关包含 `deps`、「前往 Java 中心」按钮正确发出导航信号
 - 依赖扫描测试通过：合成版本目录可正确识别 Java、客户端 Jar、依赖库、资源索引、日志配置 5 类缺失；不存在的版本返回 `kind="version"`
 - 并发与皮肤测试通过：`DownloadManager.max_concurrent == 5`、下载页 5 个任务并行且第 6 个被上限拦住、达上限时安装按钮禁用；`import_offline_skin()` 正确写入 `CustomSkinLoader/LocalSkin/skins/<玩家名>.png`、合并 `CustomSkinLoader.json` 的 `loadlist` 并生成对应版本的资源包；游戏目录缺少 `resourcepacks` 时会先自动创建
-- 皮肤包版本适配验证通过：1.5.2 → `pack.txt` + `textures/entity/alex.png`；1.8.9 → `pack_format=1`；1.20.1 → `pack_format=15`；1.20.4 → `pack_format=22` 且路径为 `entity/player/slim/alex.png`；1.21.8 → `pack_format=64`；1.21.9 → `min_format=[69,0]` / `max_format=[999,0]`；26.4-snapshot → `min_format=[97,0]` / `max_format=[999,0]`；重复安装不同玩家时 `LocalSkin` 条目不重复且保留用户原有 `MojangAPI` 等皮肤源
+- 皮肤包版本适配验证通过（旧包写法）：1.5.2 → `pack.txt` + `textures/entity/steve.png`、`alex.png`；1.8.9 → `pack_format=1` + `supported_formats` 1–99；1.12.2 → `pack_format=3`；1.20.1 → `pack_format=15`；1.21.8 → `pack_format=64`；1.6.1+ 均同时包含 `textures/entity/steve|alex.png` 与 `entity/player/wide|slim` 两套路径；1.21.9 → `min_format=[69,0]` / `max_format=[999,0]`；26.4-snapshot → `min_format=[97,0]` / `max_format=[999,0]`；导出的 `.zip` 根目录直接含 `pack.mcmeta` / `pack.txt` 与纹理，可被游戏直接加载；重复安装不同玩家时 `LocalSkin` 条目不重复且保留用户原有 `MojangAPI` 等皮肤源
 - 旧皮肤包覆盖验证通过：`purge_old_packs()` 可删除 `resourcepacks` / `texturepacks` 下的 `MikanCL-*.zip`（保留其他资源包）并同步移除 `options.txt` 的启用项；安装新包前自动清理，最终只剩一个 `MikanCL-*` 兜底包
 - 智能 JVM 参数验证通过：Java 8 / 17 / 21 分别生成 19–20 个参数；2 GB 堆不含 `AlwaysPreTouch`、8 GB 含；16 GB 堆使用 `G1HeapRegionSize=16M`；用户指定 `-XX:+UseZGC` 或 `-XX:-UseG1GC` 时跳过 G1 预设；`-XX:MaxGCPauseMillis=300` 不被覆盖；Java 7 返回 `-XX:MaxPermSize=256M`；Java 版本未知时返回空列表
 - 版本兼容参数验证通过：1.7.10 → `-Xss1M` + legacy 排序；1.7.10-forge → 追加两个 fml 参数；1.12.2 + Java 17 → 追加 7 条 `--add-opens`；1.21.8 + Java 21 → 无兼容参数；26.1 / 26w01a + Java 25 → `-XX:+UseZGC` 且无 G1GC；Java 24+ 全部版本追加 `--enable-native-access=ALL-UNNAMED`
@@ -53,7 +103,7 @@
 ## 文档
 
 - 完整功能、技术实现与接口说明见 [README.md](README.md)
-- 本版本变更摘要见本文件顶部 v4.8.1 章节
+- 本版本变更摘要见本文件顶部 v4.9.1 章节
 
 ## 升级提示
 

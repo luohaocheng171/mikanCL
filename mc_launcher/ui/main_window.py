@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 from .. import APP_NAME, APP_NAME_CN, APP_VERSION
 from ..context import AppContext, wait_thread
 from ..i18n import t
-from ..java import detect_java_installed
+from ..java import detect_java_installed, merge_java_lists
 from ..plugins import PluginManager, PluginPage
 from .dropinstall import handle_dropped_paths
 from .page_accounts import AccountsPage
@@ -159,8 +159,12 @@ class TitleBar(QFrame):
 class JavaScanWorker(QThread):
     done = Signal(list)
 
+    def __init__(self, extra_paths: list[str] | None = None, parent=None):
+        super().__init__(parent)
+        self.extra_paths = list(extra_paths or [])
+
     def run(self) -> None:
-        self.done.emit(detect_java_installed())
+        self.done.emit(detect_java_installed(self.extra_paths))
 
 
 class RootWidget(QWidget):
@@ -810,18 +814,20 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def _start_java_scan(self) -> None:
-        self._java_worker = JavaScanWorker(self)
+        self._java_worker = JavaScanWorker(self.ctx.config.java_scan_paths(), self)
         self._java_worker.done.connect(self._on_java_scanned)
         self._java_worker.start()
 
     def _on_java_scanned(self, javas: list) -> None:
-        self.ctx.javas = javas
+        merged = merge_java_lists(self.ctx.javas, javas)
+        self.ctx.javas = merged
+        self.ctx.config.remember_java_paths(java.path for java in merged)
         self.ctx.bus.javas_changed.emit()
         self._java_worker = None
-        if not javas:
+        if not merged:
             self.statusBar().showMessage("未检测到 Java，请到设置页手动指定 Java 路径。", 8000)
         else:
-            self.statusBar().showMessage(f"已检测到 {len(javas)} 个 Java 运行时。", 5000)
+            self.statusBar().showMessage(f"已检测到 {len(merged)} 个 Java 运行时。", 5000)
 
     def _setup_tray(self) -> None:
         self.tray = QSystemTrayIcon(make_block_icon(32), self)

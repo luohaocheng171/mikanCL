@@ -369,6 +369,21 @@ class ServerEntry:
         )
 
 
+def _clean_path_list(raw: object) -> list[str]:
+    """读取配置里的路径列表：去空、去重、保持原有顺序。"""
+    result: list[str] = []
+    seen: set[str] = set()
+    if isinstance(raw, list):
+        for item in raw:
+            text = str(item or "").strip().strip('"')
+            key = os.path.normcase(os.path.normpath(text)) if text else ""
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            result.append(text)
+    return result
+
+
 @dataclass
 class Config:
     game_dir: str = field(default_factory=lambda: str(default_game_dir()))
@@ -380,6 +395,9 @@ class Config:
     active_game_dir: str = "default"
     player_name: str = "Steve"
     java_path: str = ""
+    # 手动添加的 Java 路径与历史扫描结果：合并持久化，避免刷新时互相覆盖丢失
+    java_manual_paths: list[str] = field(default_factory=list)
+    java_known_paths: list[str] = field(default_factory=list)
     memory_mb: int = 4096
     smart_jvm: bool = True   # 按 Java 版本自动启用 G1GC 等调优参数
     width: int = 0
@@ -481,6 +499,28 @@ class Config:
         if self.get_source(source_id):
             self.selected_source_id = source_id
             self.save()
+
+    # ------------------------------------------------------------------
+    # Java 路径记录（手动添加 + 历史扫描结果）
+    def java_scan_paths(self) -> list[str]:
+        """供扫描使用的额外路径：手动路径优先，其次历史扫描结果。"""
+        merged = _clean_path_list(list(self.java_manual_paths) + list(self.java_known_paths))
+        return merged
+
+    def add_manual_java_path(self, path: str) -> None:
+        text = str(path or "").strip().strip('"')
+        if not text:
+            return
+        self.java_manual_paths = _clean_path_list(list(self.java_manual_paths) + [text])
+        self.java_known_paths = _clean_path_list(list(self.java_known_paths) + [text])
+        self.save_debounced()
+
+    def remember_java_paths(self, paths) -> None:
+        """记录已探测到的 Java 路径，后续扫描时可再次尝试，避免临时漏检。"""
+        known = _clean_path_list(list(self.java_known_paths) + [str(p) for p in paths or []])
+        if known != self.java_known_paths:
+            self.java_known_paths = known
+            self.save_debounced()
 
     @property
     def game_path(self) -> Path:
@@ -743,6 +783,8 @@ class Config:
                 "active_game_dir": self.active_game_dir,
                 "player_name": self.player_name,
                 "java_path": self.java_path,
+                "java_manual_paths": list(self.java_manual_paths),
+                "java_known_paths": list(self.java_known_paths),
                 "memory_mb": int(self.memory_mb),
                 "width": int(self.width),
                 "height": int(self.height),
@@ -870,6 +912,8 @@ class Config:
         cfg.game_dir = active.path
         cfg.player_name = str(data.get("player_name") or cfg.player_name)
         cfg.java_path = str(data.get("java_path") or "")
+        cfg.java_manual_paths = _clean_path_list(data.get("java_manual_paths"))
+        cfg.java_known_paths = _clean_path_list(data.get("java_known_paths"))
         try:
             cfg.memory_mb = max(512, int(data.get("memory_mb", cfg.memory_mb)))
         except (TypeError, ValueError):

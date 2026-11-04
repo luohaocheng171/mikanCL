@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import ssl
 import threading
 import time
@@ -13,6 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
@@ -283,6 +285,167 @@ class SourceManager:
         raise DownloadError("无法获取版本清单，请检查网络或下载源设置。\n" + "\n".join(errors[:4]))
 
 
+# ---- 多线程分段下载（所有大文件下载都可调用） ----
+# 小于该阈值的文件（游戏资源、小 mod 等）分段的额外请求开销大于收益，仍走单流下载。
+PARALLEL_MIN_SIZE = 4 * 1024 * 1024
+PARALLEL_DEFAULT_WORKERS = 8
+
+
+def _probe_download_range(
+    candidate: Candidate, timeout: int = 20
+) -> tuple[int, bool]:
+    """用 Range: bytes=0-0 探测 (总大小, 是否支持分段)。探测失败返回 (0, False)。"""
+    headers = dict(candidate.headers)
+    headers["Range"] = "bytes=0-0"
+    request = urllib.request.Request(candidate.url, headers=headers)
+    try:
+        with open_with_ssl_fallback(request, timeout) as response:
+            status = int(getattr(response, "status", 200) or 200)
+            content_range = response.headers.get("Content-Range") or ""
+            match = re.search(r"/(\d+)", content_range)
+            total = int(match.group(1)) if match else 0
+            if not total:
+                length = response.headers.get("Content-Length") or "0"
+                total = int(length) if length.isdigit() else 0
+            accept = (response.headers.get("Accept-Ranges") or "").lower()
+            return total, status == 206 and total > 0 and accept != "none"
+    except Exception:  # noqa: BLE001 - 探测失败时退回单流下载
+        return 0, False
+
+
+def _segmented_download(
+    candidate: Candidate,
+    dest: Path,
+    size: int | None = 0,
+    cancel: threading.Event | None = None,
+    on_bytes: Callable[[int], None] | None = None,
+    pause: threading.Event | None = None,
+    workers: int = 0,
+) -> int:
+    """把文件切成多段并发下载、落盘后合并；支持暂停、取消与断点续传。
+
+    size 可为 None（未知总长），内部统一按 0 处理，真实长度以服务器探测值为准。
+    on_bytes 收到的是「本次新增字节数」，调用方应累加；断点续传时先补一次已下载量。
+    """
+    size = int(size or 0)
+    total, ranged = _probe_download_range(candidate)
+    if not ranged or total <= 0:
+        raise DownloadError("服务器不支持分段下载")
+    if size <= 0:
+        size = total
+    # 上次合并中途被打断时残留的 .merge 文件直接丢弃，尽早释放磁盘
+    dest.with_name(dest.name + ".merge").unlink(missing_ok=True)
+
+    worker_count = int(workers or PARALLEL_DEFAULT_WORKERS)
+    segment_count = min(worker_count, max(1, total // (2 * 1024 * 1024)))
+    segment_count = max(1, min(segment_count, 16))
+    span = total // segment_count
+    ranges: list[tuple[int, int]] = []
+    parts: list[Path] = []
+    for index in range(segment_count):
+        start = index * span
+        end = total - 1 if index == segment_count - 1 else start + span - 1
+        ranges.append((start, end))
+        parts.append(dest.with_name(f"{dest.name}.part{index}"))
+
+    resumed = 0
+    for part, (start, end) in zip(parts, ranges):
+        if not part.exists():
+            continue
+        expected = end - start + 1
+        length = part.stat().st_size
+        if length > expected:
+            try:
+                with open(part, "r+b") as fh:
+                    fh.truncate(expected)
+            except OSError:
+                pass
+            length = expected
+        resumed += length
+    if resumed and on_bytes:
+        on_bytes(resumed)
+
+    def check() -> None:
+        while pause is not None and pause.is_set():
+            if cancel is not None and cancel.is_set():
+                raise Cancelled()
+            time.sleep(0.2)
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
+
+    def segment(part: Path, start: int, end: int) -> None:
+        expected = end - start + 1
+        offset = part.stat().st_size if part.exists() else 0
+        if offset >= expected:
+            return
+        headers = dict(candidate.headers)
+        headers["Range"] = f"bytes={start + offset}-{end}"
+        attempt = 0
+        while True:
+            check()
+            request = urllib.request.Request(candidate.url, headers=headers)
+            try:
+                with open_with_ssl_fallback(request, 60) as response:
+                    status = int(getattr(response, "status", 200) or 200)
+                    if status not in (200, 206):
+                        raise DownloadError(f"HTTP {status}")
+                    with open(part, "ab") as fh:
+                        while True:
+                            check()
+                            chunk = response.read(65536)
+                            if not chunk:
+                                break
+                            fh.write(chunk)
+                            if on_bytes:
+                                on_bytes(len(chunk))
+                if part.stat().st_size >= expected:
+                    return
+                # 连接提前断开：按已写长度继续请求剩余区间
+                offset = part.stat().st_size
+                headers["Range"] = f"bytes={start + offset}-{end}"
+                attempt += 1
+                if attempt > 6:
+                    raise DownloadError("分段下载中断次数过多")
+            except Cancelled:
+                raise
+            except Exception:  # noqa: BLE001
+                attempt += 1
+                if attempt > 6:
+                    raise
+                check()
+                time.sleep(1.0)
+
+    with ThreadPoolExecutor(max_workers=segment_count) as pool:
+        futures = [
+            pool.submit(segment, part, start, end)
+            for part, (start, end) in zip(parts, ranges)
+        ]
+        for future in futures:
+            future.result()
+
+    combined = dest.with_name(dest.name + ".merge")
+    with open(combined, "wb") as out:
+        for part, (start, end) in zip(parts, ranges):
+            expected = end - start + 1
+            if part.exists() and part.stat().st_size > expected:
+                try:
+                    with open(part, "r+b") as fh:
+                        fh.truncate(expected)
+                except OSError:
+                    pass
+            if part.exists():
+                with open(part, "rb") as fh:
+                    shutil.copyfileobj(fh, out, 1024 * 1024)
+    actual = combined.stat().st_size
+    if total and actual != total:
+        combined.unlink(missing_ok=True)
+        raise DownloadError(f"文件长度不符（{actual}/{total}）")
+    os.replace(combined, dest)
+    for part in parts:
+        part.unlink(missing_ok=True)
+    return dest.stat().st_size
+
+
 class Http:
     def __init__(self, timeout: int = 30):
         self.timeout = timeout
@@ -452,8 +615,17 @@ class Http:
         cancel: threading.Event | None = None,
         on_bytes: Callable[[int], None] | None = None,
         pause: threading.Event | None = None,
+        parallel: bool | None = None,
+        workers: int = 0,
     ) -> int:
-        """下载到 dest，自动尝试多个源。返回文件大小；支持 .part 断点续传与暂停。"""
+        """下载到 dest，自动尝试多个源。返回文件大小；支持 .part 断点续传与暂停。
+
+        parallel=True / workers 指定时，大文件会走多线程分段下载；默认按文件大小
+        自动判断（≥ PARALLEL_MIN_SIZE 且服务器支持 Range 时启用）。
+
+        on_bytes 回调收到的是「本次新增字节数」（增量语义），调用方应累加到自己的
+        进度变量；单流续传与分段续传都会在开始时先补一次已下载量，因此无需额外处理。
+        """
         dest = Path(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         # 并发安装时同一个文件可能被多个 worker 请求：按目标路径串行化，
@@ -462,7 +634,15 @@ class Http:
             if dest.exists() and self._valid(dest, size, sha1):
                 return dest.stat().st_size
             return self._download_with_sources(
-                candidates, dest, size, sha1, cancel, on_bytes, pause
+                candidates,
+                dest,
+                size,
+                sha1,
+                cancel,
+                on_bytes,
+                pause,
+                parallel,
+                workers,
             )
 
     def _download_with_sources(
@@ -474,6 +654,8 @@ class Http:
         cancel: threading.Event | None,
         on_bytes: Callable[[int], None] | None,
         pause: threading.Event | None,
+        parallel: bool | None = None,
+        workers: int = 0,
     ) -> int:
         def wait_if_paused() -> None:
             while pause is not None and pause.is_set():
@@ -498,6 +680,27 @@ class Http:
                 time.sleep(0.1)
 
         for candidate in candidates:
+            # 大文件优先走多线程分段下载（所有资源通用）；不支持分段或失败时退回单流。
+            want_parallel = parallel if parallel is not None else (
+                size is not None and size >= PARALLEL_MIN_SIZE
+            )
+            if want_parallel and not tmp.exists() and (size is None or size >= 1024 * 1024):
+                try:
+                    total = _segmented_download(
+                        candidate, dest, size, cancel, on_bytes, pause, workers
+                    )
+                    if sha1 and self._sha1(dest) != sha1.lower():
+                        dest.unlink(missing_ok=True)
+                        for part in dest.parent.glob(dest.name + ".part*"):
+                            part.unlink(missing_ok=True)
+                        raise OSError("SHA1 校验失败")
+                    return total
+                except Cancelled:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - 分段失败退回单流
+                    errors.append(
+                        f"{candidate.source_name} {candidate.url}: 分段下载失败 {exc}"
+                    )
             for attempt in range(3):  # 连接被中止/超时最多重试 3 次
                 wait_if_paused()
                 if cancel is not None and cancel.is_set():

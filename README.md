@@ -1,4 +1,4 @@
-# MikanCL v4.8.1 官方文档
+# MikanCL v4.9.1 官方文档
 
 <div align="center">
 
@@ -24,7 +24,7 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 
 ### 版本信息
 
-- **当前版本**：v4.8.1
+- **当前版本**：v4.9.1
 - **框架**：PySide6（Qt6，Fusion 深色主题 + 自绘标题栏）
 - **Python 要求**：3.10+
 - **运行平台**：Windows 10 / 11（x64）
@@ -65,10 +65,11 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 | 找 Mod、整合包、资源包、光影包、材质包 | 「内容中心」双平台搜索，可按 MC 版本 / 加载器 / 材质分辨率过滤，一键装进实例或另存为 |
 | 用中文找 Mod | 直接搜「机械动力」「物品管理器」等中文关键词，卡片自动显示中文译名 |
 | 和朋友联机 | 「多人联机」用陶瓦（Terracotta）房间码组网，无需端口映射或公网 IP |
-| 换 Java / 装 Java | 「Java 中心」一键下载 10 家发行版，可只装轻量 JRE 或完整 JDK；「设置」里手动指定或自动匹配，并可一键检测硬件推荐内存 |
+| 换 Java / 装 Java | 「Java 中心」一键下载 12 家发行版（新增清华 TUNA、华为云国内镜像），可只装轻量 JRE 或完整 JDK；大文件自动多线程分段下载；「设置」里可手动添加 Java 路径、自动匹配或一键检测硬件推荐内存 |
 | 看有哪些第三方依赖没装 | 「依赖补全」页按联机 / 登录 / 运行环境 / 加载器分类列出陶瓦、authlib-injector、Java 运行时、Mod 加载器与 Forbric，显示已安装 / 缺失 / 按需安装，缺失的可直接下载或前往对应页面 |
 | 游戏缺文件 / 缺 Java | 「依赖补全」选版本 → 检查 Java、客户端 Jar、依赖库、资源与日志配置 → 弹窗确认后静默补全，任务全部进入下载中心 |
 | 管账号与皮肤 | 微软正版设备码登录、皮肤站外置登录、离线账号，皮肤查询 / 上传 / 本地皮肤 |
+| 从 PCL / HMCL 换过来 | 「设置 → 游戏」选择对方的配置目录 → 扫描并导入本启动器没有的版本，同时沿用对方的隔离、内存、JVM 参数等设置，mod 与存档仍留在原目录 |
 | 排查「装上了但起不来」 | 启动预检 5 项拦截 + Mod 冲突检测 + 崩溃弹窗一键「去装对应 Java」「补全缺失文件」「修复版本」+ 启动卡死看门狗 + 界面日志与 `install_error.log` 落盘 |
 | 不会装 / 装崩了想查教程 | 「教程中心」内置 8 篇 Markdown 攻略（Forge / Fabric / 光影 / 内存 / Mod 冲突 / Java / NBT / 离线皮肤），支持标题与正文搜索 |
 | 想改世界种子 / 游戏模式 | 「NBT 编辑器」可视化读写 `level.dat` 与 `playerdata/*.dat`，双击改值、右键增删标签，首次保存自动备份 `.bak` |
@@ -184,7 +185,7 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
     离线账号的皮肤写好以后，新版本安装完成、整合包 / 直装包导入完成或实例恢复完成时，会自动把皮肤写入 `CustomSkinLoader/LocalSkin/skins/<玩家名>.png` 并合并 `CustomSkinLoader.json` 的 `loadlist`，再按该版本格式生成兜底资源包；资源包默认不启用，避免把服务器上其他默认皮肤玩家也变成这张皮肤。游戏目录缺少 `resourcepacks` 时会先自动创建，版本隔离为「全部」时同时写入 `versions/<版本>/game`。
 
 34. **「皮肤包」标签页与全版本适配**
-    侧边栏新增「皮肤包」：选择皮肤来源、目标玩家、Steve / Alex 手臂模型与目标版本后，可导出可分享的 `.zip` 皮肤包或直接安装到本机；导入他人皮肤包 / PNG 时会先询问手臂模型。版本适配：1.0–1.5.2 生成 `texturepacks` 纹理包（`pack.txt`），1.6.1–1.21.8 使用 `pack_format`（1 / 2 / 3 … 64），1.21.9+ 与 26.x（含 26.4 测试版）使用 `min_format` / `max_format`，1.20.2+ 使用 `entity/player/wide|slim` 新路径。其他玩家安装同一个皮肤包并启用 CustomSkinLoader 后，就能在服务器按玩家名看到这张皮肤。页面提供「一键添加并覆盖旧皮肤包」：先清理主目录与版本隔离目录下所有旧 `MikanCL-*.zip`（含旧版 `MikanCL-离线皮肤.zip`）及 `options.txt` 中的启用项，再写入当前皮肤，避免旧包残留被误认为新皮肤已生效；普通安装新包时也会自动清理旧包。
+    侧边栏新增「皮肤包」：选择皮肤来源、目标玩家、Steve / Alex 手臂模型与目标版本后，可导出可分享的 `.zip` 皮肤包或直接安装到本机；导入他人皮肤包 / PNG 时会先询问手臂模型。版本适配：1.0–1.5.2 生成 `texturepacks` 纹理包（`pack.txt`），1.6.1–1.21.8 使用 `pack_format`（1 / 2 / 3 … 64）+ `supported_formats` 1–99，1.21.9+ 与 26.x（含 26.4 测试版）使用 `min_format` / `max_format`。生成方式沿用旧版可用皮肤包：同时写入 `textures/entity/steve.png`、`alex.png` 与 `entity/player/wide/steve.png`、`slim/alex.png` 两套路径，避免 1.19.3 / 1.20.2 等版本分界导致某条路径不生效；导出的皮肤包本身就是完整资源包，可直接放进 `resourcepacks`（或 1.5.2 及更早的 `texturepacks`）加载，也可由启动器导入。其他玩家安装同一个皮肤包并启用 CustomSkinLoader 后，就能在服务器按玩家名看到这张皮肤。页面提供「一键添加并覆盖旧皮肤包」：先清理主目录与版本隔离目录下所有旧 `MikanCL-*.zip`（含旧版 `MikanCL-离线皮肤.zip`）及 `options.txt` 中的启用项，再写入当前皮肤，避免旧包残留被误认为新皮肤已生效；普通安装新包时也会自动清理旧包。
 
 35. **智能 JVM 参数（按 Java 版本与游戏版本自适应）**
     设置 → 通用页新增「智能 JVM 参数」开关（默认开启）。启动时按 Java 主版本、游戏版本与分配内存自动追加参数：1.21 及更早使用 Aikar 风格 G1GC（`G1NewSizePercent=30` / `G1MaxNewSizePercent=40`、`G1ReservePercent=20`、`InitiatingHeapOccupancyPercent=15`、`MaxGCPauseMillis=200`、`SurvivorRatio=32`、`MaxTenuringThreshold=1` 等），并关闭 `System.gc()` 显式回收与 perf 共享内存写入；堆 ≥ 4 GB 才启用 `AlwaysPreTouch`，≥ 12 GB 使用 16 MB Region，避免小堆启动变慢；26.x（官方要求 Java 25）改默认分代 ZGC（`-XX:+UseZGC`）。若用户已在额外 JVM 参数里指定 GC（G1 / ZGC / Shenandoah / Parallel / Serial / Epsilon，含 `-XX:-UseG1GC` 这类负向写法）或同名参数，则自动跳过对应项，不覆盖用户配置；Java 7 及更早只补 `MaxPermSize=256M`，Java 版本未知时不追加，防止参数不识别导致启动失败。分配内存超过物理内存 60% 时在启动日志与预检中提示换页风险。
@@ -263,7 +264,8 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 - **下载中心**：独立任务页，统一管理原版安装、加载器安装、整合包、内容下载、Java 下载、纯文件下载等任务，默认最多 5 个任务并发、其余排队，支持暂停 / 恢复 / 取消 / 重试 / 打开目录
 - **版本隔离**：不隔离、仅隔离模组、仅隔离存档、全部隔离（独立游戏目录）四种模式，可按版本单独覆盖
 - **数据目录**：支持添加多个 `.minecraft` 目录，通过侧边栏下拉框快速切换
-- **多线程下载**：线程数可配置（1–328，默认 16），所有任务共用同一套并发与调度策略
+- **从 PCL / HMCL 导入**：设置 → 游戏页选择对方的配置目录（含 `.minecraft` 的那一层，也可直接选 `.minecraft`），扫描后勾选要导入的版本；只导入本启动器没有的版本，并读取 PCL `Setup.ini` / HMCL `hmclversion.cfg` / `.hmcl.json` 中的隔离、内存、JVM 参数等设置，实例直接指向原游戏目录，mod 与存档无需搬移
+- **多线程下载**：线程数可配置（1–328，默认 16），所有任务共用同一套并发与调度策略；单个大文件（≥ 4 MB 且服务器支持 Range）自动按 8 段并发下载，失败自动回退单流
 - **日志与诊断**：界面日志同步落盘 `data/logs/launcher.log`（5MB × 3 轮转）；安装失败时额外写入 `data/logs/install_error.log` 并自动复制日志到剪贴板
 - **单实例保护**：基于 QSharedMemory，避免两个进程同时读写配置与浏览器缓存
 
@@ -300,6 +302,7 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 - **容错**：部分 Mod 下载失败不中断整体安装，失败清单写入 `missing_mods.txt`；支持嵌套目录结构的整合包
 - **直装包兜底**：无清单但包含 `mods/` 或 `config/` 的压缩包按「直装包」处理，自动推断 MC 版本
 - **双格式备份**：支持 CurseForge 分享格式（manifest.json + overrides）与私有 `.mikan` 备份格式（`instance.json` + 内容），可导入、可导出；也可单独「导出整合包源文件」
+- **版本设置里的「整合包」侧边栏**：沿用 `.mikan` 包格式，可把当前版本导出为整合包，也可把 `.mikan` / CF / Modrinth 整合包刷入当前实例——识别 `overrides/`、`client-overrides/` 前缀与根目录直接放置的 `mods`、`config`、`resourcepacks`、`shaderpacks` 等目录（走版本隔离目录），后台线程执行并显示进度，覆盖同名文件前会统计并询问确认，不额外新建实例
 - **实例注册**：安装成功后写入 `instance.json`、自动选中实例、刷新主页版本列表
 
 ### 基岩版（Bedrock）
@@ -327,7 +330,8 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 - **内置浏览器**：优先用 ctypes 托管系统 Edge WebView2 内核（完整 Chromium，H.264/AAC 齐全），B 站等站点视频直接在启动器内播放并支持全屏，多标签、弹窗转标签、Ctrl+T / Ctrl+W 快捷键齐备；用户数据目录固定在 `data/browser/webview2`，Cookie 与登录态自动持久化。系统缺失 WebView2 运行时（Windows 10/11 一般已预装）时自动回退到 QtWebEngine，并亮出「视频可能无法播放 / 用系统浏览器打开」提示条
 - **教程中心**：内置 8 篇 Markdown 攻略，左侧目录 + 右侧渲染，支持搜索、内部锚点与外链跳转，可从教程页直接打开 NBT 编辑器
 - **NBT 编辑器**：纯手写 NBT 读写（13 种标签、gzip 自动识别、类型完整保留），树形查看 / 编辑 `level.dat` 与 `playerdata`，右键增删标签，首次保存自动生成 `.bak`
-- **Java 中心**：Adoptium Temurin、Microsoft OpenJDK、Azul Zulu、Amazon Corretto、Alibaba Dragonwell、Tencent Kona、BellSoft Liberica、IBM Semeru、SAP SapMachine、GraalVM Community 共 10 个发行版，按主版本（8 / 11 / 17 / 21）下载安装；支持选择「JRE（仅运行）」或「JDK（含开发工具）」，JRE 体积更小；自动解压到 `data/` 并在设置中选中，安装完成后按硬件推荐值自动写入最大内存
+- **Java 中心**：Adoptium Temurin、清华 TUNA 镜像（Temurin）、华为云 OpenJDK 镜像、Microsoft OpenJDK、Azul Zulu、Amazon Corretto、Alibaba Dragonwell、Tencent Kona、BellSoft Liberica、IBM Semeru、SAP SapMachine、GraalVM Community 共 12 个发行版，按主版本下载安装；标有「国内镜像」的发行版国内下载更快；支持选择「JRE（仅运行）」或「JDK（含开发工具）」，JRE 体积更小；大文件自动启用多线程分段下载（≥ 4 MB 且服务器支持 Range），自动解压到 `data/` 并在设置中选中，安装完成后按硬件推荐值自动写入最大内存
+- **Java 检测与手动添加**：自动扫描 JAVA_HOME、注册表、各发行版安装目录、启动器自带运行时与 `.gradle/jdks`；检测结果与历史记录合并持久化，刷新时不会再出现「这次有、下次没了」；「设置 → 通用 → Java 运行时」新增「手动添加…」，可选择 `javaw.exe` / `java.exe` 或直接填写安装目录，添加后会长期记住
 - **Forbric 引导式安装**：实验性 Fabric/Forge/NeoForge 三合一加载器，通过 GitHub Releases 自动获取最新安装器与 `Forbric-Installer.bat`，用 Java 21 拉起官方 GUI，后台轮询 `versions/26.2-forbric/26.2-forbric.json`，生成后自动注册实例
 
 ### 界面与联机
@@ -545,7 +549,7 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | 多人联机 | `MultiplayerPage` | 陶瓦联机安装、创建 / 加入房间、房间码复制、联机日志 |
 | 内置浏览器 | `BrowserPage` + `webview2.py` | Edge WebView2 内核（可直接播放 B 站视频）、多标签、Cookie 持久化、QtWebEngine 回退 |
 | Forbric | `ForbricPage` | 版本兼容拦截、安装器下载与 GUI 启动、结果监控 |
-| Java 中心 | `JavaCenterPage` | 10 个 Java 发行版下载与安装，支持选择 JRE（仅运行）/ JDK 与主版本 |
+| Java 中心 | `JavaCenterPage` | 12 个 Java 发行版下载与安装（含清华 TUNA、华为云国内镜像），支持选择 JRE（仅运行）/ JDK 与主版本 |
 | 依赖补全 | `DependenciesPage` | 不可内置第三方依赖清单（陶瓦 / authlib-injector / Java 运行时 / 加载器 / Forbric）、缺失依赖检查、询问式静默补全、下载中心任务 |
 | 教程中心 | `WikiPage` | 内置 8 篇 Markdown 教程（中/英/俄/法/日）、目录浏览、标题与正文搜索、NBT 编辑器入口 |
 | 基岩版 | `BedrockPage` | 三类来源（MCAPPX 历史 / 商店正式版 / 商店预览版）分类列表、架构与搜索过滤、内置浏览器（Edge 内核）下载、下载目录监听归档、安装 / 启动 / 卸载、打开下载目录 |

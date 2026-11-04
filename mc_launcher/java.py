@@ -9,12 +9,13 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 from . import USER_AGENT
 from .config import DATA_DIR
@@ -91,13 +92,22 @@ def _candidate_dirs() -> list[Path]:
         ("ProgramFiles", "Java"),
         ("ProgramFiles", "Eclipse Adoptium"),
         ("ProgramFiles", "Eclipse Foundation"),
+        ("ProgramFiles", "AdoptOpenJDK"),
         ("ProgramFiles", "Microsoft"),
         ("ProgramFiles", "BellSoft"),
         ("ProgramFiles", "Zulu"),
         ("ProgramFiles", "Amazon Corretto"),
         ("ProgramFiles", "OpenLogic"),
+        ("ProgramFiles", "Temurin"),
+        ("ProgramFiles", "Semeru"),
+        ("ProgramFiles", "Dragonwell"),
+        ("ProgramFiles", "GraalVM"),
+        ("ProgramFiles", "SapMachine"),
+        ("ProgramFiles", "Tencent"),
+        ("ProgramFiles", "Alibaba"),
         ("ProgramFiles(x86)", "Java"),
         ("LOCALAPPDATA", "Programs"),
+        ("LOCALAPPDATA", "Programs/Java"),
         ("LOCALAPPDATA", "Microsoft"),
     ):
         root = os.environ.get(key)
@@ -111,12 +121,47 @@ def _candidate_dirs() -> list[Path]:
         if appdata:
             dirs.append(Path(appdata) / launcher)
         dirs.append(Path.home() / launcher)
+    # IDE / 构建工具自带的 JDK
+    dirs.append(Path.home() / ".gradle" / "jdks")
+    dirs.append(Path.home() / ".jdks")
     return dirs
 
 
-def detect_java_installed() -> list[JavaInfo]:
-    """扫描系统上常见的 Java 安装目录（含启动器自带运行时）。"""
+def _collect_root_paths(root: Path, out: list[Path], max_children: int = 2000) -> None:
+    """枚举一个安装根目录下的 Java 候选路径（全量枚举，不再截断，避免漏检）。"""
+    if not root.exists():
+        return
+    out.append(root)
+    try:
+        children = [child for child in root.iterdir() if child.is_dir()][:max_children]
+    except OSError:
+        return
+    for child in children:
+        out.append(child)
+        if (child / "bin").is_dir():
+            out.append(child / "bin")
+        # 有些发行版是 运行时/<jdk-版本>/bin 这种两级结构
+        try:
+            grandchildren = [g for g in child.iterdir() if g.is_dir()][:200]
+        except OSError:
+            continue
+        for grand in grandchildren:
+            if (grand / "bin").is_dir():
+                out.append(grand / "bin")
+
+
+def detect_java_installed(extra_paths: Iterable[str] = ()) -> list[JavaInfo]:
+    """扫描系统上常见的 Java 安装目录（含启动器自带运行时与手动添加的路径）。
+
+    extra_paths 中的路径（手动添加 / 上次扫描结果）会被一并探测，这样即使某次
+    扫描因目录枚举顺序或文件占用漏掉某个 Java，也能从持久化记录中恢复。
+    """
     paths: list[Path] = []
+    for item in extra_paths or ():
+        text = str(item or "").strip().strip('"')
+        if text:
+            paths.append(Path(text))
+
     which = shutil.which("java")
     if which:
         paths.append(Path(which))
@@ -125,26 +170,7 @@ def detect_java_installed() -> list[JavaInfo]:
         paths.append(Path(which_w))
 
     for root in _candidate_dirs():
-        if not root.exists():
-            continue
-        paths.append(root)
-        try:
-            children = list(root.iterdir())[:60]
-        except OSError:
-            continue
-        for child in children:
-            if child.is_dir():
-                paths.append(child)
-                bin_dir = child / "bin"
-                if bin_dir.is_dir():
-                    paths.append(bin_dir)
-                runtime_bin = child / "bin" / "java.exe"
-                if runtime_bin.exists():
-                    paths.append(runtime_bin)
-                # .minecraft/runtime 下可能存在 java.exe
-                nested = list(child.glob("*/bin/java.exe"))[:3]
-                paths.extend(nested)
-                paths.extend(list(child.glob("*/bin"))[:3])
+        _collect_root_paths(root, paths)
 
     registry_paths = _registry_java_paths()
     paths.extend(Path(p) for p in registry_paths)
@@ -167,6 +193,24 @@ def detect_java_installed() -> list[JavaInfo]:
                     result[key] = info
                 break
     return sorted(result.values(), key=lambda j: (-j.major, j.path))
+
+
+def merge_java_lists(existing: Iterable[JavaInfo], incoming: Iterable[JavaInfo]) -> list[JavaInfo]:
+    """按路径合并两组扫描结果，保留已有条目，避免一次扫描结果覆盖掉另一组。"""
+    merged: dict[str, JavaInfo] = {}
+    for info in existing or []:
+        # 已卸载 / 路径失效的旧条目在刷新时移除；本次新扫描到的条目直接信任。
+        if info is None or not Path(info.path).exists():
+            continue
+        merged[java_key(info.path)] = info
+    for info in incoming or []:
+        if info is None:
+            continue
+        key = java_key(info.path)
+        current = merged.get(key)
+        if current is None or current.bits < info.bits:
+            merged[key] = info
+    return sorted(merged.values(), key=lambda j: (-j.major, j.path))
 
 
 def _registry_java_paths() -> list[str]:
@@ -260,6 +304,28 @@ JAVA_DISTRIBUTIONS: tuple[dict, ...] = (
         "majors": (8, 11, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27),
         "channel": "Adoptium 官方 API",
         "jre": True,
+    },
+    {
+        "id": "tuna",
+        "name": "清华 TUNA 镜像（Temurin）",
+        "vendor": "TUNA / Adoptium",
+        "homepage": "https://mirrors.tuna.tsinghua.edu.cn/Adoptium/",
+        "description": "清华大学开源软件镜像站同步的 Temurin 构建，国内下载速度快。",
+        "majors": (8, 11, 17, 18, 19, 20, 21, 22, 23, 24, 25),
+        "channel": "国内镜像 · 清华 TUNA",
+        "jre": True,
+        "domestic": True,
+    },
+    {
+        "id": "huawei",
+        "name": "华为云 OpenJDK 镜像",
+        "vendor": "Huawei Cloud",
+        "homepage": "https://mirrors.huaweicloud.com/openjdk/",
+        "description": "华为云镜像站提供的 OpenJDK 官方构建，国内直连速度稳定。",
+        "majors": (8, 11, 17, 18, 19, 20, 21, 22, 23, 24, 25),
+        "channel": "国内镜像 · 华为云",
+        "jre": False,
+        "domestic": True,
     },
     {
         "id": "microsoft",
@@ -1051,8 +1117,114 @@ def _fallback_graalvm(major: int, timeout: int, package: str = "jdk") -> list[di
     )
 
 
+# ---------------------------------------------------------------------------
+# 国内镜像源：清华 TUNA（Adoptium 同步）与华为云 OpenJDK
+# ---------------------------------------------------------------------------
+_TUNA_ADOPTIUM = "https://mirrors.tuna.tsinghua.edu.cn/Adoptium"
+_HUAWEI_OPENJDK = "https://mirrors.huaweicloud.com/openjdk"
+
+
+def _html_links(html: str) -> list[str]:
+    links = re.findall(r'href="([^"]+)"', html or "")
+    return [link for link in links if not link.startswith(("?", "#", "javascript:"))]
+
+
+def _fetch_tuna_versions(
+    major: int, timeout: int, limit: int, package: str = "jdk"
+) -> list[dict]:
+    pkg = "jre" if str(package).lower() == "jre" else "jdk"
+    base = f"{_TUNA_ADOPTIUM}/{int(major)}/{pkg}/x64/windows/"
+    html = Http(timeout=timeout).request(base).decode("utf-8", "replace")
+    links = [
+        urllib.parse.urljoin(base, link)
+        for link in _html_links(html)
+        if link.lower().endswith(".zip") and "windows" in link.lower()
+    ]
+    if not links:
+        return []
+    links = links[-max(1, limit):]
+
+    def build(link: str) -> dict:
+        name = urllib.parse.urlsplit(link).path.rsplit("/", 1)[-1]
+        match = re.search(r"hotspot_([0-9][0-9._]*u[0-9]+b[0-9]+|[0-9][0-9._]*)", name, re.I)
+        raw = match.group(1) if match else name.rsplit(".", 1)[0]
+        version = raw.replace("_", "+", 1).replace("_", ".").strip("._")
+        _, size = _head_url(link, timeout=min(timeout, 15))
+        return _version_entry(
+            "tuna",
+            major,
+            version,
+            link,
+            name=name,
+            size=size,
+            note=f"清华 TUNA 镜像 · {name}",
+            package=pkg,
+            latest=True,
+        )
+
+    rows: list[dict] = []
+    with ThreadPoolExecutor(max_workers=min(4, len(links))) as pool:
+        for row in pool.map(build, links):
+            if row:
+                rows.append(row)
+    return sorted(rows, key=lambda row: _version_key(row.get("version")), reverse=True)[:limit]
+
+
+def _fetch_huawei_versions(
+    major: int, timeout: int, limit: int, package: str = "jdk"
+) -> list[dict]:
+    if str(package).lower() == "jre":
+        return []  # 华为云镜像只提供完整 JDK
+    index = Http(timeout=timeout).request(_HUAWEI_OPENJDK + "/").decode("utf-8", "replace")
+    pattern = re.compile(rf"^{int(major)}[._][0-9._]*$")
+    dirs = sorted(
+        {
+            link.strip("/")
+            for link in _html_links(index)
+            if link.endswith("/") and pattern.match(link.strip("/"))
+        },
+        key=_version_key,
+        reverse=True,
+    )[: max(1, limit)]
+    rows: list[dict] = []
+    for folder in dirs:
+        page_url = f"{_HUAWEI_OPENJDK}/{folder}/"
+        try:
+            page = Http(timeout=timeout).request(page_url).decode("utf-8", "replace")
+        except DownloadError:
+            continue
+        zips = [
+            urllib.parse.urljoin(page_url, link)
+            for link in _html_links(page)
+            if link.lower().endswith("_windows-x64_bin.zip")
+        ]
+        if not zips:
+            continue
+        link = zips[0]
+        name = urllib.parse.urlsplit(link).path.rsplit("/", 1)[-1]
+        _, size = _head_url(link, timeout=min(timeout, 15))
+        rows.append(
+            _version_entry(
+                "huawei",
+                major,
+                folder,
+                link,
+                name=name,
+                size=size,
+                note=f"华为云镜像 · {name}",
+                latest=not rows,
+                package="jdk",
+            )
+        )
+        if len(rows) >= limit:
+            break
+    return rows
+
+
 _FETCHERS: dict[str, Callable[[int, int, int, str], list[dict]]] = {
     "temurin": _fetch_adoptium_versions,
+    "tuna": _fetch_tuna_versions,
+    "huawei": _fetch_huawei_versions,
     "microsoft": _fetch_microsoft_versions,
     "azul": _fetch_azul_versions,
     "corretto": _fetch_corretto_versions,
@@ -1066,6 +1238,10 @@ _FETCHERS: dict[str, Callable[[int, int, int, str], list[dict]]] = {
 
 _FALLBACK_FETCHERS: dict[str, Callable[[int, int, str], list[dict]]] = {
     "temurin": _fallback_adoptium,
+    # TUNA 是 Adoptium 的同步镜像，源挂了回退 Adoptium 官方链接
+    "tuna": lambda major, timeout, pkg: _fallback_adoptium(major, timeout, pkg),
+    # 华为云提供 OpenJDK 构建，回退到 Temurin 官方 JDK 兜底
+    "huawei": lambda major, timeout, pkg: _fallback_adoptium(major, timeout, pkg),
     "microsoft": _fallback_microsoft,
     "azul": _fallback_azul,
     "corretto": _fallback_corretto,
@@ -1194,6 +1370,8 @@ def download_java(
         on_bytes=on_bytes,
         cancel=cancel,
         pause=pause,
+        parallel=True,
+        workers=8,
     )
     if target.exists():
         shutil.rmtree(target, ignore_errors=True)

@@ -7,8 +7,11 @@
 - 资源包 / 纹理包仅作为没有 CustomSkinLoader 时的兜底，默认只写入不自动启用。
 - 版本适配：
   * 1.0–1.5.2：纹理包（texturepacks/ + pack.txt + textures/entity/*.png）
-  * 1.6.1–1.21.8：资源包（pack.mcmeta 的 pack_format）
-  * 1.21.9+（含 26.x）：资源包（min_format / max_format，supported_formats 已移除）
+  * 1.6.1–1.21.8：资源包（pack.mcmeta 的 pack_format + supported_formats 1–99）
+  * 1.21.9+（含 26.x）：资源包（min_format / max_format）
+- 资源包沿用旧版写法，同时写入新旧两套皮肤路径（textures/entity/steve.png、alex.png
+  与 textures/entity/player/wide/steve.png、slim/alex.png），任一版本都能命中；
+  导出的皮肤包本身就是一个可直接放进 resourcepacks / texturepacks 的资源包。
 """
 
 from __future__ import annotations
@@ -110,16 +113,20 @@ def pack_info(version_id: str) -> dict:
 
 
 def texture_paths(version_id: str, model: str) -> list[str]:
-    """按版本与模型返回默认玩家皮肤纹理路径（用于兜底资源包 / 纹理包）。"""
+    """返回玩家默认皮肤纹理路径。
+
+    沿用旧版皮肤包的写法：新旧两套路径同时写入，避免因版本分界判断偏差
+    （1.19.3 / 1.20.2 等）导致资源包在游戏里不生效；1.5.2 及更早是纹理包路径。
+    """
     parsed = version_tuple(version_id)
-    slim = (model or "classic") == "slim"
     if parsed is not None and parsed < (1, 6, 1):
-        return [f"textures/entity/{'alex' if slim else 'steve'}.png"]
-    if parsed is not None and parsed >= (1, 20, 2):
-        return [
-            f"assets/minecraft/textures/entity/player/{'slim/alex' if slim else 'wide/steve'}.png"
-        ]
-    return [f"assets/minecraft/textures/entity/{'alex' if slim else 'steve'}.png"]
+        return ["textures/entity/steve.png", "textures/entity/alex.png"]
+    return [
+        "assets/minecraft/textures/entity/steve.png",
+        "assets/minecraft/textures/entity/alex.png",
+        "assets/minecraft/textures/entity/player/wide/steve.png",
+        "assets/minecraft/textures/entity/player/slim/alex.png",
+    ]
 
 
 def _mcmeta(description: str, info: dict) -> dict:
@@ -128,10 +135,12 @@ def _mcmeta(description: str, info: dict) -> dict:
         pack["min_format"] = [int(info["pack_format"]), 0]
         pack["max_format"] = [999, 0]
     else:
+        # 旧包写法：pack_format 仅表示起始格式，supported_formats 放宽到 1–99，
+        # 让相邻版本的格式差异不会把资源包判为不兼容。
         pack["pack_format"] = int(info["pack_format"])
         pack["supported_formats"] = {
             "min_inclusive": 1,
-            "max_inclusive": int(info["pack_format"]),
+            "max_inclusive": 99,
         }
     return {"pack": pack}
 
@@ -176,7 +185,6 @@ def export_skin_pack(
     if not name:
         raise SkinPackError("请填写目标玩家名。")
     info = pack_info(version_id)
-    inner = pack_filename(name)
     meta = {
         "format": SKIN_PACK_FORMAT,
         "version": SKIN_PACK_VERSION,
@@ -186,7 +194,6 @@ def export_skin_pack(
         "pack_format": info["pack_format"],
         "pack_kind": info["kind"],
         "skin": "skin.png",
-        "resourcepack": f"resourcepack/{inner}",
         "requires": "CustomSkinLoader",
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -195,7 +202,10 @@ def export_skin_pack(
         f"目标玩家：{name}\n"
         f"手臂模型：{MODEL_LABELS.get(model or 'classic', model)}\n"
         f"适配版本：{version_id or '通用'}（{info['label']}）\n\n"
-        "安装方式：在启动器的「皮肤包」页选择本文件导入，或手动解压后把 skin.png 放到\n"
+        "本文件本身就是一个资源包：\n"
+        "  1.6.1 及以后：直接放进 .minecraft/resourcepacks 并在游戏内启用；\n"
+        "  1.5.2 及更早：直接放进 .minecraft/texturepacks。\n"
+        "也可以在启动器的「皮肤包」页导入，会自动写入\n"
         "CustomSkinLoader/LocalSkin/skins/<玩家名>.png。\n"
         "只有安装 CustomSkinLoader Mod 后才会按玩家名生效，不会影响服务器其他玩家。\n"
     )
@@ -203,11 +213,14 @@ def export_skin_pack(
         with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.writestr("pack.json", json.dumps(meta, ensure_ascii=False, indent=2))
             archive.writestr("skin.png", image)
-            archive.writestr(
-                f"resourcepack/{inner}",
-                resourcepack_bytes(image, version_id, model or "classic", f"MikanCL 皮肤包 · {name}"),
-            )
             archive.writestr("README.txt", readme)
+            # 与安装到游戏目录的兜底包完全一致，导出文件可直接当资源包加载
+            pack_bytes = resourcepack_bytes(
+                image, version_id, model or "classic", f"MikanCL 皮肤包 · {name}"
+            )
+            with zipfile.ZipFile(io.BytesIO(pack_bytes)) as inner:
+                for entry in inner.infolist():
+                    archive.writestr(entry.filename, inner.read(entry.filename))
     except (OSError, ValueError) as exc:
         raise SkinPackError(f"写入皮肤包失败：{exc}") from exc
     return target

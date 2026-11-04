@@ -36,7 +36,13 @@ from PySide6.QtWidgets import (
 
 from .. import APP_NAME
 from ..config import ISOLATION_LABELS, PROCESS_PRIORITIES
-from ..content import ContentError, ContentProject, ContentVersion
+from ..content import (
+    ContentError,
+    ContentProject,
+    ContentVersion,
+    detect_mod_conflicts,
+    scan_mod_metadata,
+)
 from ..context import AppContext
 from ..installer import repair_version_json
 from ..version import (
@@ -49,7 +55,39 @@ from ..version import (
 )
 from .widgets import Badge, Card, card_title_row, hline, page_header, scroll_page
 
-NAV_ITEMS = ("概览", "游戏设置", "模组管理", "资源包管理", "光影包管理", "版本管理")
+NAV_ITEMS = (
+    ("overview", "概览"),
+    ("game", "游戏设置"),
+    ("mods", "模组管理"),
+    ("resourcepacks", "资源包管理"),
+    ("shaderpacks", "光影包管理"),
+    ("modpack", "整合包"),
+    ("manage", "版本管理"),
+)
+
+# 整合包内可识别的顶层目录：overrides / client-overrides 前缀，以及直接放在根目录的目录
+_MODPACK_PREFIXES = ("overrides/", "client-overrides/")
+_MODPACK_ROOT_DIRS = {
+    "mods",
+    "config",
+    "resourcepacks",
+    "shaderpacks",
+    "defaultconfigs",
+    "kubejs",
+    "scripts",
+}
+
+
+def _modpack_relative(name: str) -> str:
+    """把压缩包条目映射为相对游戏目录的路径；不属于可导入范围时返回空串。"""
+    for prefix in _MODPACK_PREFIXES:
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    for folder in _MODPACK_ROOT_DIRS:
+        if name.startswith(f"{folder}/"):
+            return name
+    return ""
+
 
 FILE_CATEGORIES = {
     "mods": {
@@ -313,6 +351,38 @@ class ExportPackWorker(QThread):
             self.failed.emit(str(exc))
 
 
+class ImportPackWorker(QThread):
+    progress = Signal(float, str)
+    done = Signal(int)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        archive_path: Path,
+        entries: list[tuple[str, Path]],
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.archive_path = Path(archive_path)
+        self.entries = list(entries)
+
+    def run(self) -> None:
+        try:
+            total = max(1, len(self.entries))
+            written = 0
+            with zipfile.ZipFile(self.archive_path) as archive:
+                for index, (name, destination) in enumerate(self.entries):
+                    self.progress.emit(index / total, f"导入 {destination.name}")
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    with archive.open(name) as source, open(destination, "wb") as fh:
+                        shutil.copyfileobj(source, fh, 1024 * 1024)
+                    written += 1
+            self.progress.emit(1.0, "导入完成")
+            self.done.emit(written)
+        except (OSError, ValueError, zipfile.BadZipFile) as exc:
+            self.failed.emit(str(exc))
+
+
 class ControlPage(QWidget):
     """单个 Minecraft 版本/实例的设置页。"""
 
@@ -329,6 +399,7 @@ class ControlPage(QWidget):
         self._mod_update_worker: ModUpdateWorker | None = None
         self._mod_apply_worker: ModUpdateApplyWorker | None = None
         self._export_worker: ExportPackWorker | None = None
+        self._import_worker: ImportPackWorker | None = None
         self._repair_worker: RepairVersionWorker | None = None
         self.overview_labels: dict[str, QLabel] = {}
         self.manage_labels: dict[str, QLabel] = {}
@@ -385,23 +456,34 @@ class ControlPage(QWidget):
         self.nav_list = QListWidget()
         self.nav_list.setObjectName("SettingsNav")
         self.nav_list.setFixedWidth(184)
-        for text in NAV_ITEMS:
+        for _key, text in NAV_ITEMS:
             self.nav_list.addItem(text)
         splitter.addWidget(self.nav_list)
 
         self.stack = QStackedWidget()
         splitter.addWidget(self.stack)
-
-        self.stack.addWidget(scroll_page(self._build_overview_page()))
-        self.stack.addWidget(scroll_page(self._build_game_page()))
+        self._nav_pages: dict[str, int] = {}
+        self._add_nav_page("overview", scroll_page(self._build_overview_page()))
+        self._add_nav_page("game", scroll_page(self._build_game_page()))
         for key in ("mods", "resourcepacks", "shaderpacks"):
-            self.stack.addWidget(self._build_files_page(key))
-        self.stack.addWidget(scroll_page(self._build_manage_page()))
+            self._add_nav_page(key, self._build_files_page(key))
+        self._add_nav_page("modpack", scroll_page(self._build_modpack_page()))
+        self._add_nav_page("manage", scroll_page(self._build_manage_page()))
 
         self.nav_list.currentRowChanged.connect(self._on_nav_changed)
         self.nav_list.setCurrentRow(0)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
+
+    def _add_nav_page(self, key: str, page: QWidget) -> None:
+        """按 key 登记页面，避免依赖插入顺序与侧边栏一一对应。"""
+        self._nav_pages[key] = self.stack.addWidget(page)
+
+    def _select_nav(self, key: str) -> None:
+        for row, (item_key, _label) in enumerate(NAV_ITEMS):
+            if item_key == key:
+                self.nav_list.setCurrentRow(row)
+                return
 
     def _build_overview_page(self) -> QWidget:
         page = QWidget()
@@ -703,6 +785,173 @@ class ControlPage(QWidget):
         layout.addWidget(card, 1)
         return page
 
+    def _build_modpack_page(self) -> QWidget:
+        """整合包页：沿用 .mikan 包格式，导出当前版本或把备份恢复到当前版本。"""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        export_card = Card(margins=20, spacing=10)
+        export_card.body.addWidget(
+            card_title_row(
+                "导出为整合包",
+                "把当前版本的 mods、资源包、光影包、config 与 instance.json 打包为 .mikan",
+            )
+        )
+        export_tip = QLabel(
+            "导出的 .mikan 可直接拖入本启动器恢复为独立实例，也兼容在 MikanCL 之外作为整包备份保存。"
+        )
+        export_tip.setObjectName("Tiny")
+        export_tip.setWordWrap(True)
+        export_card.body.addWidget(export_tip)
+        export_row = QHBoxLayout()
+        export_btn = QPushButton("导出当前版本为 .mikan…")
+        export_btn.clicked.connect(self._export_modpack)
+        export_row.addWidget(export_btn)
+        export_row.addStretch(1)
+        export_card.body.addLayout(export_row)
+        layout.addWidget(export_card)
+
+        import_card = Card(margins=20, spacing=10)
+        import_card.body.addWidget(
+            card_title_row(
+                "导入整合包到当前版本",
+                "把 .mikan / CurseForge / Modrinth 整合包中的文件写入当前实例（不新建实例）",
+            )
+        )
+        import_tip = QLabel(
+            "识别包内的 overrides/、client-overrides/ 前缀，以及直接放在根目录的 "
+            "mods、config、resourcepacks、shaderpacks 等目录；导入会覆盖同名文件。"
+            "包内 manifest 中需要在线下载的 mod 不会被自动下载。"
+            "若想新建独立实例，请到侧边栏「整合包」页或直接拖入压缩包。"
+        )
+        import_tip.setObjectName("Tiny")
+        import_tip.setWordWrap(True)
+        import_card.body.addWidget(import_tip)
+        import_row = QHBoxLayout()
+        self.import_btn = QPushButton("选择整合包并导入…")
+        self.import_btn.clicked.connect(self._import_modpack_into_current)
+        import_row.addWidget(self.import_btn)
+        import_row.addStretch(1)
+        import_card.body.addLayout(import_row)
+        self.import_progress = QProgressBar()
+        self.import_progress.setRange(0, 100)
+        self.import_progress.setTextVisible(False)
+        self.import_progress.setVisible(False)
+        import_card.body.addWidget(self.import_progress)
+        self.import_status = QLabel("")
+        self.import_status.setObjectName("Tiny")
+        self.import_status.setWordWrap(True)
+        self.import_status.setVisible(False)
+        import_card.body.addWidget(self.import_status)
+        layout.addWidget(import_card)
+
+        layout.addStretch(1)
+        return page
+
+    def _modpack_entries(self, archive_path: Path, root: Path) -> list[tuple[str, Path]]:
+        """列出压缩包内可导入的条目与目标路径（不含目录项与越界路径）。"""
+        targets = {
+            "mods": self._files_dir("mods"),
+            "resourcepacks": self._files_dir("resourcepacks"),
+            "shaderpacks": self._files_dir("shaderpacks"),
+        }
+        entries: list[tuple[str, Path]] = []
+        with zipfile.ZipFile(archive_path) as archive:
+            for name in archive.namelist():
+                if name.endswith("/"):
+                    continue
+                relative = _modpack_relative(name)
+                if not relative:
+                    continue
+                parts = Path(relative).parts
+                if ".." in parts or relative.startswith(("/", "\\")) or not parts:
+                    continue
+                base = targets.get(parts[0], root / parts[0])
+                destination = base.joinpath(*parts[1:]) if len(parts) > 1 else base
+                entries.append((name, destination))
+        return entries
+
+    def _import_modpack_into_current(self) -> None:
+        version = self._current_version()
+        if version is None:
+            QMessageBox.information(self, APP_NAME, "请先选择一个版本。")
+            return
+        if self._import_worker is not None and self._import_worker.isRunning():
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择整合包",
+            str(Path.home()),
+            "整合包 (*.mikan *.zip *.mrpack);;所有文件 (*)",
+        )
+        if not path:
+            return
+        archive_path = Path(path)
+        root = self._instance_dir()
+        try:
+            entries = self._modpack_entries(archive_path, root)
+        except (OSError, zipfile.BadZipFile) as exc:
+            QMessageBox.warning(self, APP_NAME, f"导入失败：{exc}")
+            return
+        if not entries:
+            QMessageBox.warning(
+                self,
+                APP_NAME,
+                "这个压缩包里没有可导入的文件（需包含 overrides/、client-overrides/ "
+                "或根目录 mods、config 等目录）。",
+            )
+            return
+        overwrites = sum(1 for _name, destination in entries if destination.exists())
+        if overwrites:
+            confirm = QMessageBox.question(
+                self,
+                APP_NAME,
+                f"本次导入将覆盖 {overwrites} 个同名文件（共 {len(entries)} 个文件），是否继续？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if confirm != QMessageBox.Yes:
+                return
+        self.import_btn.setEnabled(False)
+        self.import_btn.setText("导入中…")
+        self.import_progress.setValue(0)
+        self.import_progress.setVisible(True)
+        self.import_status.setText(f"正在导入 {archive_path.name}…")
+        self.import_status.setVisible(True)
+        self._import_worker = ImportPackWorker(archive_path, entries, self)
+        self._import_worker.progress.connect(self._on_modpack_import_progress)
+        self._import_worker.done.connect(self._on_modpack_imported)
+        self._import_worker.failed.connect(self._on_modpack_import_failed)
+        self._import_worker.finished.connect(self._clear_import_worker)
+        self._import_worker.start()
+
+    def _clear_import_worker(self) -> None:
+        self._import_worker = None
+
+    def _reset_import_ui(self) -> None:
+        self.import_btn.setEnabled(True)
+        self.import_btn.setText("选择整合包并导入…")
+        self.import_progress.setVisible(False)
+        self.import_status.setVisible(False)
+
+    def _on_modpack_import_progress(self, fraction: float, text: str) -> None:
+        self.import_progress.setValue(int(max(0.0, min(1.0, fraction)) * 100))
+        if text:
+            self.import_status.setText(text)
+
+    def _on_modpack_imported(self, count: int) -> None:
+        self._reset_import_ui()
+        self.ctx.bus.toast.emit(f"已导入 {count} 个文件到当前版本")
+        self.ctx.bus.log.emit(f"[整合包] 已把整合包导入到 {self._instance_dir()}")
+        self.refresh()
+
+    def _on_modpack_import_failed(self, message: str) -> None:
+        self._reset_import_ui()
+        self.ctx.bus.log.emit(f"[整合包] 导入失败：{message}")
+        QMessageBox.warning(self, APP_NAME, f"导入失败：{message}")
+
     def _build_manage_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -757,9 +1006,6 @@ class ControlPage(QWidget):
         export_script = QPushButton("导出启动脚本…")
         export_script.clicked.connect(self._export_launch_script)
         buttons.addWidget(export_script)
-        export_pack = QPushButton("导出为整合包…")
-        export_pack.clicked.connect(self._export_modpack)
-        buttons.addWidget(export_pack)
         buttons.addStretch(1)
         remove_version = QPushButton("删除版本目录")
         remove_version.setObjectName("Danger")
@@ -770,6 +1016,11 @@ class ControlPage(QWidget):
         remove_instance.clicked.connect(self._remove_instance_record)
         buttons.addWidget(remove_instance)
         card.body.addLayout(buttons)
+
+        migration_tip = QLabel("导出的整合包已移至左侧「整合包」页，可在该页导出或导入当前版本。")
+        migration_tip.setObjectName("Tiny")
+        migration_tip.setWordWrap(True)
+        card.body.addWidget(migration_tip)
 
         self.repair_progress = QProgressBar()
         self.repair_progress.setRange(0, 100)
@@ -1187,8 +1438,10 @@ class ControlPage(QWidget):
         return self._versions.get(version_id)
 
     def _on_nav_changed(self, index: int) -> None:
-        if 0 <= index < self.stack.count():
-            self.stack.setCurrentIndex(index)
+        if 0 <= index < len(NAV_ITEMS):
+            page = self._nav_pages.get(NAV_ITEMS[index][0])
+            if page is not None:
+                self.stack.setCurrentIndex(page)
 
     def _reload_instances(self) -> None:
         current = self.ctx.config.selected_instance_id
@@ -1259,8 +1512,7 @@ class ControlPage(QWidget):
         index = self.version_combo.findData(version_id)
         if index >= 0:
             self.version_combo.setCurrentIndex(index)
-        self.nav_list.setCurrentRow(1)
-        self.stack.setCurrentIndex(1)
+        self._select_nav("game")
         self._reload_version_settings()
 
     # ------------------------------------------------------------------
@@ -1680,10 +1932,6 @@ class ControlPage(QWidget):
         label = self._file_conflict_labels.get(key)
         if label is not None:
             label.setVisible(False)
-        try:
-            from ..content import detect_mod_conflicts, scan_mod_metadata
-        except ImportError:
-            return  # 并行开发中：content 的扫描函数尚未就绪，静默跳过
         mods_dir = self._files_dir("mods")
         if not mods_dir.is_dir():
             return

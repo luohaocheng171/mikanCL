@@ -49,7 +49,7 @@ from ..config import (
 from ..context import AppContext, wait_thread
 from ..hardware import memory_summary, recommend_memory_mb
 from ..i18n import SUPPORTED_LANGUAGES, t, translation_file
-from ..java import detect_java_installed, download_java, java_key
+from ..java import detect_java_installed, download_java, merge_java_lists, probe_java
 from ..net import Cancelled, apply_proxy, test_source
 from . import theme
 from .widgets import Card, card_title_row, page_header, scroll_page
@@ -127,8 +127,12 @@ class JavaDownloadWorker(QThread):
 class RescanJavaWorker(QThread):
     done = Signal(list)
 
+    def __init__(self, extra_paths: list[str] | None = None, parent=None):
+        super().__init__(parent)
+        self.extra_paths = list(extra_paths or [])
+
     def run(self) -> None:
-        self.done.emit(detect_java_installed())
+        self.done.emit(detect_java_installed(self.extra_paths))
 
 
 class SourceDialog(QDialog):
@@ -829,6 +833,19 @@ class SettingsPage(QWidget):
         game_dir_row.addWidget(open_game)
         form.addRow(self.tr("数据目录"), game_dir_row)
 
+        launch_import_row = QHBoxLayout()
+        launch_import_row.setSpacing(8)
+        launch_import_tip = QLabel(
+            self.tr("从 PCL2 / HMCL 的配置目录导入本启动器没有的版本，并沿用对方的游戏设置。")
+        )
+        launch_import_tip.setObjectName("Tiny")
+        launch_import_tip.setWordWrap(True)
+        launch_import_row.addWidget(launch_import_tip, 1)
+        import_launcher = QPushButton(self.tr("从 PCL / HMCL 导入…"))
+        import_launcher.clicked.connect(self._open_launcher_import)
+        launch_import_row.addWidget(import_launcher)
+        form.addRow(self.tr("导入配置"), launch_import_row)
+
         self.isolation_combo = QComboBox()
         for key, label in ISOLATION_LABELS.items():
             self.isolation_combo.addItem(self.tr(label), key)
@@ -924,6 +941,10 @@ class SettingsPage(QWidget):
         rescan = QPushButton(self.tr("重新扫描"))
         rescan.clicked.connect(self._rescan_java)
         top.addWidget(rescan)
+        add_java = QPushButton(self.tr("手动添加…"))
+        add_java.setObjectName("Ghost")
+        add_java.clicked.connect(self._add_java_manual)
+        top.addWidget(add_java)
         self.java_download_button = QPushButton(self.tr("下载 Java…"))
         self.java_download_button.clicked.connect(self._download_java)
         top.addWidget(self.java_download_button)
@@ -1513,6 +1534,12 @@ class SettingsPage(QWidget):
         path.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
+    def _open_launcher_import(self) -> None:
+        from .dialog_import_launcher import ImportLauncherDialog
+
+        dialog = ImportLauncherDialog(self.ctx, self)
+        dialog.exec()
+
     def _on_isolation_changed(self, index: int) -> None:
         self.ctx.config.isolation_mode = str(self.isolation_combo.itemData(index) or "none")
         self._ctx_save()
@@ -1607,14 +1634,74 @@ class SettingsPage(QWidget):
         self.java_download_button.setText("下载 Java…")
 
     def _on_java_downloaded(self, info) -> None:
-        self.ctx.javas = detect_java_installed()
-        if info is not None and all(
-            java_key(j.path) != java_key(info.path) for j in self.ctx.javas
-        ):
-            self.ctx.javas.append(info)
+        found = detect_java_installed(self.ctx.config.java_scan_paths())
+        if info is not None:
+            found.append(info)
+        self._apply_java_scan(found)
         self.ctx.bus.javas_changed.emit()
         self.ctx.bus.toast.emit(f"Java 已就绪：{getattr(info, 'version', '')}")
-        self._rebuild_java_table()
+
+    def _apply_java_scan(self, found: list) -> list:
+        """扫描结果与现有列表合并后落库，避免两批结果互相覆盖导致 Java 丢失。"""
+        merged = merge_java_lists(self.ctx.javas, found)
+        self.ctx.javas = merged
+        self.ctx.config.remember_java_paths(java.path for java in merged)
+        return merged
+
+    def _add_java_manual(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("手动添加 Java")
+        dialog.setMinimumWidth(520)
+        layout = QVBoxLayout(dialog)
+        tip = QLabel("选择 javaw.exe / java.exe，或直接填写 Java 安装目录。")
+        tip.setObjectName("Muted")
+        tip.setWordWrap(True)
+        layout.addWidget(tip)
+        row = QHBoxLayout()
+        edit = QLineEdit()
+        edit.setPlaceholderText(r"例如 C:\Program Files\Java\jdk-21\bin\javaw.exe")
+        row.addWidget(edit, 1)
+
+        browse_file = QPushButton("选择文件…")
+        browse_folder = QPushButton("选择目录…")
+        row.addWidget(browse_file)
+        row.addWidget(browse_folder)
+        layout.addLayout(row)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        def pick_file() -> None:
+            path, _ = QFileDialog.getOpenFileName(
+                dialog,
+                "选择 Java 可执行文件",
+                "",
+                "Java 可执行文件 (javaw.exe java.exe);;所有文件 (*)",
+            )
+            if path:
+                edit.setText(path)
+
+        def pick_folder() -> None:
+            path = QFileDialog.getExistingDirectory(dialog, "选择 Java 安装目录")
+            if path:
+                edit.setText(path)
+
+        browse_file.clicked.connect(pick_file)
+        browse_folder.clicked.connect(pick_folder)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        raw = edit.text().strip().strip('"')
+        if not raw:
+            return
+        info = probe_java(raw)
+        if info is None:
+            QMessageBox.warning(self, APP_NAME, "该路径不是可用的 Java（未找到 java.exe / javaw.exe）。")
+            return
+        self.ctx.config.add_manual_java_path(info.path)
+        self._apply_java_scan([info])
+        self.ctx.bus.javas_changed.emit()
+        self.ctx.bus.toast.emit(f"已添加 Java {info.major}（{info.version}）")
 
     def _on_java_download_failed(self, task_id: str, message: str) -> None:
         self.ctx.downloads.finish(task_id, ok=False, message=message)
@@ -1638,14 +1725,16 @@ class SettingsPage(QWidget):
         if self._rescan_worker is not None and self._rescan_worker.isRunning():
             return
         self.ctx.bus.toast.emit("正在扫描 Java 运行时…")
-        self._rescan_worker = RescanJavaWorker(self)
+        self._rescan_worker = RescanJavaWorker(
+            self.ctx.config.java_scan_paths(), self
+        )
         self._rescan_worker.done.connect(self._on_java_rescanned)
         self._rescan_worker.start()
 
     def _on_java_rescanned(self, javas: list) -> None:
-        self.ctx.javas = javas
+        merged = self._apply_java_scan(javas)
         self.ctx.bus.javas_changed.emit()
-        self.ctx.bus.toast.emit(f"扫描完成，共找到 {len(javas)} 个 Java 运行时。")
+        self.ctx.bus.toast.emit(f"扫描完成，共找到 {len(merged)} 个 Java 运行时。")
 
     def _rebuild_java_table(self) -> None:
         self.java_table.setRowCount(0)

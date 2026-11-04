@@ -148,9 +148,10 @@ class SkinPackPage(QWidget):
         hint = QLabel(
             t(
                 "SkinPack",
-                "1.0–1.5.2 会生成 texturepacks 纹理包；1.6.1–1.21.8 使用 pack_format；"
-                "1.21.9+ / 26.x 使用 min_format + max_format。目标玩家皮肤写入 "
-                "CustomSkinLoader/LocalSkin/skins/<玩家名>.png。"
+                "1.0–1.5.2 会生成 texturepacks 纹理包；1.6.1–1.21.8 使用 pack_format + "
+                "supported_formats 1–99；1.21.9+ / 26.x 使用 min_format + max_format。"
+                "资源包同时写入新旧两套玩家皮肤路径，导出的文件可直接放进 resourcepacks 加载。"
+                "目标玩家皮肤写入 CustomSkinLoader/LocalSkin/skins/<玩家名>.png。"
                 "「一键添加并覆盖旧皮肤包」会先清理旧的 MikanCL 包再写入，"
                 "避免旧包残留导致误以为新皮肤已生效。",
             )

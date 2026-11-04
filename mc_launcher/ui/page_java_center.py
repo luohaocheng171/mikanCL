@@ -29,9 +29,9 @@ from ..java import (
     download_java,
     fetch_distribution_versions,
     find_java_in,
-    java_key,
     java_runtime_name,
     list_java_distributions,
+    merge_java_lists,
 )
 from ..net import Cancelled
 from .widgets import Card, page_header
@@ -182,6 +182,8 @@ class JavaCenterPage(QWidget):
         card = Card(margins=14, spacing=10)
         tip = QLabel(
             "版本列表来自各发行版官方 API / 官方下载页；查询失败时自动回退到官方最新版稳定链接。"
+            "标有「国内镜像」的发行版（清华 TUNA、华为云）在国内下载更快；"
+            "大文件会自动启用多线程分段下载。"
             "下载任务统一登记到下载中心，可暂停 / 取消 / 重试。"
         )
         tip.setObjectName("Tiny")
@@ -554,11 +556,11 @@ class JavaCenterPage(QWidget):
     def _on_installed(self, task_id: str, info) -> None:
         pkg = self._task_packages.pop(task_id, "jdk")
         self.ctx.downloads.finish(task_id, ok=True)
-        self.ctx.javas = detect_java_installed()
-        if info is not None and all(
-            java_key(j.path) != java_key(info.path) for j in self.ctx.javas
-        ):
-            self.ctx.javas.append(info)
+        found = detect_java_installed(self.ctx.config.java_scan_paths())
+        if info is not None:
+            found.append(info)
+        self.ctx.javas = merge_java_lists(self.ctx.javas, found)
+        self.ctx.config.remember_java_paths(java.path for java in self.ctx.javas)
         self.ctx.bus.javas_changed.emit()
         self.ctx.bus.toast.emit(
             f"Java {getattr(info, 'version', '')} 已安装完成。"

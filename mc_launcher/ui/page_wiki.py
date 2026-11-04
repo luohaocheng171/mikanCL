@@ -177,7 +177,7 @@ NBT（Named Binary Tag）是 Minecraft 的存档数据格式，`level.dat`、`pl
 4. 启动游戏，CustomSkinLoader 会自动应用
 
 ## 分享给其他玩家
-「皮肤包」标签页可以把皮肤、目标玩家名和手臂模型打成一个 `.zip`：对方导入后会写入自己的 `CustomSkinLoader/LocalSkin/skins/<玩家名>.png`，在服务器里只有这名玩家显示该皮肤，不会影响其他人。打包时会按目标版本自动选择 `pack_format` 或 `min_format/max_format`。
+「皮肤包」标签页可以把皮肤、目标玩家名和手臂模型打成一个 `.zip`：对方导入后会写入自己的 `CustomSkinLoader/LocalSkin/skins/<玩家名>.png`，在服务器里只有这名玩家显示该皮肤，不会影响其他人。打包时会按目标版本自动选择 `pack_format` 或 `min_format/max_format`，同时写入新旧两套玩家皮肤纹理路径；导出的 `.zip` 本身就是完整资源包，也可以直接放进 `resourcepacks` 加载。
 
 ## 注意
 - 皮肤文件会写入 `CustomSkinLoader/LocalSkin/skins/<玩家名>.png`，按玩家名加载
@@ -331,7 +331,7 @@ Offline accounts have no Mojang skin service, so the CustomSkinLoader mod plus a
 4. Launch the game; CustomSkinLoader applies it automatically
 
 ## Sharing with other players
-The "Skin Pack" tab bundles the skin, target player name and arm model into a `.zip`. When someone imports it, the skin is written to `CustomSkinLoader/LocalSkin/skins/<player name>.png`; only that player shows the skin on servers. The pack format is chosen automatically for the target version (`pack_format`, or `min_format`/`max_format` for 1.21.9+ / 26.x).
+The "Skin Pack" tab bundles the skin, target player name and arm model into a `.zip`. When someone imports it, the skin is written to `CustomSkinLoader/LocalSkin/skins/<player name>.png`; only that player shows the skin on servers. The pack format is chosen automatically for the target version (`pack_format`, or `min_format`/`max_format` for 1.21.9+ / 26.x), with both the old and new player texture paths included; the exported `.zip` is itself a complete resource pack and can be dropped directly into `resourcepacks`.
 
 ## Notes
 - The skin is written to `CustomSkinLoader/LocalSkin/skins/<player name>.png` and loaded per player name
