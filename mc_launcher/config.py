@@ -56,6 +56,7 @@ FEATURE_DEFAULTS: dict[str, bool] = {
     "home": True,
     "download": True,
     "downloads": True,
+    "download_accel": True,
     "content": True,
     "modpack": True,
     "account": True,
@@ -79,6 +80,7 @@ FEATURE_PAGE_KEYS: tuple[str, ...] = (
     "home",
     "download",
     "downloads",
+    "download_accel",
     "content",
     "modpack",
     "account",
@@ -452,6 +454,11 @@ class Config:
     curseforge_api_key: str = DEFAULT_CURSEFORGE_API_KEY
     curseforge_cdn_mirror: str = ""
     download_threads: int = 16
+    download_accel_dir: str = ""  # 下载加速页上次使用的保存目录
+
+    # ---- JVM 预加载（实验性） ----
+    preload_jvm: bool = False
+    preload_java_path: str = ""
 
     # ---- 账号 / 外置登录 ----
     selected_account_id: str = ""
@@ -765,6 +772,7 @@ class Config:
             curseforge_api_key=self.curseforge_api_key,
             curseforge_cdn_mirror=self.curseforge_cdn_mirror,
             download_threads=self.download_threads,
+            download_accel_dir=self.download_accel_dir,
             selected_account_id=self.selected_account_id,
             microsoft_client_id=self.microsoft_client_id,
             authlib_injector_url=self.authlib_injector_url,
@@ -828,6 +836,9 @@ class Config:
                 "curseforge_api_key": self.curseforge_api_key,
                 "curseforge_cdn_mirror": self.curseforge_cdn_mirror,
                 "download_threads": int(self.download_threads),
+                "download_accel_dir": self.download_accel_dir,
+                "preload_jvm": bool(self.preload_jvm),
+                "preload_java_path": self.preload_java_path,
                 "selected_account_id": self.selected_account_id,
                 "microsoft_client_id": self.microsoft_client_id,
                 "authlib_injector_url": self.authlib_injector_url,
@@ -995,6 +1006,9 @@ class Config:
             cfg.download_threads = max(1, min(328, int(data.get("download_threads") or 16)))
         except (TypeError, ValueError):
             cfg.download_threads = 16
+        cfg.preload_jvm = bool(data.get("preload_jvm", False))
+        cfg.preload_java_path = str(data.get("preload_java_path") or "")
+        cfg.download_accel_dir = str(data.get("download_accel_dir") or "")
 
         cfg.selected_account_id = str(data.get("selected_account_id") or "")
         cfg.microsoft_client_id = str(

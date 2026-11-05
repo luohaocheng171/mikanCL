@@ -1,4 +1,4 @@
-# MikanCL v4.9.1 官方文档
+# MikanCL v4.9.2 官方文档
 
 <div align="center">
 
@@ -24,7 +24,7 @@ MikanCL 是一款面向 Windows 的 Minecraft 启动器，采用 **PySide6（Qt6
 
 ### 版本信息
 
-- **当前版本**：v4.9.1
+- **当前版本**：v4.9.2
 - **框架**：PySide6（Qt6，Fusion 深色主题 + 自绘标题栏）
 - **Python 要求**：3.10+
 - **运行平台**：Windows 10 / 11（x64）
@@ -261,11 +261,12 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 
 - **版本管理**：原版版本下载与安装、版本列表双击启动、最多同时安装 5 个版本、版本重命名/删除
 - **版本分类**：正式版（草方块）、测试版（命令方块）、远古版（原石）、愚人节（TNT）四类标签，默认只显示正式版，点哪个标签加载哪一类；顶部常驻「最新正式版 / 最新测试版」卡片，可一键进入详情；所有版本图标均为自绘像素图
-- **下载中心**：独立任务页，统一管理原版安装、加载器安装、整合包、内容下载、Java 下载、纯文件下载等任务，默认最多 5 个任务并发、其余排队，支持暂停 / 恢复 / 取消 / 重试 / 打开目录
+- **下载中心**：独立任务页，统一管理原版安装、加载器安装、整合包、内容下载、Java 下载、纯文件下载、下载加速等任务，默认最多 5 个任务并发、其余排队，支持暂停 / 恢复 / 取消 / 重试 / 打开目录
+- **下载加速**：侧边栏独立页，把任意直链（可整段粘贴，自动提取 http/https 链接）交给启动器高线程分段下载；线程数单独可调（1–328，默认至少 64），任务同样出现在下载中心，可暂停、取消与失败重试
 - **版本隔离**：不隔离、仅隔离模组、仅隔离存档、全部隔离（独立游戏目录）四种模式，可按版本单独覆盖
 - **数据目录**：支持添加多个 `.minecraft` 目录，通过侧边栏下拉框快速切换
 - **从 PCL / HMCL 导入**：设置 → 游戏页选择对方的配置目录（含 `.minecraft` 的那一层，也可直接选 `.minecraft`），扫描后勾选要导入的版本；只导入本启动器没有的版本，并读取 PCL `Setup.ini` / HMCL `hmclversion.cfg` / `.hmcl.json` 中的隔离、内存、JVM 参数等设置，实例直接指向原游戏目录，mod 与存档无需搬移
-- **多线程下载**：线程数可配置（1–328，默认 16），所有任务共用同一套并发与调度策略；单个大文件（≥ 4 MB 且服务器支持 Range）自动按 8 段并发下载，失败自动回退单流
+- **多线程下载**：线程数可配置（1–328，默认 16），所有下载（版本安装、Java、内容文件、下载加速、基岩版等）共用一个 328 线程的全局预算，不会因多个任务同时并发把线程数打爆；单个大文件按 `文件大小 / 1 MB` 切段，段数上限由全局预算与线程数设置决定，服务器不支持 Range 时自动回退单流
 - **日志与诊断**：界面日志同步落盘 `data/logs/launcher.log`（5MB × 3 轮转）；安装失败时额外写入 `data/logs/install_error.log` 并自动复制日志到剪贴板
 - **单实例保护**：基于 QSharedMemory，避免两个进程同时读写配置与浏览器缓存
 
@@ -280,6 +281,7 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 - **代理支持**：HTTP 代理可同时应用于下载与游戏 JVM 参数
 - **内存自动分配**：设置 → 通用页「自动检测」按物理内存与 CPU 逻辑核心数推荐最大内存并写回配置；Java 中心安装完成后也自动应用推荐值，避免超过物理内存 70%
 - **智能 JVM 参数**：设置 → 通用页开关（默认开启）按 Java 版本、游戏版本与堆大小自动追加调优参数（1.21 及更早 G1GC，26.x 分代 ZGC），已在额外参数中指定 GC / 同名项时自动跳过；Java 7 及更早只补 PermGen；分配超过物理内存 60% 时提示换页风险
+- **预加载 JVM（实验性，默认关闭）**：开启后每次启动启动器都会在后台用所选 Java 执行一次 `-version` 预热，把核心类与本地库加载进系统缓存，随后启动游戏可快一些；Java 版本在设置页自行选择（默认自动跟随启动时选中的 Java），预热失败只写日志、不影响启动器使用
 - **版本兼容参数**：1.12.2 及更早自动加 `-Xss1M` 与 legacy 排序参数，旧版 Forge 加 fml 校验放宽参数，旧版本跑 Java 9+ 自动补 `--add-opens`，Java 24+ 自动加 `--enable-native-access`，macOS 1.13+ 自动加 `-XstartOnFirstThread`
 - **系统托盘**：最小化到托盘、托盘快捷启动
 
@@ -330,9 +332,10 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 - **内置浏览器**：优先用 ctypes 托管系统 Edge WebView2 内核（完整 Chromium，H.264/AAC 齐全），B 站等站点视频直接在启动器内播放并支持全屏，多标签、弹窗转标签、Ctrl+T / Ctrl+W 快捷键齐备；用户数据目录固定在 `data/browser/webview2`，Cookie 与登录态自动持久化。系统缺失 WebView2 运行时（Windows 10/11 一般已预装）时自动回退到 QtWebEngine，并亮出「视频可能无法播放 / 用系统浏览器打开」提示条
 - **教程中心**：内置 8 篇 Markdown 攻略，左侧目录 + 右侧渲染，支持搜索、内部锚点与外链跳转，可从教程页直接打开 NBT 编辑器
 - **NBT 编辑器**：纯手写 NBT 读写（13 种标签、gzip 自动识别、类型完整保留），树形查看 / 编辑 `level.dat` 与 `playerdata`，右键增删标签，首次保存自动生成 `.bak`
-- **Java 中心**：Adoptium Temurin、清华 TUNA 镜像（Temurin）、华为云 OpenJDK 镜像、Microsoft OpenJDK、Azul Zulu、Amazon Corretto、Alibaba Dragonwell、Tencent Kona、BellSoft Liberica、IBM Semeru、SAP SapMachine、GraalVM Community 共 12 个发行版，按主版本下载安装；标有「国内镜像」的发行版国内下载更快；支持选择「JRE（仅运行）」或「JDK（含开发工具）」，JRE 体积更小；大文件自动启用多线程分段下载（≥ 4 MB 且服务器支持 Range），自动解压到 `data/` 并在设置中选中，安装完成后按硬件推荐值自动写入最大内存
-- **Java 检测与手动添加**：自动扫描 JAVA_HOME、注册表、各发行版安装目录、启动器自带运行时与 `.gradle/jdks`；检测结果与历史记录合并持久化，刷新时不会再出现「这次有、下次没了」；「设置 → 通用 → Java 运行时」新增「手动添加…」，可选择 `javaw.exe` / `java.exe` 或直接填写安装目录，添加后会长期记住
+- **Java 中心**：Adoptium Temurin、清华 TUNA 镜像（Temurin）、华为云 OpenJDK 镜像、Microsoft OpenJDK、Azul Zulu、Amazon Corretto、Alibaba Dragonwell、Tencent Kona、BellSoft Liberica、IBM Semeru、SAP SapMachine、GraalVM Community 共 12 个发行版，按主版本下载安装；标有「国内镜像」的发行版国内下载更快；支持选择「JRE（仅运行）」或「JDK（含开发工具）」，JRE 体积更小；大文件自动启用多线程分段下载（段数按 `文件大小 / 1 MB` 计算，实际并发受全局 328 线程预算与设置里的线程数约束，服务器不支持 Range 时自动退回单流），自动解压到 `data/` 并在设置中选中，安装完成后按硬件推荐值自动写入最大内存
+- **Java 检测与手动添加**：自动扫描 JAVA_HOME、注册表、各发行版安装目录、启动器自带运行时、`.gradle/jdks`、`PATH` 逐项目录，并解析 `shutil.which` 与 Windows `where java` / `where javaw` 的全部输出（统一规范化去重、只保留真实存在的文件）；检测结果与历史记录合并持久化，刷新时不会再出现「这次有、下次没了」；「设置 → 通用 → Java 运行时」新增「手动添加…」，可选择 `javaw.exe` / `java.exe` 或直接填写安装目录，添加后会长期记住
 - **Forbric 引导式安装**：实验性 Fabric/Forge/NeoForge 三合一加载器，通过 GitHub Releases 自动获取最新安装器与 `Forbric-Installer.bat`，用 Java 21 拉起官方 GUI，后台轮询 `versions/26.2-forbric/26.2-forbric.json`，生成后自动注册实例
+- **预加载 JVM（实验性，默认关闭）**：设置 → 通用页开关 + 「预加载的 Java」下拉（默认自动跟随启动时选中的 Java）。开启后每次启动启动器都会在后台用所选 Java 跑一次 `-Xshare:auto -XX:+UseSerialGC -version`，把核心类与本地库预热进系统缓存；失败只写日志，不弹窗、不阻塞界面，退出时最多等预热线程 2 秒
 
 ### 界面与联机
 
@@ -342,6 +345,8 @@ MikanCL 的界面布局、安装流水线与交互细节参考了以下启动器
 - **陶瓦联机**：内置 Terracotta（房间码 P2P 组网），自动下载 / 校验官方发行包，创建房间、加入房间、复制房间码、结束联机
 - **中文内容检索**：本地词表 + MC百科在线词典，支持中文名展示与中文关键词搜索
 - **系统托盘与单实例**：可最小化到托盘，重复启动会提示而不是开两个进程
+- **下载加速**：侧边栏独立页，把任意直链（或整段网页文本，自动提取 http/https 链接并去重）丢给启动器的高线程分段下载器；单任务线程数独立可调（1–328，默认至少 64），保存目录可自选，任务统一进入下载中心，支持暂停 / 恢复 / 取消 / 失败重试与断点续传；同名文件自动追加序号，不会覆盖已有文件或与进行中的任务写同一个路径
+- **启动速度**：页面底色改由全局样式表统一绘制，不再为每个滚动页单独 `setStyleSheet`；外观刷新增加状态缓存，背景图 / 毛玻璃没变时直接跳过整窗样式重算。离屏实测主窗口构建从约 5.7 秒降到约 3.5 秒
 
 ### 依赖补全与第三方组件
 
@@ -437,7 +442,8 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 
 ### 7. Java 下载与 Java 中心
 
-- **扫描**：注册表 + 常见安装路径（`Program Files\Java`、`Program Files\Eclipse Adoptium`、`%LOCALAPPDATA%\Programs` 等）+ 启动器自管目录
+- **扫描**：注册表 + 常见安装路径（`Program Files\Java`、`Program Files\Eclipse Adoptium`、`%LOCALAPPDATA%\Programs` 等）+ 启动器自管目录 + `JAVA_HOME` + `PATH` 逐项目录 + `where java` / `where javaw` 输出 + `shutil.which`，只要系统的 `java` 能在命令行跑起来就能被找到
+- **预加载（实验性）**：设置里开启后，每次启动启动器都会用所选 Java 执行 `-Xshare:auto -version` 预热一次 JVM；失败只记录日志，不弹窗、不阻塞界面
 - **匹配**：`pick_java()` 优先完全匹配所需主版本，其次取高于需求的最近版本，最后回退任意可用 Java
 - **下载**：`download_java()` 支持 `on_bytes` 进度回调、取消与暂停，解压后返回可执行路径；Java 中心统一登记到下载中心，可暂停 / 取消 / 重试
 - **安装类型**：Java 中心可切换「JRE / JDK」，请求 key 形如 `temurin:21:jre`；Adoptium 按 `image_type` 拉取 JRE 包，部分只提供 JDK 的发行版会自动回退
@@ -541,6 +547,7 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | 启动游戏 | `HomePage` | 版本列表、双击 / 多选启动、启动预检、拖拽导入、整合包快速入口 |
 | 下载安装 | `DownloadPage` | 原版版本安装、加载器安装、加载器源文件另存为、仅下载客户端 Jar |
 | 下载中心 | `DownloadCenterPage` | 任务表格、进度 / 速度 / 状态、暂停 / 恢复 / 取消 / 重试 / 打开目录 |
+| 下载加速 | `DownloadAccelPage` | 粘贴任意直链（自动提取 URL）、选择保存目录、单任务线程数（最高 328，与全局共享预算）、提交到下载中心 |
 | 内容中心 | `ContentPage` | Modrinth / CurseForge 搜索、用途分类（优化 / 科技 / 魔法等）、详情、安装到实例、另存为、中文译名与材质包分类 |
 | 整合包 | `ModpackPage` | 已装整合包列表、导入、导出（CF 格式 / `.mikan`）、删除 |
 | 账号管理 | `AccountsPage` | 三种登录方式、账号切换、皮肤管理 |
@@ -555,7 +562,7 @@ issues = detect_mod_conflicts(metadata)               # [{kind, modid, files, de
 | 基岩版 | `BedrockPage` | 三类来源（MCAPPX 历史 / 商店正式版 / 商店预览版）分类列表、架构与搜索过滤、内置浏览器（Edge 内核）下载、下载目录监听归档、安装 / 启动 / 卸载、打开下载目录 |
 | 皮肤工厂 | `SkinFactoryPage` | 64×64 像素皮肤编辑器：画笔 / 橡皮 / 填充 / 取色 / 加亮 / 加深 / 直线 / 矩形 / 椭圆 / 喷枪、镜像对称、撤销重做（整份图层快照）、缩放与网格、按部位高亮底层与第二层 UV；最多 8 层多层绘画，列表勾选显隐、点击切换活动层，导出 PNG / 保存皮肤库 / 应用账号时自动合并；右侧 3D 模型（等轴测投影 + 第二层半透明叠加）可选中部位后直接作画，支持图层切换、左转 / 右转 / 复位视角按钮、视角滑块、自动旋转、Shift + 拖动旋转，多皮肤库保存 / 载入 / 删除、应用到当前账号 |
 | 世界种子 | `SeedTerrainPage` | 输入种子 → 本机 Java 执行内嵌 TerrainGen（与 Minecraft 相同的柏林噪声算法与参数）生成高度图 → 内联 WebGL 把地形渲染为 Minecraft 风格方块（体素柱：平顶 + 阶梯侧面，海平面压平，侧面按朝向压暗），视角 / 缩放 / 平移按钮 + 拖动旋转 / 滚轮缩放 / 右键平移 / 双击复位 / 自动旋转，可调尺寸与起伏、导出高度图 PNG |
-| 设置 | `SettingsPage` | 数据目录、下载源、线程数（1–328）、代理、API Key、镜像、界面选项（含启动动画 / 页面切换动画 / 毛玻璃开关）、主题色与背景、插件目录、功能开关、自动检测推荐内存 |
+| 设置 | `SettingsPage` | 数据目录、下载源、线程数（1–328）、代理、API Key、镜像、界面选项（含启动动画 / 页面切换动画 / 毛玻璃开关）、主题色与背景、插件目录、功能开关、自动检测推荐内存、预加载 JVM（实验性，含预加载 Java 选择） |
 
 > 注意区分两个加载器页：`LoaderPage`（`page_loader.py`）是「下载安装」页里的**表单式**加载器安装区（手动填 MC 版本 + 加载器版本）；`LoadersPage`（`page_loaders.py`）是导航栏独立入口「Mod 加载器」，按 MC 版本**浏览列表**后选择安装。两者共用同一套安装 worker 与 `modloader.install_loader()`。
 
@@ -625,6 +632,7 @@ MikanCL/
 │       ├── page_home.py        # 启动游戏
 │       ├── page_download.py    # 下载安装
 │       ├── page_download_center.py
+│       ├── page_download_accel.py # 下载加速（任意直链多线程下载）
 │       ├── page_content.py     # 内容中心
 │       ├── page_modpack.py     # 整合包
 │       ├── page_accounts.py    # 账号与皮肤

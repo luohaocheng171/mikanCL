@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes
+import os
 import sys
 from pathlib import Path
 
@@ -30,7 +31,8 @@ from PySide6.QtWidgets import (
 from .. import APP_NAME, APP_NAME_CN, APP_VERSION
 from ..context import AppContext, wait_thread
 from ..i18n import t
-from ..java import detect_java_installed, merge_java_lists
+from ..java import detect_java_installed, merge_java_lists, preload_jvm
+from ..net import set_default_download_workers
 from ..plugins import PluginManager, PluginPage
 from .dropinstall import handle_dropped_paths
 from .page_accounts import AccountsPage
@@ -40,6 +42,7 @@ from .page_content import ContentPage
 from .page_control import ControlPage
 from .page_dependencies import DependenciesPage
 from .page_download import DownloadPage
+from .page_download_accel import DownloadAccelPage
 from .page_download_center import DownloadCenterPage
 from .page_forbric import ForbricPage
 from .page_modpack import ModpackPage
@@ -156,6 +159,18 @@ class TitleBar(QFrame):
         super().mouseDoubleClickEvent(event)
 
 
+class JvmPreloadWorker(QThread):
+    done = Signal(bool, str)
+
+    def __init__(self, java_path: str, parent=None):
+        super().__init__(parent)
+        self.java_path = java_path
+
+    def run(self) -> None:
+        ok, message = preload_jvm(self.java_path)
+        self.done.emit(ok, message)
+
+
 class JavaScanWorker(QThread):
     done = Signal(list)
 
@@ -205,7 +220,13 @@ class MainWindow(QMainWindow):
     def __init__(self, ctx: AppContext):
         super().__init__()
         self.ctx = ctx
+        set_default_download_workers(ctx.config.download_threads)
         self._java_worker: JavaScanWorker | None = None
+        self._preload_worker: JvmPreloadWorker | None = None
+        self._preload_started = False
+        # 上一次应用外观时的（背景图, 毛玻璃）组合；没变化就不再重复刷全窗口样式
+        self._appearance_state: tuple[str, bool] | None = None
+        self._applied_stylesheet = ""
         self._plugin_pages: dict[int, QWidget] = {}
         self.plugin_manager: PluginManager | None = None
         self.setWindowTitle(f"{APP_NAME} · {self.tr('Minecraft 启动器')}")
@@ -376,6 +397,7 @@ class MainWindow(QMainWindow):
             ("home", self.tr("启动游戏")),
             ("download", self.tr("下载安装")),
             ("downloads", self.tr("下载中心")),
+            ("download_accel", self.tr("下载加速")),
             ("content", self.tr("内容中心")),
             ("modpack", self.tr("整合包")),
             ("account", self.tr("账号管理")),
@@ -431,7 +453,7 @@ class MainWindow(QMainWindow):
         nav_scroll.setWidgetResizable(True)
         nav_scroll.setFrameShape(QFrame.NoFrame)
         nav_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        nav_scroll.setStyleSheet("QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget { background-color: #0a100c; }")
+        # 侧边栏滚动区底色由 theme.py 的 QScrollArea#SidebarScroll 规则统一控制
         nav_scroll.viewport().setAttribute(Qt.WA_OpaquePaintEvent, False)
         nav_scroll.viewport().setAttribute(Qt.WA_StyledBackground, True)
         nav_scroll.setWidget(nav_host)
@@ -478,6 +500,9 @@ class MainWindow(QMainWindow):
         self.download_center_page = (
             DownloadCenterPage(self.ctx, self) if _on("downloads") else None
         )
+        self.download_accel_page = (
+            DownloadAccelPage(self.ctx, self) if _on("download_accel") else None
+        )
         self.content_page = ContentPage(self.ctx, self) if _on("content") else None
         self.modpack_page = ModpackPage(self.ctx, self) if _on("modpack") else None
         self.accounts_page = AccountsPage(self.ctx, self) if _on("account") else None
@@ -498,6 +523,7 @@ class MainWindow(QMainWindow):
             ("home", self.home_page),
             ("download", self.download_page),
             ("downloads", self.download_center_page),
+            ("download_accel", self.download_accel_page),
             ("content", self.content_page),
             ("modpack", self.modpack_page),
             ("account", self.accounts_page),
@@ -632,34 +658,22 @@ class MainWindow(QMainWindow):
     def _apply_appearance(self) -> None:
         image = (self.ctx.config.background_image or "").strip()
         has_image = bool(image) and Path(image).exists()
+        acrylic = bool(self.ctx.config.ui_acrylic)
+        # 启动/切换配置时都会调用本方法：状态没变就直接返回，避免对整个窗口做全量重排样式
+        state = (image if has_image else "", acrylic)
+        if state == self._appearance_state:
+            return
+        self._appearance_state = state
         self.root.set_background(image if has_image else "")
         stylesheet = background_overlay_stylesheet(has_image)
-        if self.ctx.config.ui_acrylic:
+        if acrylic:
             stylesheet += acrylic_stylesheet()
-        self.setStyleSheet(stylesheet)
-        # 滚动区视口与页面用 inline 样式表绘制背景；有背景图时改为透明以露出底图。
-        bg = "background-color: transparent;" if has_image else "background-color: #0c1310;"
-        side_bg = "background-color: rgba(10, 16, 12, 200);" if has_image else "background-color: #0a100c;"
-        for sa in self.findChildren(QScrollArea):
-            if sa.objectName() == "SidebarScroll":
-                vp = sa.viewport()
-                if vp is not None:
-                    vp.setStyleSheet(side_bg)
-                w = sa.widget()
-                if w is not None:
-                    w.setStyleSheet(side_bg)
-                continue
-            vp = sa.viewport()
-            if vp is not None:
-                vp.setStyleSheet(bg)
-            w = sa.widget()
-            if w is not None:
-                w.setStyleSheet(bg)
-        # 浏览器页直接放在堆叠层里，不走滚动区，单独更新。
-        for i in range(self.pages.count()):
-            pw = self.pages.widget(i)
-            if pw is not None and not isinstance(pw, QScrollArea):
-                pw.setStyleSheet(bg)
+        # 滚动区 / 堆叠页的底色统一由 theme.py 的应用级样式表控制，
+        # 这里只保留一层窗口级覆盖（无背景图且无毛玻璃时为空字符串）。
+        # setStyleSheet 会触发整棵控件树重新计算样式，内容没变就不要重复调用。
+        if stylesheet != self._applied_stylesheet:
+            self._applied_stylesheet = stylesheet
+            self.setStyleSheet(stylesheet)
         self._apply_acrylic()
 
     def _apply_acrylic(self) -> None:
@@ -816,18 +830,53 @@ class MainWindow(QMainWindow):
     def _start_java_scan(self) -> None:
         self._java_worker = JavaScanWorker(self.ctx.config.java_scan_paths(), self)
         self._java_worker.done.connect(self._on_java_scanned)
+        self._java_worker.finished.connect(self._release_java_worker)
         self._java_worker.start()
+
+    def _release_java_worker(self) -> None:
+        """run() 结束后再释放线程对象，避免在 done 信号里析构仍在运行的 QThread。"""
+        self._java_worker = None
 
     def _on_java_scanned(self, javas: list) -> None:
         merged = merge_java_lists(self.ctx.javas, javas)
         self.ctx.javas = merged
         self.ctx.config.remember_java_paths(java.path for java in merged)
         self.ctx.bus.javas_changed.emit()
-        self._java_worker = None
         if not merged:
             self.statusBar().showMessage("未检测到 Java，请到设置页手动指定 Java 路径。", 8000)
         else:
             self.statusBar().showMessage(f"已检测到 {len(merged)} 个 Java 运行时。", 5000)
+            self._start_jvm_preload(merged)
+
+    def _start_jvm_preload(self, javas: list) -> None:
+        """实验性 JVM 预加载：每次启动启动器只预热一次，全部在后台线程执行。"""
+        if not self.ctx.config.preload_jvm or self._preload_started or not javas:
+            return
+        preferred = self.ctx.config.preload_java_path
+        target = None
+        if preferred:
+            key = os.path.normcase(os.path.normpath(preferred))
+            target = next(
+                (j for j in javas if os.path.normcase(os.path.normpath(j.path)) == key), None
+            )
+        if target is None:
+            target = javas[0]
+        self._preload_started = True
+        self._preload_worker = JvmPreloadWorker(target.path, self)
+        self._preload_worker.done.connect(self._on_jvm_preloaded)
+        self._preload_worker.finished.connect(self._release_preload_worker)
+        self._preload_worker.start()
+        self.ctx.bus.log.emit(f"[预加载] 正在预热 Java {target.major}：{target.path}")
+
+    def _release_preload_worker(self) -> None:
+        """run() 结束后再释放线程对象，避免在 done 信号里析构仍在运行的 QThread。"""
+        self._preload_worker = None
+
+    def _on_jvm_preloaded(self, ok: bool, message: str) -> None:
+        if ok:
+            self.ctx.bus.log.emit("[预加载] JVM 预热完成，后续启动游戏可更快进入")
+        else:
+            self.ctx.bus.log.emit(f"[预加载] JVM 预热失败：{message}")
 
     def _setup_tray(self) -> None:
         self.tray = QSystemTrayIcon(make_block_icon(32), self)
@@ -896,5 +945,6 @@ class MainWindow(QMainWindow):
         if self.plugin_manager is not None:
             self.plugin_manager.shutdown()
         wait_thread(self._java_worker, 1500)
+        wait_thread(self._preload_worker, 2000)
         self.tray.hide()
         event.accept()

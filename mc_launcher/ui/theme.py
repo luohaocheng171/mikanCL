@@ -38,6 +38,7 @@ QWidget { color: #e8f1ea; font-family: "Microsoft YaHei UI", "Segoe UI", sans-se
 QMainWindow, QWidget#Root { background-color: #0c1310; }
 QStackedWidget, QStackedWidget > QWidget { background-color: #0c1310; }
 QFrame#Sidebar { background-color: #0a100c; border-right: 1px solid #1b2920; }
+QScrollArea#SidebarScroll, QScrollArea#SidebarScroll > QWidget, QScrollArea#SidebarScroll > QWidget > QWidget { background-color: #0a100c; }
 QLabel#LogoTitle { font-size: 19px; font-weight: 700; color: #eef7f0; letter-spacing: 1px; }
 QLabel#LogoSub { font-size: 10px; color: #6d8876; letter-spacing: 2px; }
 QFrame#TitleBar { background-color: #0a100c; border-bottom: 1px solid #1b2920; }
@@ -212,6 +213,7 @@ def background_overlay_stylesheet(has_image: bool) -> str:
     return (
         "QMainWindow, QWidget#Root { background: transparent; }\n"
         "QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget { background: transparent; }\n"
+        "QScrollArea#SidebarScroll, QScrollArea#SidebarScroll > QWidget, QScrollArea#SidebarScroll > QWidget > QWidget { background-color: rgba(10, 16, 12, 200); }\n"
         "QStackedWidget, QStackedWidget > QWidget { background: transparent; }\n"
         "QFrame#Sidebar { background-color: rgba(10, 16, 12, 200); }\n"
         "QFrame#TitleBar { background-color: rgba(10, 16, 12, 200); }\n"
@@ -224,6 +226,7 @@ def acrylic_stylesheet() -> str:
     return (
         "QMainWindow, QWidget#Root { background-color: rgba(12, 19, 16, 170); }\n"
         "QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget { background-color: transparent; }\n"
+        "QScrollArea#SidebarScroll, QScrollArea#SidebarScroll > QWidget, QScrollArea#SidebarScroll > QWidget > QWidget { background-color: rgba(10, 16, 12, 180); }\n"
         "QStackedWidget, QStackedWidget > QWidget { background-color: transparent; }\n"
         "QFrame#Sidebar { background-color: rgba(10, 16, 12, 180); }\n"
         "QFrame#TitleBar { background-color: rgba(10, 16, 12, 180); }\n"
@@ -567,6 +570,20 @@ def make_nav_icon(kind: str, size: int = 20, color: str = "#9fb6a7") -> QIcon:
         painter.drawLine(QPointF(s * 0.36, s * 0.48), QPointF(s * 0.36, s * 0.72))
         painter.drawLine(QPointF(s * 0.5, s * 0.48), QPointF(s * 0.5, s * 0.66))
         painter.drawLine(QPointF(s * 0.64, s * 0.48), QPointF(s * 0.64, s * 0.72))
+    elif kind == "download_accel":
+        # 闪电：加速下载
+        painter.drawPolyline(
+            QPolygonF(
+                [
+                    QPointF(s * 0.58, s * 0.14),
+                    QPointF(s * 0.3, s * 0.56),
+                    QPointF(s * 0.48, s * 0.56),
+                    QPointF(s * 0.42, s * 0.86),
+                    QPointF(s * 0.7, s * 0.44),
+                    QPointF(s * 0.52, s * 0.44),
+                ]
+            )
+        )
     elif kind == "modpack":
         painter.drawRect(QRectF(s * 0.18, s * 0.24, s * 0.64, s * 0.56))
         painter.drawLine(QPointF(s * 0.18, s * 0.4), QPointF(s * 0.82, s * 0.4))

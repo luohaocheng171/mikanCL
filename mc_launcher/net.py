@@ -48,6 +48,34 @@ _PATH_LOCKS: dict[str, threading.RLock] = {}
 _PATH_LOCKS_GUARD = threading.Lock()
 
 
+# ---- 全局下载线程预算 ----
+# 所有文件下载（分段下载的每个分段、单流下载）共享同一个上限，
+# 避免多个任务/多个版本同时安装时线程数无上限膨胀。
+MAX_DOWNLOAD_THREADS = 328
+_DOWNLOAD_SLOTS = threading.BoundedSemaphore(MAX_DOWNLOAD_THREADS)
+_default_download_workers = 16
+
+
+def set_default_download_workers(count: int) -> None:
+    """由配置里的「下载线程数」设置单个文件默认使用的分段线程数。"""
+    global _default_download_workers
+    try:
+        value = int(count)
+    except (TypeError, ValueError):
+        return
+    if value > 0:
+        _default_download_workers = max(1, min(value, MAX_DOWNLOAD_THREADS))
+
+
+def default_download_workers() -> int:
+    return _default_download_workers
+
+
+def download_slot() -> threading.BoundedSemaphore:
+    """供包内其它下载实现（如基岩版分块下载）复用的全局 328 线程预算。"""
+    return _DOWNLOAD_SLOTS
+
+
 def _download_lock(dest: Path) -> threading.RLock:
     try:
         key = str(dest.resolve()).lower()
@@ -288,7 +316,6 @@ class SourceManager:
 # ---- 多线程分段下载（所有大文件下载都可调用） ----
 # 小于该阈值的文件（游戏资源、小 mod 等）分段的额外请求开销大于收益，仍走单流下载。
 PARALLEL_MIN_SIZE = 4 * 1024 * 1024
-PARALLEL_DEFAULT_WORKERS = 8
 
 
 def _probe_download_range(
@@ -311,6 +338,12 @@ def _probe_download_range(
             return total, status == 206 and total > 0 and accept != "none"
     except Exception:  # noqa: BLE001 - 探测失败时退回单流下载
         return 0, False
+
+
+def probe_download_size(url: str, headers: dict[str, str] | None = None) -> tuple[int, bool]:
+    """探测直链的文件大小与是否支持分段，供「下载加速」页显示进度。"""
+    candidate = Candidate(url=url, headers=dict(headers or {}), source_name="探测")
+    return _probe_download_range(candidate)
 
 
 def _segmented_download(
@@ -336,9 +369,10 @@ def _segmented_download(
     # 上次合并中途被打断时残留的 .merge 文件直接丢弃，尽早释放磁盘
     dest.with_name(dest.name + ".merge").unlink(missing_ok=True)
 
-    worker_count = int(workers or PARALLEL_DEFAULT_WORKERS)
-    segment_count = min(worker_count, max(1, total // (2 * 1024 * 1024)))
-    segment_count = max(1, min(segment_count, 16))
+    worker_count = int(workers or _default_download_workers)
+    worker_count = max(1, min(worker_count, MAX_DOWNLOAD_THREADS))
+    segment_count = min(worker_count, max(1, total // (1024 * 1024)))
+    segment_count = max(1, segment_count)
     span = total // segment_count
     ranges: list[tuple[int, int]] = []
     parts: list[Path] = []
@@ -373,6 +407,18 @@ def _segmented_download(
         if cancel is not None and cancel.is_set():
             raise Cancelled()
 
+    def check_in_slot() -> None:
+        """已持有全局预算时检查暂停：暂停期间先让出预算，避免其它下载被饿死。"""
+        if pause is not None and pause.is_set():
+            _DOWNLOAD_SLOTS.release()
+            try:
+                check()
+            finally:
+                _DOWNLOAD_SLOTS.acquire()
+            return
+        if cancel is not None and cancel.is_set():
+            raise Cancelled()
+
     def segment(part: Path, start: int, end: int) -> None:
         expected = end - start + 1
         offset = part.stat().st_size if part.exists() else 0
@@ -384,6 +430,7 @@ def _segmented_download(
         while True:
             check()
             request = urllib.request.Request(candidate.url, headers=headers)
+            _DOWNLOAD_SLOTS.acquire()
             try:
                 with open_with_ssl_fallback(request, 60) as response:
                     status = int(getattr(response, "status", 200) or 200)
@@ -391,21 +438,13 @@ def _segmented_download(
                         raise DownloadError(f"HTTP {status}")
                     with open(part, "ab") as fh:
                         while True:
-                            check()
+                            check_in_slot()
                             chunk = response.read(65536)
                             if not chunk:
                                 break
                             fh.write(chunk)
                             if on_bytes:
                                 on_bytes(len(chunk))
-                if part.stat().st_size >= expected:
-                    return
-                # 连接提前断开：按已写长度继续请求剩余区间
-                offset = part.stat().st_size
-                headers["Range"] = f"bytes={start + offset}-{end}"
-                attempt += 1
-                if attempt > 6:
-                    raise DownloadError("分段下载中断次数过多")
             except Cancelled:
                 raise
             except Exception:  # noqa: BLE001
@@ -414,6 +453,16 @@ def _segmented_download(
                     raise
                 check()
                 time.sleep(1.0)
+            finally:
+                _DOWNLOAD_SLOTS.release()
+            if part.stat().st_size >= expected:
+                return
+            # 连接提前断开：按已写长度继续请求剩余区间
+            offset = part.stat().st_size
+            headers["Range"] = f"bytes={start + offset}-{end}"
+            attempt += 1
+            if attempt > 6:
+                raise DownloadError("分段下载中断次数过多")
 
     with ThreadPoolExecutor(max_workers=segment_count) as pool:
         futures = [
@@ -713,33 +762,40 @@ class Http:
                     # 单次读取的空闲超时：连接假死（长时间读不到数据）时尽快断开重试，
                     # 否则线程会一直挂在 response.read() 上，整批下载卡住。
                     read_timeout = min(self.timeout, 20)
-                    with self._open(candidate, read_timeout, headers) as response:
-                        status = int(getattr(response, "status", 200) or 200)
-                        if existing and status != 206:
-                            existing = 0  # 服务器不支持续传，从头下载
-                        expected = size
-                        if expected is None:
-                            header_size = response.headers.get("Content-Length")
-                            length = int(header_size) if header_size and header_size.isdigit() else 0
-                            expected = existing + length if length else None
-                        downloaded = existing
-                        with open(tmp, "ab" if existing else "wb") as fh:
-                            while True:
-                                wait_if_paused()
-                                if cancel is not None and cancel.is_set():
-                                    raise Cancelled()
-                                chunk = response.read(65536)
-                                if not chunk:
-                                    break
-                                fh.write(chunk)
-                                downloaded += len(chunk)
-                                if on_bytes:
-                                    on_bytes(len(chunk))
-                        if expected is not None and downloaded != expected:
-                            raise OSError(f"文件长度不符（{downloaded}/{expected}）")
+                    _DOWNLOAD_SLOTS.acquire()
+                    try:
+                        with self._open(candidate, read_timeout, headers) as response:
+                            status = int(getattr(response, "status", 200) or 200)
+                            if existing and status != 206:
+                                existing = 0  # 服务器不支持续传，从头下载
+                            expected = size
+                            if expected is None:
+                                header_size = response.headers.get("Content-Length")
+                                length = int(header_size) if header_size and header_size.isdigit() else 0
+                                expected = existing + length if length else None
+                            downloaded = existing
+                            with open(tmp, "ab" if existing else "wb") as fh:
+                                while True:
+                                    wait_if_paused()
+                                    if cancel is not None and cancel.is_set():
+                                        raise Cancelled()
+                                    chunk = response.read(65536)
+                                    if not chunk:
+                                        break
+                                    fh.write(chunk)
+                                    downloaded += len(chunk)
+                                    if on_bytes:
+                                        on_bytes(len(chunk))
+                            if expected is not None and downloaded != expected:
+                                raise OSError(f"文件长度不符（{downloaded}/{expected}）")
+                    finally:
+                        _DOWNLOAD_SLOTS.release()
                     if sha1 and self._sha1(tmp) != sha1.lower():
                         raise OSError("SHA1 校验失败")
                     os.replace(tmp, dest)
+                    # 分段失败退回单流并成功时，清掉本次弃用的 .partN，避免残留占盘
+                    for part in dest.parent.glob(dest.name + ".part*"):
+                        part.unlink(missing_ok=True)
                     return dest.stat().st_size
                 except Cancelled:
                     # 取消时保留 .part：重新下载可走 Range 断点续传

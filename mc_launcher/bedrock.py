@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import DATA_DIR
-from .net import Cancelled, DownloadError
+from .net import Cancelled, DownloadError, download_slot
 
 PACKAGE_NAME = "Microsoft.MinecraftUWP"
 PACKAGE_FAMILY = "Microsoft.MinecraftUWP_8wekyb3d8bbwe"
@@ -627,18 +627,19 @@ class MultiPartDownload:
         attempt = 0
         while True:
             try:
-                with urllib.request.urlopen(request, timeout=30) as response:
-                    status = int(getattr(response, "status", 200) or 200)
-                    if status not in (200, 206):
-                        raise DownloadError(f"HTTP {status}")
-                    with open(part, "ab") as fh:
-                        while True:
-                            self._check()
-                            chunk = response.read(65536)
-                            if not chunk:
-                                break
-                            fh.write(chunk)
-                            self._report(len(chunk))
+                with download_slot():  # 与启动器其它下载共用 328 线程预算
+                    with urllib.request.urlopen(request, timeout=30) as response:
+                        status = int(getattr(response, "status", 200) or 200)
+                        if status not in (200, 206):
+                            raise DownloadError(f"HTTP {status}")
+                        with open(part, "ab") as fh:
+                            while True:
+                                self._check()
+                                chunk = response.read(65536)
+                                if not chunk:
+                                    break
+                                fh.write(chunk)
+                                self._report(len(chunk))
                 if part.stat().st_size >= length:
                     self._segment_finished(total_segments)
                     return
@@ -683,15 +684,16 @@ class MultiPartDownload:
                 headers["Range"] = f"bytes={offset}-"
             request = urllib.request.Request(self.url, headers=headers)
             try:
-                with urllib.request.urlopen(request, timeout=60) as response:
-                    with open(part, "ab" if offset else "wb") as fh:
-                        while True:
-                            self._check()
-                            chunk = response.read(65536)
-                            if not chunk:
-                                break
-                            fh.write(chunk)
-                            self._report(len(chunk))
+                with download_slot():  # 与启动器其它下载共用 328 线程预算
+                    with urllib.request.urlopen(request, timeout=60) as response:
+                        with open(part, "ab" if offset else "wb") as fh:
+                            while True:
+                                self._check()
+                                chunk = response.read(65536)
+                                if not chunk:
+                                    break
+                                fh.write(chunk)
+                                self._report(len(chunk))
             except Cancelled:
                 raise
             os.replace(part, dest)

@@ -162,12 +162,8 @@ def detect_java_installed(extra_paths: Iterable[str] = ()) -> list[JavaInfo]:
         if text:
             paths.append(Path(text))
 
-    which = shutil.which("java")
-    if which:
-        paths.append(Path(which))
-    which_w = shutil.which("javaw")
-    if which_w:
-        paths.append(Path(which_w))
+    which = _path_java_paths()
+    paths.extend(Path(p) for p in which)
 
     for root in _candidate_dirs():
         _collect_root_paths(root, paths)
@@ -211,6 +207,94 @@ def merge_java_lists(existing: Iterable[JavaInfo], incoming: Iterable[JavaInfo])
         if current is None or current.bits < info.bits:
             merged[key] = info
     return sorted(merged.values(), key=lambda j: (-j.major, j.path))
+
+
+def preload_jvm(path: str, timeout: int = 30) -> tuple[bool, str]:
+    """预加载 JVM（实验性）：用一次真实的 java 进程加载核心类与本地库到系统缓存。
+
+    不改变任何游戏配置，只是让后续启动游戏时的磁盘读取命中缓存。返回 (是否成功, 说明)。
+    """
+    text = str(path or "").strip().strip('"')
+    if not text:
+        return False, "未选择 Java"
+    if os.path.isdir(text):
+        # 传进来的是 Java 根目录时，优先用无窗口的 javaw，缺失时退回 java.exe
+        candidates = [Path(text) / "bin" / "javaw.exe", Path(text) / "bin" / "java.exe"]
+        found = next((p for p in candidates if p.exists()), None)
+        if found is None:
+            return False, f"未找到 java/javaw：{Path(text) / 'bin'}"
+        text = str(found)
+    if not Path(text).exists():
+        return False, f"Java 路径不存在：{text}"
+    try:
+        result = subprocess.run(
+            [text, "-Xshare:auto", "-XX:+UseSerialGC", "-version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        return False, str(exc)
+    if result.returncode != 0:
+        message = ((result.stderr or "") + (result.stdout or "")).strip()
+        return False, message[:300] or f"退出码 {result.returncode}"
+    return True, ""
+
+
+def _path_java_paths() -> list[str]:
+    """从 PATH 与 `where java` 的结果里找出 Java 可执行文件。
+
+    `where` 会按 PATH 顺序返回全部同名可执行文件；同时逐项检查 PATH 目录，
+    覆盖个别系统里 where 被禁用或返回不完整的情况。
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add(path: str) -> None:
+        text = str(path or "").strip().strip('"')
+        if not text:
+            return
+        key = os.path.normcase(os.path.normpath(text))
+        if key in seen:
+            return
+        if Path(text).is_file():
+            seen.add(key)
+            found.append(text)
+
+    for name in ("java", "javaw"):
+        which = shutil.which(name)
+        if which:
+            add(which)
+        if sys.platform == "win32":
+            where = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "where.exe"
+            if where.exists():
+                try:
+                    result = subprocess.run(
+                        [str(where), name],
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=10,
+                        creationflags=CREATE_NO_WINDOW,
+                    )
+                except (OSError, subprocess.SubprocessError):
+                    continue
+                for line in (result.stdout or "").splitlines():
+                    add(line)
+
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        folder = entry.strip().strip('"')
+        if not folder:
+            continue
+        for name in ("java.exe", "javaw.exe"):
+            candidate = Path(folder) / name
+            if candidate.is_file():
+                add(str(candidate))
+    return found
 
 
 def _registry_java_paths() -> list[str]:

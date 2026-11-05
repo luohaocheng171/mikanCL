@@ -93,10 +93,8 @@ def scroll_page(page: QWidget) -> QWidget:
     scroll.viewport().setAttribute(Qt.WA_OpaquePaintEvent, False)
     scroll.viewport().setAttribute(Qt.WA_StyledBackground, True)
     page.setAttribute(Qt.WA_StyledBackground, True)
-    # 用 inline 样式表确保背景一定被绘制（普通 QWidget 默认不绘制应用级背景）。
-    # 有自定义背景图时由 MainWindow._apply_appearance 统一改为 transparent。
-    scroll.viewport().setStyleSheet("background-color: #0c1310;")
-    page.setStyleSheet("background-color: #0c1310;")
+    # 底色统一由 theme.py 的全局规则 QScrollArea > QWidget / > QWidget > QWidget 负责，
+    # 不再为每个页面单独 inline setStyleSheet；自定义背景图时全局规则会改成 transparent。
     scroll.setWidget(page)
     return scroll
 

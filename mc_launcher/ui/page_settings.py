@@ -305,6 +305,19 @@ class SettingsPage(QWidget):
         self.general_threads_spin.setSuffix(f" {t('SettingsPage', '线程')}")
         form.addRow(self.tr("下载线程数"), self.general_threads_spin)
 
+        self.preload_check = QCheckBox(self.tr("预加载 JVM（实验性）"))
+        self.preload_check.setToolTip(
+            self.tr(
+                "开启后每次启动启动器都会在后台用所选 Java 预热一次 JVM（加载核心类与本地库到系统缓存），"
+                "之后启动游戏可更快进入；默认关闭，不影响未开启的用户。"
+            )
+        )
+        form.addRow("", self.preload_check)
+        self.preload_java_combo = QComboBox()
+        self.preload_java_combo.setMinimumWidth(220)
+        self.preload_check.toggled.connect(self.preload_java_combo.setEnabled)
+        form.addRow(self.tr("预加载的 Java"), self.preload_java_combo)
+
         self.general_hide_check = QCheckBox(self.tr("启动游戏后隐藏启动器（可从托盘恢复）"))
         form.addRow("", self.general_hide_check)
 
@@ -410,6 +423,7 @@ class SettingsPage(QWidget):
             "home": "启动游戏",
             "download": "下载安装",
             "downloads": "下载中心",
+            "download_accel": "下载加速",
             "content": "内容中心",
             "modpack": "整合包",
             "account": "账号管理",
@@ -1072,6 +1086,7 @@ class SettingsPage(QWidget):
     def _connect(self) -> None:
         self.ctx.bus.config_changed.connect(self._sync_ui_from_config)
         self.ctx.bus.javas_changed.connect(self._rebuild_java_table)
+        self.ctx.bus.javas_changed.connect(self._rebuild_preload_java)
 
     # ------------------------------------------------------------------
     def _rebuild_source_table(self) -> None:
@@ -1300,6 +1315,7 @@ class SettingsPage(QWidget):
             (self.general_hide_check, cfg.after_launch_action == "hide"),
             (self.start_anim_check, cfg.start_animation),
             (self.smart_jvm_check, cfg.smart_jvm),
+            (self.preload_check, cfg.preload_jvm),
         ):
             check.blockSignals(True)
             check.setChecked(bool(value))
@@ -1310,12 +1326,28 @@ class SettingsPage(QWidget):
         self.general_threads_spin.blockSignals(True)
         self.general_threads_spin.setValue(max(1, min(328, int(cfg.download_threads))))
         self.general_threads_spin.blockSignals(False)
+        self._rebuild_preload_java()
+        index = self.preload_java_combo.findData(cfg.preload_java_path or "")
+        self.preload_java_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.preload_java_combo.setEnabled(bool(cfg.preload_jvm))
         self.language_combo.blockSignals(True)
         index = self.language_combo.findData(cfg.language)
         self.language_combo.setCurrentIndex(index if index >= 0 else 0)
         self.language_combo.blockSignals(False)
         self._sync_appearance()
         self.authlib_path_label.setText(self._authlib_path_text())
+
+    def _rebuild_preload_java(self) -> None:
+        combo = self.preload_java_combo
+        current = combo.currentData() or ""
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("自动（使用启动时选中的 Java）", "")
+        for info in self.ctx.javas:
+            combo.addItem(f"Java {info.major} · {info.path}", info.path)
+        index = combo.findData(current)
+        combo.setCurrentIndex(index if index >= 0 else 0)
+        combo.blockSignals(False)
 
     def _authlib_path_text(self) -> str:
         from ..auth import injector_jar_path
@@ -1395,6 +1427,11 @@ class SettingsPage(QWidget):
         cfg.memory_mb = int(self.general_memory_spin.value())
         cfg.smart_jvm = self.smart_jvm_check.isChecked()
         cfg.download_threads = int(self.general_threads_spin.value())
+        cfg.preload_jvm = self.preload_check.isChecked()
+        cfg.preload_java_path = str(self.preload_java_combo.currentData() or "")
+        from ..net import set_default_download_workers
+
+        set_default_download_workers(cfg.download_threads)
         if self.general_hide_check.isChecked():
             if cfg.after_launch_action != "hide":
                 cfg.after_launch_action = "hide"
