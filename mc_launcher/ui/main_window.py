@@ -229,6 +229,10 @@ class MainWindow(QMainWindow):
         self._applied_stylesheet = ""
         self._plugin_pages: dict[int, QWidget] = {}
         self.plugin_manager: PluginManager | None = None
+        # 页面跳转历史：右下角下载悬浮按钮右键回到上一页
+        self._nav_history: list[str] = []
+        self._current_nav_key = ""
+        self._nav_skip_record = False
         self.setWindowTitle(f"{APP_NAME} · {self.tr('Minecraft 启动器')}")
         self.setWindowIcon(make_block_icon(64))
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
@@ -292,7 +296,7 @@ class MainWindow(QMainWindow):
     def _sync_window_buttons(self) -> None:
         if not hasattr(self, "title_bar"):
             return
-        self.title_bar.max_button.setText("❐" if self.isMaximized() else "□")
+        self.title_bar.max_button.setText("▣" if self.isMaximized() else "□")
 
     def changeEvent(self, event) -> None:  # noqa: N802
         super().changeEvent(event)
@@ -584,6 +588,21 @@ class MainWindow(QMainWindow):
         )
         if self.modpack_page is not None:
             self.modpack_page.launch_requested.connect(self._launch_from_modpack)
+
+        # 右下角圆形下载悬浮按钮：只有存在下载任务时才显示
+        self.download_fab = QPushButton("↓", root)
+        self.download_fab.setObjectName("DownloadFab")
+        self.download_fab.setFixedSize(52, 52)
+        self.download_fab.setCursor(Qt.PointingHandCursor)
+        self.download_fab.setToolTip(
+            self.tr("有下载任务进行中 · 左键前往下载中心，右键返回上一页")
+        )
+        self.download_fab.setVisible(False)
+        self.download_fab.clicked.connect(lambda: self._navigate_by_name("downloads"))
+        self.download_fab.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.download_fab.customContextMenuRequested.connect(
+            lambda _pos: self._back_to_previous_page()
+        )
         self._refresh_sidebar_account()
 
     def _launch_from_modpack(self, instance_id: str, version_id: str) -> None:
@@ -611,6 +630,7 @@ class MainWindow(QMainWindow):
         bus.accounts_changed.connect(self._refresh_sidebar_account)
         bus.config_changed.connect(self._refresh_sidebar_account)
         bus.config_changed.connect(self._apply_appearance)
+        self.ctx.downloads.changed.connect(self._update_download_fab)
         self.pages.currentChanged.connect(self._on_page_changed)
         # 主页右键「编辑版本设置」：先由 ControlPage 选中版本，再切到该页（不重复 refresh）
         bus.focus_version.connect(self._show_version_settings)
@@ -689,8 +709,8 @@ class MainWindow(QMainWindow):
             ACCENT_ENABLE_ACRYLICBLURBEHIND = 4
             ACCENT_DISABLED = 0
             accent = ACCENT_ENABLE_ACRYLICBLURBEHIND if enabled else ACCENT_DISABLED
-            # 0xAABBGGRR，低 alpha 让 DWM 模糊透出，深色基调
-            gradient_color = 0x99201818 if enabled else 0
+            # 0xAABBGGRR，低 alpha 让 DWM 模糊透出；与主题底色 #0c1310 保持同一色调
+            gradient_color = 0x9910130C if enabled else 0
 
             class AccentPolicy(ctypes.Structure):
                 _fields_ = [
@@ -723,6 +743,9 @@ class MainWindow(QMainWindow):
             return
         widget = self.pages.currentWidget()
         if widget is None:
+            return
+        # 浏览器页是独立的 WebEngine 合成层，加 opacity effect 会闪烁甚至黑屏
+        if widget is self.browser_page:
             return
         effect = QGraphicsOpacityEffect(widget)
         widget.setGraphicsEffect(effect)
@@ -794,6 +817,11 @@ class MainWindow(QMainWindow):
         self.nav_buttons[index].setChecked(True)
         # 页面可被功能开关隐藏，页码不固定：按导航 key 找刷新回调
         key = getattr(self.nav_buttons[index], "_nav_key", "")
+        if key != self._current_nav_key and not self._nav_skip_record:
+            if self._current_nav_key:
+                self._nav_history.append(self._current_nav_key)
+                del self._nav_history[:-20]
+        self._current_nav_key = key
         refresh = self._refresh_by_key.get(key)
         if callable(refresh):
             refresh()
@@ -802,6 +830,50 @@ class MainWindow(QMainWindow):
             plugin_refresh = getattr(self._plugin_pages[index], "refresh", None)
             if callable(plugin_refresh):
                 plugin_refresh()
+
+    # ---------- 下载悬浮按钮 ----------
+    def _update_download_fab(self) -> None:
+        if not hasattr(self, "download_fab"):
+            return
+        active = any(task.active for task in self.ctx.downloads.tasks())
+        if active and not self.download_fab.isVisible():
+            self.download_fab.setVisible(True)
+            self._place_download_fab()
+            self.download_fab.raise_()
+        elif not active and self.download_fab.isVisible():
+            self.download_fab.setVisible(False)
+
+    def _place_download_fab(self) -> None:
+        if not hasattr(self, "download_fab"):
+            return
+        fab = self.download_fab
+        root = self.root
+        fab.move(
+            max(0, root.width() - fab.width() - 24),
+            max(0, root.height() - fab.height() - 24),
+        )
+
+    def _back_to_previous_page(self) -> None:
+        """悬浮按钮右键：回到进入当前页之前的那一页。"""
+        while self._nav_history:
+            key = self._nav_history.pop()
+            if key and key != self._current_nav_key:
+                # switch_page 会把当前页再压入历史，这次回退要跳过记录，否则会来回跳
+                self._nav_skip_record = True
+                try:
+                    self._navigate_by_name(key)
+                finally:
+                    self._nav_skip_record = False
+                return
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._place_download_fab()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._place_download_fab()
+        self._update_download_fab()
 
     def _open_browser(self, url: str) -> None:
         if self.browser_page is None:
@@ -920,6 +992,7 @@ class MainWindow(QMainWindow):
         for page in (
             self.home_page,
             self.download_page,
+            self.download_accel_page,
             self.download_center_page,
             self.content_page,
             self.modpack_page,
@@ -934,6 +1007,8 @@ class MainWindow(QMainWindow):
             self.wiki_page,
             self.bedrock_page,
             self.skin_pack_page,
+            self.skin_factory_page,
+            self.seed_terrain_page,
             self.settings_page,
         ):
             if page is None:

@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_NAME
+from ..auth import AuthError, ensure_authlib_injector
 from ..config import ISOLATION_LABELS, PROCESS_PRIORITIES
 from ..content import (
     ContentError,
@@ -1192,11 +1193,26 @@ class ControlPage(QWidget):
             raise VersionError(warning or "未找到可用的 Java")
         setting = config.version_setting(version.id)
         account = self.ctx.current_account()
-        if account is not None and account.type != "offline":
+        authlib_jar = ""
+        auth_server = ""
+        if account is not None and account.type == "microsoft":
             player_name = account.name
             uuid = account.uuid
             access_token = account.access_token
             user_type = "msa"
+        elif account is not None and account.type == "authlib":
+            # 外置登录不能用 msa：--userType 必须是 legacy，并且要注入 authlib-injector
+            player_name = account.name
+            uuid = account.uuid
+            access_token = account.access_token
+            user_type = "legacy"
+            auth_server = account.auth_server
+            try:
+                authlib_jar = str(
+                    ensure_authlib_injector(config, log=lambda line: self.ctx.bus.log.emit(line))
+                )
+            except AuthError as exc:
+                raise VersionError(f"外置登录依赖准备失败：{exc}") from exc
         else:
             player_name = (account.name if account is not None else "") or config.player_name
             uuid = account.uuid if account is not None else ""
@@ -1226,7 +1242,8 @@ class ControlPage(QWidget):
                 uuid=uuid,
                 access_token=access_token,
                 user_type=user_type,
-                offline=(account is None or account.type == "offline"),
+                authlib_jar=authlib_jar,
+                auth_server=auth_server,
             )
         )
 

@@ -346,6 +346,9 @@ class SkinPackPage(QWidget):
         except SkinPackError as exc:
             QMessageBox.warning(self, APP_NAME, str(exc))
             return
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, f"读取皮肤文件失败：{exc}")
+            return
         QMessageBox.information(
             self,
             APP_NAME,
@@ -414,6 +417,9 @@ class SkinPackPage(QWidget):
                 )
         except SkinPackError as exc:
             QMessageBox.warning(self, APP_NAME, str(exc))
+            return
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, f"读取皮肤文件失败：{exc}")
             return
         self.ctx.bus.log.emit(
             f"[皮肤包] 已覆盖旧包 {len(removed)} 个，写入 {len(results)} 个游戏目录（{version} · {player}）"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import threading
 import time
@@ -1460,10 +1461,13 @@ class SettingsPage(QWidget):
             if not folder.is_dir():
                 continue
             for item in folder.iterdir():
+                # 缓存目录里可能有子目录（封面分组、整合包嵌套目录），需要递归删除
                 try:
-                    if item.is_file() or item.is_symlink():
+                    if item.is_dir() and not item.is_symlink():
+                        shutil.rmtree(item)
+                    else:
                         item.unlink()
-                        removed += 1
+                    removed += 1
                 except OSError:
                     failed += 1
         message = f"已清理{label}：{removed} 个文件。"

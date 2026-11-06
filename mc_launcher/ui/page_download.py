@@ -1818,7 +1818,9 @@ class DownloadPage(QWidget):
         )
         self._append_log(f"[安装] {final_version_id} 安装完成。")
         config = self.ctx.config
-        if not any(i.version_id == final_version_id for i in config.instances):
+        # instance_list() 包含动态构造的默认实例（config.instances 里没有），
+        # 否则同一个版本再次安装会重复登记一条实例记录
+        if not any(i.version_id == final_version_id for i in config.instance_list()):
             instance = config.add_instance(
                 name=final_version_id,
                 game_dir=str(config.game_path),

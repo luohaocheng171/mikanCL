@@ -13,6 +13,7 @@ from pathlib import Path
 
 from PySide6.QtCore import (
     QEvent,
+    QPoint,
     QPropertyAnimation,
     QRect,
     QRectF,
@@ -37,9 +38,11 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QFileDialog,
     QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -1099,7 +1102,7 @@ class LaunchWorker(QThread):
             if has_game_window(pid):
                 return  # 已出现游戏窗口，无需再等待
             cpu = process_cpu_seconds(pid)
-            if cpu is None or cpu > 0:
+            if cpu is not None and cpu > 0:
                 cpu_flat = False
             if self.cancel_event.wait(interval):
                 return
@@ -1132,16 +1135,17 @@ class LaunchWorker(QThread):
             self.session.stop()
 
 
-_LOG_ERROR_WORDS = ("[错误]", "error", "exception", "caused by", "fatal", "failed", "失败", "崩溃")
-_LOG_WARN_WORDS = ("[警告]", "warn", "警告")
+_LOG_ERROR_RE = re.compile(
+    r"\[错误\]|\b(error|exception|fatal|failed)\b|caused by|(?<!未)失败|崩溃", re.I
+)
+_LOG_WARN_RE = re.compile(r"\[警告\]|\bwarn(?:ing)?\b|警告", re.I)
 
 
 def _log_level(line: str) -> str:
     """粗略判断日志级别：error / warn / info，用于着色与过滤。"""
-    lowered = line.lower()
-    if any(word in lowered for word in _LOG_ERROR_WORDS):
+    if _LOG_ERROR_RE.search(line):
         return "error"
-    if any(word in lowered for word in _LOG_WARN_WORDS):
+    if _LOG_WARN_RE.search(line):
         return "warn"
     return "info"
 
@@ -1426,6 +1430,24 @@ class HomePage(QWidget):
         action_row.addWidget(download_button)
         versions_head.addLayout(head_row)
         versions_head.addLayout(action_row)
+
+        # 版本文件夹分区：不同目录各自独立的 versions / mods / 存档
+        dir_row = QHBoxLayout()
+        dir_row.setSpacing(8)
+        dir_label = QLabel(self.tr("版本文件夹"))
+        dir_label.setObjectName("Muted")
+        dir_row.addWidget(dir_label)
+        self.version_dir_combo = QComboBox()
+        self.version_dir_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.version_dir_combo.setToolTip(
+            self.tr("切换版本文件夹分区：每个目录拥有独立的 versions、mods 与存档")
+        )
+        dir_row.addWidget(self.version_dir_combo, 1)
+        self.version_dir_menu_button = QPushButton(self.tr("新建 / 选择…"))
+        self.version_dir_menu_button.setObjectName("Ghost")
+        self.version_dir_menu_button.clicked.connect(self._open_version_dir_menu)
+        dir_row.addWidget(self.version_dir_menu_button)
+        versions_head.addLayout(dir_row)
         versions_card.body.addLayout(versions_head)
 
         self.scroll = QScrollArea()
@@ -1497,6 +1519,7 @@ class HomePage(QWidget):
         self.height_spin.valueChanged.connect(self._on_resolution_changed)
         self.search_edit.textChanged.connect(self._apply_search)
         self.instance_combo.currentIndexChanged.connect(self._on_instance_changed)
+        self.version_dir_combo.currentIndexChanged.connect(self._on_version_dir_changed)
         self.ctx.bus.config_changed.connect(self.reload_config)
         self.ctx.bus.javas_changed.connect(self.reload_config)
         self.ctx.bus.versions_changed.connect(self._refresh_after_change)
@@ -1740,13 +1763,14 @@ class HomePage(QWidget):
     def reload_config(self) -> None:
         config = self.ctx.config
         self._reload_instances()
+        self._reload_version_dirs()
         self._refresh_account_card()
 
         memory = max(1024, min(16384, int(config.memory_mb)))
         self.memory_slider.blockSignals(True)
         self.memory_slider.setValue(memory)
         self.memory_slider.blockSignals(False)
-        self._on_memory_preview(memory)
+        self.memory_value.setText(f"{memory / 1024:.1f} GB")
 
         self.resolution_check.blockSignals(True)
         self.resolution_check.setChecked(bool(config.width and config.height))
@@ -1870,6 +1894,92 @@ class HomePage(QWidget):
         self.refresh_versions()
         self.reload_config()
         self.ctx.bus.toast.emit(f"已切换到实例：{self.instance_combo.currentText()}")
+
+    # ------------------------------------------------------------------
+    # 版本文件夹分区
+    def _reload_version_dirs(self) -> None:
+        current = self.ctx.config.active_game_dir
+        self.version_dir_combo.blockSignals(True)
+        self.version_dir_combo.clear()
+        for entry in self.ctx.config.game_dirs:
+            self.version_dir_combo.addItem(f"{entry.name} · {entry.path}", entry.id)
+        index = self.version_dir_combo.findData(current)
+        self.version_dir_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.version_dir_combo.blockSignals(False)
+
+    def _on_version_dir_changed(self, index: int) -> None:
+        dir_id = str(self.version_dir_combo.itemData(index) or "")
+        if not dir_id or dir_id == self.ctx.config.active_game_dir:
+            return
+        if not self.ctx.config.select_game_dir(dir_id):
+            return
+        # 版本文件夹分区作用于默认实例，避免与整合包实例目录互相干扰
+        if self.ctx.config.selected_instance_id != "default":
+            self.ctx.config.select_instance("default")
+        self._selected_id = ""
+        self.reload_config()
+        self.ctx.bus.versions_changed.emit()
+        self.ctx.bus.toast.emit(f"已切换版本文件夹：{self.version_dir_combo.currentText()}")
+
+    def _open_version_dir_menu(self) -> None:
+        menu = QMenu(self)
+        menu.addAction(self.tr("选择已有文件夹…"), self._add_version_dir_existing)
+        menu.addAction(self.tr("新建文件夹…"), self._create_version_dir)
+        menu.exec(
+            self.version_dir_menu_button.mapToGlobal(
+                QPoint(0, self.version_dir_menu_button.height())
+            )
+        )
+
+    def _add_version_dir_existing(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, self.tr("选择版本文件夹"), str(self._instance_dir()))
+        if not folder:
+            return
+        self._register_version_dir(Path(folder))
+
+    def _create_version_dir(self) -> None:
+        parent = QFileDialog.getExistingDirectory(
+            self, self.tr("选择新文件夹所在位置"), str(self._instance_dir().parent)
+        )
+        if not parent:
+            return
+        name, ok = QInputDialog.getText(
+            self, self.tr("新建版本文件夹"), self.tr("文件夹名称："), text="Minecraft"
+        )
+        name = str(name or "").strip()
+        if not ok or not name:
+            return
+        if any(char in name for char in '\\/:*?"<>|'):
+            QMessageBox.warning(self, APP_NAME, self.tr("文件夹名称不能包含 \\ / : * ? \" < > |"))
+            return
+        folder = Path(parent) / name
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "versions").mkdir(exist_ok=True)
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, t("HomePage", "创建文件夹失败：{0}", exc))
+            return
+        self._register_version_dir(folder)
+
+    def _register_version_dir(self, folder: Path) -> None:
+        target = os.path.normcase(os.path.normpath(str(folder)))
+        existing = next(
+            (
+                entry
+                for entry in self.ctx.config.game_dirs
+                if os.path.normcase(os.path.normpath(entry.path)) == target
+            ),
+            None,
+        )
+        if existing is None:
+            existing = self.ctx.config.add_game_dir(folder.name or "版本文件夹", str(folder))
+        self.ctx.config.select_game_dir(existing.id)
+        if self.ctx.config.selected_instance_id != "default":
+            self.ctx.config.select_instance("default")
+        self._selected_id = ""
+        self.reload_config()
+        self.ctx.bus.versions_changed.emit()
+        self.ctx.bus.toast.emit(f"已添加版本文件夹：{folder}")
 
     def launch_instance_version(self, instance_id: str, version_id: str) -> bool:
         """供「整合包」页调用：切换到指定实例并直接启动版本。"""
@@ -2012,6 +2122,9 @@ class HomePage(QWidget):
 
     def _on_memory_preview(self, value: int) -> None:
         self.memory_value.setText(f"{value / 1024:.1f} GB")
+        # 键盘方向键 / PageUp 调整时不会触发 sliderReleased，这里同步写入配置并防抖落盘
+        self.ctx.config.memory_mb = int(value)
+        self.ctx.config.save_debounced()
 
     def _save_memory(self) -> None:
         self.ctx.config.memory_mb = int(self.memory_slider.value())
@@ -2291,10 +2404,10 @@ class HomePage(QWidget):
             navigate("java")
         else:
             self.ctx.bus.navigate.emit("java")
-        page = getattr(main, "java_page", None) or getattr(main, "java_center_page", None)
+        page = getattr(main, "java_center_page", None)
         preselect = getattr(page, "preselect", None)
         if callable(preselect):
-            preselect(int(major))
+            preselect(int(major), "temurin")
 
     def _repair_version_files(self, version_id: str) -> None:
         """后台补全当前版本的缺失文件（libraries / assets 等），完成后提示并刷新列表。"""
@@ -2315,18 +2428,14 @@ class HomePage(QWidget):
 
     def _run_repair(self, version_id: str) -> None:
         """补全线程：只发信号回主线程，避免跨线程操作控件。"""
-        installer = getattr(self.ctx, "installer", None)
         ok, message = True, ""
         try:
             game_dir = self._instance_dir()
-            if installer is not None:
-                installer.config = self.ctx.config.with_game_dir(game_dir)
-            else:
-                installer = GameInstaller(
-                    self.ctx.config.with_game_dir(game_dir),
-                    self.ctx.sources,
-                    log_cb=lambda line: self.ctx.bus.log.emit(line),
-                )
+            installer = GameInstaller(
+                self.ctx.config.with_game_dir(game_dir),
+                self.ctx.sources,
+                log_cb=lambda line: self.ctx.bus.log.emit(line),
+            )
             installer.ensure_version(version_id)
         except Cancelled:
             ok, message = False, "补全已取消。"
@@ -2392,7 +2501,14 @@ class HomePage(QWidget):
         self.start_anim.finish()
         self.launch_button.setText(self.tr("启动游戏"))
         self.launch_button.setEnabled(bool(self._selected_id))
-        if self._selected_id:
+        if self._selected_id == BEDROCK_ID:
+            version = str((self._bedrock_info or {}).get("Version") or "").strip()
+            self.launch_info.setText(
+                t("HomePage", "将启动：基岩版 {0}", version)
+                if version
+                else self.tr("将启动：基岩版")
+            )
+        elif self._selected_id:
             row = self._rows.get(self._selected_id)
             loader = row.version.loader if row else ""
             self.launch_info.setText(

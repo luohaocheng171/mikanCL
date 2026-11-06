@@ -300,7 +300,6 @@ def _merge_custom_skin_loader(root: Path) -> Path:
     for index, item in enumerate(loadlist):
         if isinstance(item, dict) and str(item.get("name") or "") == entry["name"]:
             merged = dict(item)
-            merged.update({k: v for k, v in entry.items() if k not in item or not item[k]})
             merged.update(entry)
             loadlist[index] = merged
             replaced = True

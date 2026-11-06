@@ -19,7 +19,14 @@ from typing import Callable, Iterable
 
 from . import USER_AGENT
 from .config import DATA_DIR
-from .net import Candidate, DownloadError, Http, open_with_ssl_fallback, proxy_opener
+from .net import (
+    Candidate,
+    DownloadError,
+    Http,
+    open_with_ssl_fallback,
+    probe_download_size,
+    proxy_opener,
+)
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 ADOPTIUM_LATEST = "https://api.adoptium.net/v3/assets/latest/{major}/hotspot"
@@ -570,6 +577,7 @@ def _version_entry(
     latest: bool = False,
     fallback: bool = False,
     package: str = "jdk",
+    install: str = "zip",
 ) -> dict:
     dist = _DISTRIBUTIONS_BY_ID.get(dist_id, {})
     return {
@@ -587,6 +595,7 @@ def _version_entry(
         "latest": bool(latest),
         "fallback": bool(fallback),
         "package": "jre" if str(package).lower() == "jre" else "jdk",
+        "install": "installer" if str(install).lower() == "installer" else "zip",
     }
 
 
@@ -1405,6 +1414,267 @@ def find_java_in(root: Path) -> str:
     return ""
 
 
+# 提供官方 EXE / MSI 安装程序的发行版
+_INSTALLER_DISTS = frozenset({"temurin", "azul", "corretto"})
+
+
+def installer_supported(dist_id: str) -> bool:
+    """该发行版是否提供 Windows 官方安装程序（EXE / MSI）。"""
+    return str(dist_id or "").lower() in _INSTALLER_DISTS
+
+
+def _installer_kind(link: str) -> str:
+    lowered = str(link).lower()
+    if lowered.endswith(".msi"):
+        return "msi"
+    if lowered.endswith(".exe"):
+        return "exe"
+    return ""
+
+
+def fetch_java_installer_versions(
+    dist_id: str, major: int, timeout: int = 25, limit: int = 10, package: str = "jdk"
+) -> list[dict]:
+    """获取某发行版官方 Windows 安装程序（EXE / MSI）的可用版本列表。
+
+    与便携 ZIP 列表结构一致，额外带 install="installer" 标记；只有
+    Temurin / Azul Zulu / Amazon Corretto 提供稳定的安装程序直链。
+    """
+    dist_id = str(dist_id or "").lower()
+    image_type = "jre" if str(package).lower() == "jre" else "jdk"
+    cache_key = (f"{dist_id}#installer", int(major), image_type)
+    with _VERSION_CACHE_LOCK:
+        hit = _VERSION_CACHE.get(cache_key)
+    if hit and time.time() - hit[0] < _VERSION_CACHE_TTL:
+        return [dict(item) for item in hit[1]]
+
+    rows: list[dict] = []
+    if dist_id == "temurin":
+        url = (
+            "https://api.adoptium.net/v3/assets/feature_releases/"
+            f"{int(major)}/ga?architecture=x64&heap_size=normal&image_type={image_type}"
+            "&jvm_impl=hotspot&os=windows&page=0&page_size={limit}&project=jdk"
+            "&sort_method=DEFAULT&sort_order=DESC&vendor=eclipse"
+        ).format(limit=max(1, limit))
+        data = Http(timeout=timeout).get_json_url(url)
+        for release in data if isinstance(data, list) else []:
+            if not isinstance(release, dict):
+                continue
+            release_name = str(release.get("release_name") or "").strip()
+            version = release_name[4:] if release_name.startswith("jdk-") else release_name
+            if version.startswith("jdk8u"):
+                version = version[3:]
+            for binary in release.get("binaries") or []:
+                if not isinstance(binary, dict):
+                    continue
+                installer = binary.get("installer") or {}
+                link = str(installer.get("link") or "")
+                kind = _installer_kind(link)
+                if not kind:
+                    continue
+                rows.append(
+                    _version_entry(
+                        "temurin",
+                        major,
+                        version or str(release.get("id") or ""),
+                        link,
+                        name=str(installer.get("name") or ""),
+                        size=int(installer.get("size") or 0),
+                        checksum=str(installer.get("checksum") or ""),
+                        note=f"Adoptium 官方安装程序（{kind.upper()}） · {release_name}",
+                        package=package,
+                        install="installer",
+                    )
+                )
+                break
+            if len(rows) >= limit:
+                break
+    elif dist_id == "azul":
+        url = (
+            "https://api.azul.com/metadata/v1/zulu/packages/?"
+            f"java_version={int(major)}&os=windows&arch=x64"
+            f"&java_package_type={image_type}&archive_type=msi"
+            f"&availability_types=CA&page_size={max(4, limit * 2)}"
+        )
+        data = Http(timeout=timeout).get_json_url(url)
+        seen_versions: set[str] = set()
+        for item in data if isinstance(data, list) else []:
+            if not isinstance(item, dict):
+                continue
+            link = str(item.get("download_url") or "")
+            kind = _installer_kind(link)
+            if not kind:
+                continue
+            name = str(item.get("name") or "")
+            # 跳过带 JavaFX 的捆绑包（-fx-），只保留标准 Zulu
+            if "-fx-" in name.lower():
+                continue
+            raw_version = item.get("java_version")
+            if isinstance(raw_version, (list, tuple)):
+                version_text = ".".join(str(part) for part in raw_version)
+            else:
+                version_text = str(raw_version or major)
+            if version_text in seen_versions:
+                continue
+            seen_versions.add(version_text)
+            rows.append(
+                _version_entry(
+                    "azul",
+                    major,
+                    version_text,
+                    link,
+                    name=name,
+                    size=int(item.get("size") or 0),
+                    note=f"Azul 官方安装程序（{kind.upper()}）",
+                    package=package,
+                    install="installer",
+                )
+            )
+            if len(rows) >= limit:
+                break
+    elif dist_id == "corretto":
+        # Corretto 只提供固定名称的 latest 安装程序，没有历史版本直链
+        link = (
+            f"https://corretto.aws/downloads/latest/"
+            f"amazon-corretto-{int(major)}-x64-windows-{image_type}.msi"
+        )
+        final, size = _head_url(link, timeout=timeout)
+        if final:
+            rows.append(
+                _version_entry(
+                    "corretto",
+                    major,
+                    f"{int(major)} (latest)",
+                    final,
+                    name=final.rsplit("/", 1)[-1],
+                    size=size,
+                    note="Amazon 官方 MSI 安装程序（latest）",
+                    latest=True,
+                    package=package,
+                    install="installer",
+                )
+            )
+
+    if rows:
+        with _VERSION_CACHE_LOCK:
+            _VERSION_CACHE[cache_key] = (time.time(), rows)
+    return [dict(item) for item in rows]
+
+
+def add_user_path_entry(directory: str | Path) -> tuple[bool, str]:
+    """把目录写入当前用户 PATH（HKCU\\Environment），并同步更新当前进程 PATH。
+
+    仅用于「ZIP 便携版自动安装」后让 java 命令全局可用；已存在时不会重复追加。
+    """
+    folder = Path(directory)
+    if not folder.is_dir():
+        return False, f"目录不存在：{folder}"
+    entry = os.path.normpath(str(folder))
+    needle = os.path.normcase(entry)
+    # 当前进程立即可用（子进程与 where 查找都能命中）
+    parts = [part for part in os.environ.get("PATH", "").split(os.pathsep) if part.strip()]
+    if not any(os.path.normcase(os.path.normpath(part.strip('"'))) == needle for part in parts):
+        os.environ["PATH"] = entry + os.pathsep + os.environ.get("PATH", "")
+    if sys.platform != "win32":
+        return True, "已加入当前进程 PATH（非 Windows 不写注册表）"
+    try:
+        import winreg
+
+        with winreg.CreateKeyEx(
+            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ | winreg.KEY_SET_VALUE
+        ) as key:
+            try:
+                current, kind = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                current, kind = "", winreg.REG_EXPAND_SZ
+            existing = [part for part in str(current or "").split(";") if part.strip()]
+            if any(
+                os.path.normcase(os.path.normpath(part.strip().strip('"'))) == needle
+                for part in existing
+            ):
+                return True, "该目录已在用户 PATH 中"
+            existing.append(entry)
+            winreg.SetValueEx(key, "Path", 0, kind or winreg.REG_EXPAND_SZ, ";".join(existing))
+    except OSError as exc:
+        return False, f"写入用户 PATH 失败：{exc}"
+    try:
+        import ctypes
+
+        # 广播 WM_SETTINGCHANGE，让已打开的资源管理器 / 终端读取新 PATH
+        ctypes.windll.user32.SendMessageTimeoutW(
+            0xFFFF, 0x001A, 0, ctypes.c_wchar_p("Environment"), 0x0002, 1000, None
+        )
+    except Exception:  # noqa: BLE001 - 广播失败不影响 PATH 已写入
+        pass
+    return True, "已加入用户 PATH"
+
+
+def install_java_with_installer(
+    asset: dict,
+    log: Callable[[str], None] | None = None,
+    on_bytes: Callable[[int], None] | None = None,
+    cancel: threading.Event | None = None,
+    pause: threading.Event | None = None,
+    on_total: Callable[[int], None] | None = None,
+    timeout: int = 1200,
+) -> JavaInfo:
+    """下载官方安装程序并运行安装向导，结束后重新扫描并返回新装的 Java。
+
+    MSI 通过 msiexec 启动，EXE 直接运行；两者都会弹出官方向导（可能带 UAC 提权），
+    用户取消安装时返回非 0 退出码，这里转成 DownloadError 由下载中心显示。
+    """
+    link = str(asset.get("url") or "")
+    if not link:
+        raise DownloadError("安装程序链接为空")
+    downloads = Path(DATA_DIR) / "downloads"
+    downloads.mkdir(parents=True, exist_ok=True)
+    name = str(asset.get("name") or "").strip()
+    if not name:
+        name = urllib.parse.urlparse(link).path.rsplit("/", 1)[-1] or "java-installer.msi"
+    dest = downloads / name
+    size = int(asset.get("size") or 0)
+    if size <= 0:
+        try:
+            size, _supports_range = probe_download_size(link)
+        except Exception:  # noqa: BLE001 - 探测失败只影响进度显示
+            size = 0
+    if on_total:
+        on_total(size)
+    if log:
+        log(f"[Java] 正在下载安装程序：{name}")
+    Http(timeout=60).download(
+        [Candidate(link, source_name="Java 安装程序")],
+        dest,
+        size=size or None,
+        on_bytes=on_bytes,
+        cancel=cancel,
+        pause=pause,
+        parallel=True,
+        workers=8,
+    )
+    kind = _installer_kind(link) or "msi"
+    if log:
+        log("[Java] 下载完成，正在启动官方安装程序（如提示 UAC 请选择「是」）")
+    command = ["msiexec", "/i", str(dest)] if kind == "msi" else [str(dest)]
+    try:
+        result = subprocess.run(command, timeout=max(60, int(timeout)))
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise DownloadError(f"启动安装程序失败：{exc}") from exc
+    finally:
+        dest.unlink(missing_ok=True)
+    if result.returncode not in (0, 3010):
+        raise DownloadError(f"安装程序退出码 {result.returncode}（可能取消了安装）")
+    wanted = int(asset.get("major") or 0)
+    javas = detect_java_installed()
+    matching = [info for info in javas if not wanted or info.major == wanted]
+    if not matching:
+        raise DownloadError("安装程序已结束，但未检测到新安装的 Java（可能取消了安装）")
+    best = max(matching, key=lambda info: info.bits)
+    if log:
+        log(f"[Java] 安装完成：{best.path}（{best.version}）")
+    return best
+
+
 def download_java(
     major: int,
     dest_root: str | Path,
@@ -1472,6 +1742,11 @@ def download_java(
     info = probe_java(java_path)
     if info is None:
         raise DownloadError("下载的 Java 无法运行")
+    # 便携版自动安装：把 bin 目录加入当前用户 PATH，命令行与其它程序都能直接调用
+    added, note = add_user_path_entry(Path(info.path).parent)
     if log:
-        log(f"[Java] 安装完成：{info.path}（{info.version}）")
+        log(
+            f"[Java] 安装完成：{info.path}（{info.version}）"
+            + (f" · PATH：{note}" if added else f" · PATH 更新失败：{note}")
+        )
     return info

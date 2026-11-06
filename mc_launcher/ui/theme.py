@@ -50,6 +50,12 @@ QPushButton#WinClose:hover { background-color: #c23b3b; color: #ffffff; }
 QPushButton#NavButton { text-align: left; padding: 10px 14px; border-radius: 9px; color: #9fb6a7; background: transparent; border: none; font-size: 13px; }
 QPushButton#NavButton:hover { background-color: #142018; color: #dfeee3; }
 QPushButton#NavButton:checked { background-color: #1a2f22; color: #86e88f; font-weight: 600; }
+QPushButton#DownloadFab {
+    background-color: #65d46e; color: #06110a; border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 26px; font-size: 19px; font-weight: 700;
+}
+QPushButton#DownloadFab:hover { background-color: #7ae884; }
+QPushButton#DownloadFab:pressed { background-color: #4fbe58; }
 QFrame#Card { background-color: #121d16; border: 1px solid #1f2f25; border-radius: 14px; }
 QLabel#CardTitle { font-size: 15px; font-weight: 600; color: #eaf4ec; }
 QLabel#TaskStage { color: #9fe0ab; font-size: 13px; font-weight: 600; }

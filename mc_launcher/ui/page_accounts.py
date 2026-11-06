@@ -966,8 +966,8 @@ class AccountsPage(QWidget):
             return
         try:
             auth.validate_skin_file(path)
-        except AuthError as exc:
-            QMessageBox.warning(self, APP_NAME, str(exc))
+        except (AuthError, OSError) as exc:
+            QMessageBox.warning(self, APP_NAME, f"读取皮肤失败：{exc}")
             return
         model = ask_skin_model(self, account.skin_model or "classic")
         if model is None:

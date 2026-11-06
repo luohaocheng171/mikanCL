@@ -816,15 +816,27 @@ class ContentInstallWorker(QThread):
             pause=self.pause_event,
             files_progress=_files_progress,
         )
-        instance = self.ctx.config.add_instance(
-            meta.name or self.project.title,
-            str(target),
-            version_id=version_id,
-            loader=meta.loader,
-            mc_version=meta.mc_version,
-            modpack=self.project.title,
-            loader_version=meta.loader_version,
+        # 同一目录、同一版本重复安装整合包时复用已有实例，避免实例列表出现重复项
+        target_key = os.path.normcase(os.path.normpath(str(target)))
+        instance = next(
+            (
+                item
+                for item in self.ctx.config.instance_list()
+                if item.version_id == version_id
+                and os.path.normcase(os.path.normpath(item.game_dir)) == target_key
+            ),
+            None,
         )
+        if instance is None:
+            instance = self.ctx.config.add_instance(
+                meta.name or self.project.title,
+                str(target),
+                version_id=version_id,
+                loader=meta.loader,
+                mc_version=meta.mc_version,
+                modpack=self.project.title,
+                loader_version=meta.loader_version,
+            )
         write_instance_manifest(instance, target)
         self.ctx.config.select_instance(instance.id)
         self.ctx.config.save()
@@ -2329,12 +2341,9 @@ class ContentPage(QWidget):
         task = self.ctx.downloads.submit(
             kind_label,
             project.title,
-            lambda _task: self._spawn_install(),
-            cancel=lambda: (
-                self._install_worker.cancel_event.set() if self._install_worker else None
-            ),
+            self._install_factory,
             pause=self._install_pause,
-            rebuild=lambda _task: self._spawn_install(_task.id),
+            rebuild=self._install_factory,
             target_dir=str(target_dir),
             detail="准备下载…",
         )
@@ -2343,11 +2352,25 @@ class ContentPage(QWidget):
             f"开始安装 {version.primary_file.filename if version.primary_file else project.title}…"
         )
 
+    def _install_factory(self, task) -> ContentInstallWorker:
+        """下载中心创建/重试任务时都走这里。
+
+        取消回调必须绑定到本次新建的 worker：失败后重试会重建 worker，
+        若沿用提交时捕获的旧线程，重试后的「取消」会作用在已经结束的实例上。
+        """
+        worker = self._spawn_install(task.id)
+        task.cancel = worker.cancel_event.set
+        task.pause_event = worker.pause_event
+        return worker
+
     def _spawn_install(self, task_id: str = "") -> ContentInstallWorker:
         """创建（或重试时重建）内容安装线程。"""
         if self._pending_install is None:
             raise RuntimeError("没有待安装的内容")
         project, version, target_dir = self._pending_install
+        previous = self._install_worker
+        if previous is not None and not previous.isRunning():
+            previous.deleteLater()
         worker = ContentInstallWorker(self.ctx, project, version, target_dir, self)
         worker.pause_event = self._install_pause
         worker.progress.connect(self._on_install_progress)
@@ -2378,21 +2401,30 @@ class ContentPage(QWidget):
         task = self.ctx.downloads.submit(
             "纯下载",
             dest.name,
-            lambda item: self._spawn_save(item.id),
-            cancel=lambda: self._save_worker.cancel_event.set() if self._save_worker else None,
+            self._save_factory,
             pause=self._save_pause,
-            rebuild=lambda item: self._spawn_save(item.id),
+            rebuild=self._save_factory,
             target_dir=str(dest.parent),
             detail=f"另存为：{dest.name}",
         )
         self._save_task_id = task.id
         self.ctx.bus.log.emit(f"[下载] 开始另存为 {dest}")
 
+    def _save_factory(self, task) -> SaveFileWorker:
+        """同 _install_factory：取消回调跟随本次新建的下载线程。"""
+        worker = self._spawn_save(task.id)
+        task.cancel = worker.cancel_event.set
+        task.pause_event = worker.pause_event
+        return worker
+
     def _spawn_save(self, task_id: str = "") -> SaveFileWorker:
         """创建（或重试时重建）纯下载线程。"""
         if self._pending_save is None:
             raise RuntimeError("没有待保存的文件")
         project, version, dest = self._pending_save
+        previous = self._save_worker
+        if previous is not None and not previous.isRunning():
+            previous.deleteLater()
         worker = SaveFileWorker(self.ctx, project, version, dest, self)
         worker.pause_event = self._save_pause
         worker.log.connect(self.ctx.bus.log.emit)

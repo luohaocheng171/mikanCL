@@ -28,7 +28,10 @@ from ..java import (
     detect_java_installed,
     download_java,
     fetch_distribution_versions,
+    fetch_java_installer_versions,
     find_java_in,
+    install_java_with_installer,
+    installer_supported,
     java_runtime_name,
     list_java_distributions,
     merge_java_lists,
@@ -70,6 +73,7 @@ class ResolveWorker(QThread):
         major: int,
         force: bool = False,
         package: str = "jdk",
+        install_mode: str = "zip",
         parent=None,
     ):
         super().__init__(parent)
@@ -77,13 +81,19 @@ class ResolveWorker(QThread):
         self.major = int(major)
         self.force = force
         self.package = "jre" if str(package).lower() == "jre" else "jdk"
+        self.install_mode = "installer" if install_mode == "installer" else "zip"
 
     def run(self) -> None:
-        key = f"{self.dist_id}:{self.major}:{self.package}"
+        key = f"{self.dist_id}:{self.major}:{self.package}:{self.install_mode}"
         try:
-            versions = fetch_distribution_versions(
-                self.dist_id, self.major, force=self.force, package=self.package
-            )
+            if self.install_mode == "installer":
+                versions = fetch_java_installer_versions(
+                    self.dist_id, self.major, package=self.package
+                )
+            else:
+                versions = fetch_distribution_versions(
+                    self.dist_id, self.major, force=self.force, package=self.package
+                )
             self.done.emit(key, versions)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(key, str(exc))
@@ -154,6 +164,61 @@ class JavaCenterInstallWorker(QThread):
             self.failed.emit(str(exc))
 
 
+class JavaInstallerWorker(QThread):
+    """下载官方 EXE / MSI 安装程序并运行安装向导，完成后重新扫描 Java。"""
+
+    done = Signal(object)
+    failed = Signal(str)
+    progress = Signal(float, float)
+
+    def __init__(
+        self,
+        asset: dict,
+        task_id: str = "",
+        cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.asset = dict(asset)
+        self.task_id = task_id
+        self.cancel_event = cancel_event or threading.Event()
+        self.pause_event = pause_event or threading.Event()
+
+    def run(self) -> None:
+        state = {"total": 0, "bytes": 0, "last_t": time.time(), "last_b": 0}
+
+        def on_total(total: int) -> None:
+            state["total"] = int(total)
+
+        def on_bytes(n: int) -> None:
+            state["bytes"] += n
+            now = time.time()
+            if now - state["last_t"] < 0.25:
+                return
+            dt = now - state["last_t"]
+            speed = (state["bytes"] - state["last_b"]) / dt if dt > 0 else 0.0
+            state["last_t"], state["last_b"] = now, state["bytes"]
+            total = state["total"]
+            percent = min(1.0, state["bytes"] / total) if total else 0.0
+            self.progress.emit(percent, speed)
+
+        try:
+            info = install_java_with_installer(
+                self.asset,
+                log=lambda text: None,
+                on_bytes=on_bytes,
+                cancel=self.cancel_event,
+                pause=self.pause_event,
+                on_total=on_total,
+            )
+            self.done.emit(info)
+        except Cancelled:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
 # ---------------------------------------------------------------------------
 class JavaCenterPage(QWidget):
     """Java 中心页：按发行版 + 主版本筛选，列出官方渠道的真实版本并提供下载。"""
@@ -184,6 +249,8 @@ class JavaCenterPage(QWidget):
             "版本列表来自各发行版官方 API / 官方下载页；查询失败时自动回退到官方最新版稳定链接。"
             "标有「国内镜像」的发行版（清华 TUNA、华为云）在国内下载更快；"
             "大文件会自动启用多线程分段下载。"
+            "安装方式可选「ZIP 便携版」（解压到 data/runtime 并自动写入用户 PATH）"
+            "或「官方安装程序」（Temurin / Azul / Corretto 提供 EXE / MSI 向导安装）。"
             "下载任务统一登记到下载中心，可暂停 / 取消 / 重试。"
         )
         tip.setObjectName("Tiny")
@@ -212,6 +279,19 @@ class JavaCenterPage(QWidget):
         self._populate_types()
         toolbar.addWidget(self._type_combo)
 
+        mode_label = QLabel("安装方式")
+        mode_label.setObjectName("Tiny")
+        toolbar.addWidget(mode_label)
+
+        self._mode_combo = QComboBox()
+        self._mode_combo.setMinimumWidth(210)
+        self._mode_combo.setToolTip(
+            "ZIP 便携版：解压到 data/runtime 并自动加入用户 PATH；"
+            "安装程序：下载官方 EXE / MSI 并启动向导，安装到系统默认位置。"
+        )
+        self._populate_modes()
+        toolbar.addWidget(self._mode_combo)
+
         major_label = QLabel("主版本")
         major_label.setObjectName("Tiny")
         toolbar.addWidget(major_label)
@@ -236,6 +316,7 @@ class JavaCenterPage(QWidget):
         # 选择变化只触发一次查询（构造完成后再接线，避免初始化期重复请求）
         self._dist_combo.currentIndexChanged.connect(self._on_distribution_changed)
         self._type_combo.currentIndexChanged.connect(self._on_type_changed)
+        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         self._major_combo.currentIndexChanged.connect(self._on_major_changed)
 
         table = QTableWidget(0, 5)
@@ -280,6 +361,24 @@ class JavaCenterPage(QWidget):
         value = self._type_combo.currentData() if hasattr(self, "_type_combo") else "jdk"
         return "jre" if str(value or "jdk").lower() == "jre" else "jdk"
 
+    def _current_mode(self) -> str:
+        value = self._mode_combo.currentData() if hasattr(self, "_mode_combo") else "zip"
+        return "installer" if str(value or "zip") == "installer" else "zip"
+
+    def _populate_modes(self) -> None:
+        """按当前发行版重建安装方式；没有官方安装程序的发行版只保留 ZIP。"""
+        dist = self._current_distribution()
+        supported = installer_supported(str((dist or {}).get("id") or ""))
+        previous = self._current_mode() if hasattr(self, "_mode_combo") else "zip"
+        self._mode_combo.blockSignals(True)
+        self._mode_combo.clear()
+        self._mode_combo.addItem("ZIP 便携版（自动解压 + PATH）", "zip")
+        if supported:
+            self._mode_combo.addItem("官方安装程序（EXE / MSI）", "installer")
+        index = self._mode_combo.findData(previous)
+        self._mode_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._mode_combo.blockSignals(False)
+
     def _populate_types(self) -> None:
         """按当前发行版重建安装类型选项；不支持 JRE 的发行版只保留完整 JDK。"""
         dist = self._current_distribution()
@@ -313,10 +412,14 @@ class JavaCenterPage(QWidget):
 
     def _on_distribution_changed(self, _index: int = -1) -> None:
         self._populate_types()
+        self._populate_modes()
         self._populate_majors()
         self.refresh()
 
     def _on_type_changed(self, _index: int = -1) -> None:
+        self.refresh()
+
+    def _on_mode_changed(self, _index: int = -1) -> None:
         self.refresh()
 
     def _on_major_changed(self, _index: int = -1) -> None:
@@ -336,6 +439,7 @@ class JavaCenterPage(QWidget):
                 self._dist_combo.setCurrentIndex(index)
                 self._dist_combo.blockSignals(False)
                 self._populate_types()
+                self._populate_modes()
         # 复用现有 populate 路径重建主版本项，保证下拉已填充后再精确选择
         self._populate_majors(default=wanted)
         index = self._major_combo.findData(wanted)
@@ -360,15 +464,19 @@ class JavaCenterPage(QWidget):
         if dist is None or major is None:
             return
         pkg = self._current_package()
-        self._request_key = f"{dist['id']}:{major}:{pkg}"
+        mode = self._current_mode()
+        self._request_key = f"{dist['id']}:{major}:{pkg}:{mode}"
         self._refresh_btn.setEnabled(False)
         type_text = "运行时 JRE" if pkg == "jre" else "完整 JDK"
+        mode_text = "安装程序" if mode == "installer" else "便携版"
         self._status_label.setText(
-            f"正在获取 {dist['name']} Java {major} {type_text} 版本…"
+            f"正在获取 {dist['name']} Java {major} {type_text}（{mode_text}）版本…"
         )
         self._show_placeholder("正在获取版本…")
 
-        worker = ResolveWorker(dist["id"], major, force=force, package=pkg, parent=self)
+        worker = ResolveWorker(
+            dist["id"], major, force=force, package=pkg, install_mode=mode, parent=self
+        )
         worker.done.connect(self._on_versions)
         worker.failed.connect(self._on_versions_failed)
         worker.finished.connect(lambda w=worker: self._discard_worker(w))
@@ -417,8 +525,12 @@ class JavaCenterPage(QWidget):
             if isinstance(item, dict) and str(item.get("url") or "")
         ] if isinstance(versions, list) else []
         if not rows:
-            self._status_label.setText("获取失败，暂无可用版本，请检查网络后重试")
-            self._show_placeholder("获取失败，请检查网络后重试")
+            if self._current_mode() == "installer":
+                self._status_label.setText("该发行版暂未提供官方安装程序，请切换到 ZIP 便携版")
+                self._show_placeholder("没有可用的官方安装程序")
+            else:
+                self._status_label.setText("获取失败，暂无可用版本，请检查网络后重试")
+                self._show_placeholder("获取失败，请检查网络后重试")
             return
         self._versions = rows
         if all(bool(row.get("fallback")) for row in rows):
@@ -479,6 +591,15 @@ class JavaCenterPage(QWidget):
 
     def _installed_path(self, item: dict) -> str:
         major = int(item.get("major") or self._current_major() or 0)
+        if str(item.get("install") or "zip") == "installer":
+            # 安装程序装到系统默认位置，只有版本号对得上才算已安装
+            version = str(item.get("version") or "")
+            for info in self.ctx.javas:
+                if not major or info.major != major:
+                    continue
+                if version and (version in info.version or info.version in version):
+                    return info.path
+            return ""
         name = java_runtime_name(
             major,
             str(item.get("id") or ""),
@@ -497,6 +618,7 @@ class JavaCenterPage(QWidget):
             return
         major = int(item.get("major") or self._current_major() or 0)
         pkg = "jre" if str(item.get("package") or "jdk").lower() == "jre" else "jdk"
+        install_mode = "installer" if str(item.get("install") or "zip") == "installer" else "zip"
         target_name = java_runtime_name(
             major,
             str(item.get("id") or ""),
@@ -513,23 +635,32 @@ class JavaCenterPage(QWidget):
             task.cancel = cancel_event.set
             task.pause_event = pause_event
             self._task_packages[task.id] = pkg
-            worker = JavaCenterInstallWorker(
-                major,
-                JAVA_ROOT,
-                task.id,
-                cancel_event,
-                pause_event,
-                url,
-                target_name,
-                int(item.get("size") or 0),
-                self,
-            )
+            if install_mode == "installer":
+                worker: QThread = JavaInstallerWorker(
+                    item, task.id, cancel_event, pause_event, self
+                )
+            else:
+                worker = JavaCenterInstallWorker(
+                    major,
+                    JAVA_ROOT,
+                    task.id,
+                    cancel_event,
+                    pause_event,
+                    url,
+                    target_name,
+                    int(item.get("size") or 0),
+                    self,
+                )
             worker.progress.connect(
                 lambda percent, speed, tid=task.id: self.ctx.downloads.update(
                     tid,
                     percent=percent,
                     speed=speed,
-                    stage=f"下载 Java {major}",
+                    stage=(
+                        "安装向导进行中…"
+                        if install_mode == "installer" and percent >= 1.0
+                        else f"下载 Java {major}"
+                    ),
                 )
             )
             worker.done.connect(lambda info, tid=task.id: self._on_installed(tid, info))
@@ -542,7 +673,8 @@ class JavaCenterPage(QWidget):
 
         detail = str(item.get("note") or item.get("channel") or "")
         type_text = "JRE" if pkg == "jre" else "JDK"
-        display_name = f"{dist_name} Java {version_label} · {type_text}"
+        mode_text = "安装程序" if install_mode == "installer" else "便携版"
+        display_name = f"{dist_name} Java {version_label} · {type_text} · {mode_text}"
         self.ctx.downloads.submit(
             kind="Java",
             name=display_name,
