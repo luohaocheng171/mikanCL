@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -60,6 +61,13 @@ _LATEST_PACK_FORMAT = _PACK_FORMATS[-1][1]
 _MODERN_SINCE = (1, 21, 9)
 
 _VERSION_RE = re.compile(r"^(\d+)\.(\d+)(?:\.(\d+))?")
+
+# 1.19.4 起原版有 9 套默认皮肤，游戏会按玩家 UUID 选一套（不再只用 steve/alex）。
+# 只覆盖 steve/alex 时，那些被分配到 ari/efe/kai… 的玩家不会显示皮肤，
+# 这就是「高版本皮肤包失效」的根因；所以所有默认皮肤名都要写入同一张图。
+_DEFAULT_WIDE_SKINS = ("steve", "kai", "makena", "noor", "zuri")
+_DEFAULT_SLIM_SKINS = ("alex", "ari", "efe", "sunny")
+_LOCAL_STATE_FILE = ".mikan_state.json"
 
 
 class SkinPackError(Exception):
@@ -115,18 +123,24 @@ def pack_info(version_id: str) -> dict:
 def texture_paths(version_id: str, model: str) -> list[str]:
     """返回玩家默认皮肤纹理路径。
 
-    沿用旧版皮肤包的写法：新旧两套路径同时写入，避免因版本分界判断偏差
-    （1.19.3 / 1.20.2 等）导致资源包在游戏里不生效；1.5.2 及更早是纹理包路径。
+    1.6.1–1.19.3 使用 ``textures/entity/{steve,alex}.png``；
+    1.19.4+ 改到 ``textures/entity/player/{wide,slim}/<默认皮肤名>.png``，
+    且按 UUID 分配到 9 套默认皮肤之一。这里把新旧路径、宽/细手臂、
+    全部默认皮肤名一起写入，任何版本、任何 UUID 都能命中同一张皮肤图。
+    1.5.2 及更早仍是纹理包路径。
     """
     parsed = version_tuple(version_id)
     if parsed is not None and parsed < (1, 6, 1):
         return ["textures/entity/steve.png", "textures/entity/alex.png"]
-    return [
+    paths: list[str] = [
         "assets/minecraft/textures/entity/steve.png",
         "assets/minecraft/textures/entity/alex.png",
-        "assets/minecraft/textures/entity/player/wide/steve.png",
-        "assets/minecraft/textures/entity/player/slim/alex.png",
     ]
+    # 9 套默认皮肤名都写入 wide / slim 两个目录，避免模型目录判断偏差
+    for name in _DEFAULT_WIDE_SKINS + _DEFAULT_SLIM_SKINS:
+        for folder in ("wide", "slim"):
+            paths.append(f"assets/minecraft/textures/entity/player/{folder}/{name}.png")
+    return paths
 
 
 def _mcmeta(description: str, info: dict) -> dict:
@@ -173,11 +187,17 @@ def export_skin_pack(
     player: str,
     model: str,
     version_id: str,
+    cape_path: str | Path | None = None,
 ) -> Path:
     """把皮肤导出成可分享的皮肤包（含目标玩家、模型、版本适配资源包）。"""
     source = Path(skin_path)
     if not source.is_file():
         raise SkinPackError("找不到皮肤文件。")
+    cape_bytes = b""
+    if cape_path:
+        cape_file = Path(cape_path)
+        if cape_file.is_file():
+            cape_bytes = cape_file.read_bytes()
     target = Path(dest)
     target.parent.mkdir(parents=True, exist_ok=True)
     image = source.read_bytes()
@@ -194,6 +214,7 @@ def export_skin_pack(
         "pack_format": info["pack_format"],
         "pack_kind": info["kind"],
         "skin": "skin.png",
+        "cape": "cape.png" if cape_bytes else "",
         "requires": "CustomSkinLoader",
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -213,6 +234,8 @@ def export_skin_pack(
         with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.writestr("pack.json", json.dumps(meta, ensure_ascii=False, indent=2))
             archive.writestr("skin.png", image)
+            if cape_bytes:
+                archive.writestr("cape.png", cape_bytes)
             archive.writestr("README.txt", readme)
             # 与安装到游戏目录的兜底包完全一致，导出文件可直接当资源包加载
             pack_bytes = resourcepack_bytes(
@@ -255,6 +278,10 @@ def read_skin_pack(path: str | Path) -> dict:
             if not skin_name:
                 raise SkinPackError("皮肤包里没有皮肤图片。")
             image = archive.read(skin_name)
+            cape_name = str(meta.get("cape") or "")
+            if not cape_name and "cape.png" in names:
+                cape_name = "cape.png"
+            cape_data = archive.read(cape_name) if cape_name in names else b""
     except zipfile.BadZipFile as exc:
         raise SkinPackError("皮肤包不是有效的 zip 文件。") from exc
     except OSError as exc:
@@ -266,6 +293,7 @@ def read_skin_pack(path: str | Path) -> dict:
         "model": str(meta.get("model") or ""),
         "target_version": str(meta.get("target_version") or ""),
         "image": image,
+        "cape": cape_data,
         "source": str(source),
     }
 
@@ -443,6 +471,73 @@ def purge_old_packs(game_dir: str | Path) -> list[str]:
     return removed
 
 
+def _state_path(root: Path) -> Path:
+    return root / "CustomSkinLoader" / "LocalSkin" / _LOCAL_STATE_FILE
+
+
+def _read_state(root: Path) -> dict:
+    try:
+        data = json.loads(_state_path(root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    players = data.get("players")
+    return players if isinstance(players, dict) else {}
+
+
+def _write_state(root: Path, players: dict) -> None:
+    path = _state_path(root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(
+            json.dumps({"players": players}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        tmp.replace(path)
+    except OSError:
+        pass
+
+
+def skin_signature(version_id: str, image: bytes, model: str) -> str:
+    """皮肤内容 + 手臂模型 + 目标包格式的指纹，用于判断已有皮肤包是否过期。"""
+    info = pack_info(version_id)
+    raw = (
+        hashlib.sha1(image).hexdigest()
+        + "|"
+        + ("slim" if (model or "").lower() == "slim" else "classic")
+        + f"|{info['kind']}|{info['pack_format']}|{len(texture_paths(version_id, model))}"
+    )
+    return hashlib.sha1(raw.encode()).hexdigest()
+
+
+def expected_pack(game_dir: str | Path, version_id: str, player: str) -> Path:
+    """该版本、该玩家对应的兜底皮肤包应该存放的位置。"""
+    info = pack_info(version_id)
+    folder = "texturepacks" if info["kind"] == "legacy" else "resourcepacks"
+    return Path(game_dir) / folder / pack_filename(player)
+
+
+def pack_is_current(
+    game_dir: str | Path, version_id: str, player: str, image: bytes, model: str
+) -> bool:
+    """判断游戏目录里已有的皮肤包是否与当前皮肤、版本格式一致。
+
+    旧实现只检查「存在任意 MikanCL-*.zip」，换皮肤或换版本后不会重写，
+    导致高版本仍加载旧纹理。现在用内容指纹 + 包位置双重校验。
+    """
+    root = Path(game_dir)
+    name = (player or "").strip()
+    if not name or not image:
+        return False
+    state = _read_state(root).get(name)
+    if not isinstance(state, dict):
+        return False
+    if state.get("signature") != skin_signature(version_id, image, model):
+        return False
+    pack = expected_pack(root, version_id, name)
+    return pack.is_file()
+
+
 def apply_player_skin_bytes(
     image: bytes,
     player: str,
@@ -451,8 +546,10 @@ def apply_player_skin_bytes(
     version_id: str = "",
     install_pack: bool = True,
     enable_pack: bool = False,
+    cape: bytes | None = None,
+    elytra: bytes | None = None,
 ) -> dict:
-    """按玩家名写入本地皮肤，并生成版本适配的兜底资源包。"""
+    """按玩家名写入本地皮肤/披风，并生成版本适配的兜底资源包。"""
     name = (player or "").strip()
     if not name:
         raise SkinPackError("请填写目标玩家名。")
@@ -476,13 +573,39 @@ def apply_player_skin_bytes(
     (folder / f"{name}.model.json").write_text(
         json.dumps({"model": model}, ensure_ascii=False), encoding="utf-8"
     )
+    cape_path = ""
+    if cape:
+        cape_dir = root / "CustomSkinLoader" / "LocalSkin" / "capes"
+        cape_dir.mkdir(parents=True, exist_ok=True)
+        cape_file = cape_dir / f"{name}.png"
+        try:
+            cape_file.write_bytes(cape)
+            cape_path = str(cape_file)
+            paths.append(cape_path)
+        except OSError as exc:
+            raise SkinPackError(f"写入本地披风失败：{exc}") from exc
+    if elytra:
+        elytra_dir = root / "CustomSkinLoader" / "LocalSkin" / "elytra"
+        elytra_dir.mkdir(parents=True, exist_ok=True)
+        elytra_file = elytra_dir / f"{name}.png"
+        try:
+            elytra_file.write_bytes(elytra)
+            paths.append(str(elytra_file))
+        except OSError as exc:
+            raise SkinPackError(f"写入鞘翅纹理失败：{exc}") from exc
     try:
         paths.append(str(_merge_custom_skin_loader(root)))
     except OSError:
         pass
 
     if not install_pack:
-        return {"skin": str(target), "paths": paths, "model": model, "pack": ""}
+        return {
+            "skin": str(target),
+            "cape": cape_path,
+            "paths": paths,
+            "model": model,
+            "pack": "",
+        }
 
     # 先清掉旧包（含旧版全局 MikanCL-离线皮肤.zip），再写入新包，避免旧包残留被误认为已生效
     purge_old_packs(root)
@@ -494,6 +617,7 @@ def apply_player_skin_bytes(
         folder_pack = root / "resourcepacks"
     folder_pack.mkdir(parents=True, exist_ok=True)
     pack_path = folder_pack / filename
+    signature = skin_signature(version_id, image, model)
     try:
         pack_path.write_bytes(
             resourcepack_bytes(image, version_id, model, f"MikanCL 皮肤包 · {name}")
@@ -501,10 +625,28 @@ def apply_player_skin_bytes(
         paths.append(str(pack_path))
     except OSError as exc:
         raise SkinPackError(f"生成资源包失败：{exc}") from exc
+    # 记录本次写入内容的指纹，后续换皮肤 / 换版本时据此判断是否需要重写
+    players = _read_state(root)
+    players[name] = {
+        "signature": signature,
+        "model": model,
+        "version": version_id or "",
+        "pack": filename,
+        "folder": folder_pack.name,
+        "updated": time.time(),
+    }
+    _write_state(root, players)
     if enable_pack and info["kind"] != "legacy":
         _enable_resource_pack(root, filename)
     _drop_legacy_pack(root)
-    return {"skin": str(target), "paths": paths, "model": model, "pack": str(pack_path)}
+    return {
+        "skin": str(target),
+        "cape": cape_path,
+        "paths": paths,
+        "model": model,
+        "pack": str(pack_path),
+        "signature": signature,
+    }
 
 
 def apply_player_skin(
@@ -551,13 +693,16 @@ __all__ = [
     "SkinPackError",
     "apply_player_skin",
     "apply_player_skin_bytes",
+    "expected_pack",
     "export_skin_pack",
     "install_skin_pack",
     "pack_filename",
     "pack_info",
+    "pack_is_current",
     "purge_old_packs",
     "read_skin_pack",
     "resourcepack_bytes",
+    "skin_signature",
     "texture_paths",
     "version_tuple",
 ]

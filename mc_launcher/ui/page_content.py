@@ -32,7 +32,9 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_NAME, USER_AGENT, mod_cn
-from ..config import INSTANCES_DIR, write_instance_manifest
+from ..config import INSTANCES_DIR
+from ..context import AppContext, wait_thread
+from ..modpack_pipeline import ModpackPipeline
 from ..content import (
     DEPENDENCY_OPTIONAL,
     DEPENDENCY_REQUIRED,
@@ -48,9 +50,6 @@ from ..content import (
     rewrite_download_url,
 )
 from ..context import AppContext, wait_thread
-from ..installer import GameInstaller
-from ..java import pick_java
-from ..modloader import install_loader, java_for_mc
 from ..net import Cancelled, Candidate, Http
 from ..version import scan_installed_versions
 from .covers import CoverLoader, make_placeholder
@@ -663,73 +662,6 @@ class ContentInstallWorker(QThread):
         self.log.emit(f"[完成] 已安装 {len(installed)} 个文件到 {self.instance_dir}")
         self.done.emit(f"{self.project.title} 安装完成。")
 
-    def _install_version_with_retry(self, installer: GameInstaller, mc_version: str) -> None:
-        """完整安装基础版本，失败自动重试最多 3 次。"""
-        payload, _name, _cached = self.ctx.sources.get_manifest()
-        entries = payload.get("data", {}).get("versions", [])
-        entry = next((v for v in entries if str(v.get("id")) == mc_version), None)
-        if entry is None:
-            raise ContentError(f"版本清单中找不到 Minecraft {mc_version}。")
-        last_error: Exception | None = None
-        for attempt in range(3):
-            if self.cancel_event.is_set():
-                raise Cancelled()
-            try:
-                installer.install_version(entry)
-                return
-            except Cancelled:
-                raise
-            except Exception as exc:  # noqa: BLE001 - 网络抖动自动重试
-                last_error = exc
-                self.log.emit(
-                    f"[整合包] 安装基础版本 {mc_version} 失败（第 {attempt + 1} 次）：{exc}"
-                )
-                if attempt < 2:
-                    time.sleep(1)
-        raise ContentError(f"Minecraft {mc_version} 安装失败（已重试 3 次）：{last_error}")
-
-    def _install_loader_with_retry(
-        self,
-        installer: GameInstaller,
-        target: Path,
-        mc_version: str,
-        loader: str,
-        loader_version: str,
-    ) -> str:
-        """安装加载器，失败自动重试最多 3 次，返回加载器版本 ID。"""
-        self._emit(0.47, f"安装 {loader} 加载器…")
-        java, warning = pick_java(self.ctx.javas, java_for_mc(mc_version))
-        if java is None:
-            raise ContentError(
-                f"整合包需要 Java {java_for_mc(mc_version)}，未找到可用 Java。{warning}"
-            )
-        last_error: Exception | None = None
-        for attempt in range(3):
-            if self.cancel_event.is_set():
-                raise Cancelled()
-            try:
-                version_id = install_loader(
-                    installer,
-                    loader,
-                    mc_version,
-                    loader_version,
-                    java_path=java.path,
-                    log=self.log.emit,
-                    cancel=self.cancel_event,
-                )
-                self.log.emit(f"[整合包] 加载器版本：{version_id}")
-                return version_id
-            except Cancelled:
-                raise
-            except Exception as exc:  # noqa: BLE001 - 网络抖动自动重试
-                last_error = exc
-                self.log.emit(
-                    f"[整合包] 安装 {loader} 加载器失败（第 {attempt + 1} 次）：{exc}"
-                )
-                if attempt < 2:
-                    time.sleep(1)
-        raise ContentError(f"{loader} 加载器安装失败（已重试 3 次）：{last_error}")
-
     def _install_modpack(self) -> None:
         self._emit(0.02, "下载整合包…")
         zip_path, meta = self.ctx.content.prepare_modpack(
@@ -749,98 +681,29 @@ class ContentInstallWorker(QThread):
         target = INSTANCES_DIR / slug
         target.mkdir(parents=True, exist_ok=True)
 
-        clone = self.ctx.config.with_game_dir(target)
-        installer = GameInstaller(
-            clone,
-            self.ctx.sources,
-            progress_cb=lambda p: self._emit(0.05 + p.percent * 0.4, p.detail),
-            log_cb=self.log.emit,
-            cancel=self.cancel_event,
-            pause=self.pause_event,
-        )
-        if self.cancel_event.is_set():
-            raise Cancelled()
-
-        mc_version = meta.mc_version
-        # ① 先完整安装 Minecraft 基础版本（失败自动重试最多 3 次）
-        version_json = target / "versions" / mc_version / f"{mc_version}.json"
-        if version_json.exists():
-            self.log.emit(f"[整合包] 基础版本 {mc_version} 已存在，跳过。")
-        else:
-            self.log.emit(f"[整合包] 安装基础版本 {mc_version}…")
-            self._install_version_with_retry(installer, mc_version)
-
-        # ② 再安装加载器（失败自动重试最多 3 次）
-        version_id = mc_version
-        if meta.loader:
-            version_id = self._install_loader_with_retry(
-                installer, target, mc_version, meta.loader, meta.loader_version
-            )
-
-        # ③ 确认版本 JSON 已生成，失败则回退原版或中止
-        if not (target / "versions" / version_id / f"{version_id}.json").is_file():
-            fallback = target / "versions" / mc_version / f"{mc_version}.json"
-            if fallback.is_file():
-                self.log.emit(
-                    f"[警告] 未找到加载器版本 {version_id} 的 JSON，已回退到原版 {mc_version}。"
-                )
-                version_id = mc_version
-            else:
-                raise ContentError(
-                    f"版本安装失败：Minecraft {mc_version}（或加载器）未生成有效的版本 JSON，"
-                    "为保证启动可用，未写入整合包内容。"
-                )
-
-        # ④ 版本完整安装成功后，才刷入整合包内容（overrides + mods 下载）
-        self._emit(0.6, "准备下载整合包文件…", stage="下载整合包内容")
-
-        def _files_progress(done: int, total: int) -> None:
-            ratio = (done / total) if total else 0.0
-            self._emit(
-                0.6 + ratio * 0.3,
-                f"{done}/{total} 文件",
-                stage="下载整合包内容",
-                files_done=done,
-                files_total=total,
-            )
-
-        self.ctx.content.install_modpack_files(
-            zip_path,
-            meta,
+        # 与拖拽导入共用同一条安装流水线，避免两份逻辑各自漂移
+        pipeline = ModpackPipeline(
+            self.ctx,
             target,
             log=self.log.emit,
             cancel=self.cancel_event,
-            progress=lambda value, detail: self._emit(
-                0.6 + value * 0.35, detail, stage="下载整合包内容"
-            ),
             pause=self.pause_event,
-            files_progress=_files_progress,
-        )
-        # 同一目录、同一版本重复安装整合包时复用已有实例，避免实例列表出现重复项
-        target_key = os.path.normcase(os.path.normpath(str(target)))
-        instance = next(
-            (
-                item
-                for item in self.ctx.config.instance_list()
-                if item.version_id == version_id
-                and os.path.normcase(os.path.normpath(item.game_dir)) == target_key
+            progress=lambda value, detail, stage, _speed, _done, _total: self._emit(
+                value, detail, stage=stage
             ),
-            None,
         )
-        if instance is None:
-            instance = self.ctx.config.add_instance(
-                meta.name or self.project.title,
-                str(target),
-                version_id=version_id,
-                loader=meta.loader,
-                mc_version=meta.mc_version,
-                modpack=self.project.title,
-                loader_version=meta.loader_version,
-            )
-        write_instance_manifest(instance, target)
-        self.ctx.config.select_instance(instance.id)
-        self.ctx.config.save()
-        self.ctx.bus.instances_changed.emit()
+        version_id = pipeline.prepare(
+            meta.mc_version, meta.loader, meta.loader_version
+        )
+        pipeline.install_files(zip_path, meta)
+        instance = pipeline.register_instance(
+            meta.name or self.project.title,
+            version_id=version_id,
+            loader=meta.loader,
+            mc_version=meta.mc_version,
+            modpack=self.project.title,
+            loader_version=meta.loader_version,
+        )
         self._emit(1.0, "整合包安装完成")
         self.log.emit(f"[完成] 整合包已安装为实例「{instance.name}」，返回主页即可启动。")
         self.done.emit(f"整合包「{instance.name}」安装完成，已切换到该实例。")

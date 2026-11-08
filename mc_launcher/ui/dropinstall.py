@@ -31,14 +31,11 @@ from ..config import (
     INSTANCES_DIR,
     LOG_DIR,
     read_instance_manifest,
-    write_instance_manifest,
 )
 from ..context import AppContext
 from ..content import ContentError, mc_version_key
-from ..installer import GameInstaller
-from ..java import detect_java_installed, pick_java
 from ..launcher import prepare_isolated_dir
-from ..modloader import install_loader, java_for_mc
+from ..modpack_pipeline import ModpackPipeline
 from ..net import Cancelled
 from .widgets import Badge, Card
 
@@ -261,18 +258,10 @@ def _pack_slug(name: str, path: Path, fallback: str = "modpack") -> str:
 
 
 def _find_installed_loader(target: Path, mc_version: str, loader: str) -> str:
-    """查找已经安装好的加载器版本目录（Forge/NeoForge/LiteLoader 以 MC 版本开头，
-    Fabric/Quilt 以 <loader>-loader- 开头）。"""
-    versions = target / "versions"
-    if not versions.is_dir():
-        return ""
-    prefixes = (f"{mc_version}-{loader}", f"{loader}-loader")
-    for entry in versions.iterdir():
-        if not entry.is_dir() or not entry.name.startswith(prefixes):
-            continue
-        if (entry / f"{entry.name}.json").is_file():
-            return entry.name
-    return ""
+    """兼容旧调用：实际逻辑已收敛到 modpack_pipeline。"""
+    from ..modpack_pipeline import _find_installed_loader as impl
+
+    return impl(target, mc_version, loader)
 
 
 class ModpackDropWorker(QThread):
@@ -335,103 +324,15 @@ class ModpackDropWorker(QThread):
             return payload if isinstance(payload, dict) else data
         return None
 
-    def _make_installer(self, target: Path, base: float, span: float) -> GameInstaller:
-        return GameInstaller(
-            self.ctx.config.with_game_dir(target),
-            self.ctx.sources,
-            progress_cb=lambda p: self._emit(
-                base + p.percent * span,
-                p.detail,
-                stage=p.stage,
-                speed=p.speed,
-                files_done=p.files_done,
-                files_total=p.files_total,
-            ),
-            log_cb=self.log.emit,
+    def _pipeline(self, target: Path) -> ModpackPipeline:
+        return ModpackPipeline(
+            self.ctx,
+            target,
+            log=self.log.emit,
             cancel=self.cancel_event,
             pause=self.pause_event,
+            progress=self._emit,
         )
-
-    def _install_version_with_retry(
-        self, installer: GameInstaller, mc_version: str, strict: bool = True
-    ) -> bool:
-        """完整安装基础版本，失败自动重试最多 3 次。
-
-        版本清单中找不到时：strict=True 抛错，strict=False 返回 False 由调用方决定。
-        """
-        payload, _name, _cached = self.ctx.sources.get_manifest()
-        entries = payload.get("data", {}).get("versions", [])
-        entry = next((v for v in entries if str(v.get("id")) == mc_version), None)
-        if entry is None:
-            if not strict:
-                return False
-            raise ContentError(f"版本清单中找不到 Minecraft {mc_version}。")
-        last_error: Exception | None = None
-        for attempt in range(3):
-            if self.cancel_event.is_set():
-                raise Cancelled()
-            try:
-                installer.install_version(entry)
-                return True
-            except Cancelled:
-                raise
-            except Exception as exc:  # noqa: BLE001 - 网络抖动自动重试
-                last_error = exc
-                self.log.emit(
-                    f"[整合包] 安装基础版本 {mc_version} 失败（第 {attempt + 1} 次）：{exc}"
-                )
-                if attempt < 2:
-                    time.sleep(1)
-        raise ContentError(f"Minecraft {mc_version} 安装失败（已重试 3 次）：{last_error}")
-
-    def _install_loader_if_needed(
-        self,
-        installer: GameInstaller,
-        target: Path,
-        mc_version: str,
-        loader: str,
-        loader_version: str,
-        version_id: str,
-    ) -> str:
-        if not loader:
-            return version_id
-        existing = _find_installed_loader(target, mc_version, loader)
-        if existing:
-            return existing
-        self._emit(0.47, f"安装 {loader} 加载器…", stage=f"安装 {loader} 加载器")
-        javas = self.ctx.javas or detect_java_installed()
-        if javas and not self.ctx.javas:
-            # 启动扫描尚未完成时兜底，避免误报“未找到可用 Java”
-            self.ctx.javas = javas
-        java, warning = pick_java(javas, java_for_mc(mc_version))
-        if java is None:
-            raise ContentError(
-                f"整合包需要 Java {java_for_mc(mc_version)}，未找到可用 Java。{warning}"
-            )
-        last_error: Exception | None = None
-        for attempt in range(3):
-            if self.cancel_event.is_set():
-                raise Cancelled()
-            try:
-                return install_loader(
-                    installer,
-                    loader,
-                    mc_version,
-                    loader_version,
-                    java_path=java.path,
-                    log=self.log.emit,
-                    cancel=self.cancel_event,
-                )
-            except Cancelled:
-                raise
-            except Exception as exc:  # noqa: BLE001 - 网络抖动自动重试
-                last_error = exc
-                self.log.emit(
-                    f"[整合包] 安装 {loader} 加载器失败（第 {attempt + 1} 次）：{exc}"
-                )
-                if attempt < 2:
-                    time.sleep(1)
-        raise ContentError(f"{loader} 加载器安装失败（已重试 3 次）：{last_error}")
 
     def run(self) -> None:
         manifest = self._read_manifest()
@@ -460,74 +361,20 @@ class ModpackDropWorker(QThread):
         slug = _pack_slug(meta.name or self.path.stem, self.path)
         target = INSTANCES_DIR / slug
         target.mkdir(parents=True, exist_ok=True)
-        installer = self._make_installer(target, 0.05, 0.4)
+        pipeline = self._pipeline(target)
         try:
-            mc_version = meta.mc_version
-            # ① 先完整安装 Minecraft 基础版本（失败自动重试最多 3 次）
-            version_json = target / "versions" / mc_version / f"{mc_version}.json"
-            if version_json.exists():
-                self.log.emit(f"[整合包] 基础版本 {mc_version} 已存在，跳过。")
-            else:
-                self.log.emit(f"[整合包] 安装基础版本 {mc_version}…")
-                self._install_version_with_retry(installer, mc_version)
-
-            # ② 再安装加载器（失败自动重试最多 3 次）
-            version_id = self._install_loader_if_needed(
-                installer, target, mc_version, meta.loader, meta.loader_version, mc_version
+            version_id = pipeline.prepare(
+                meta.mc_version, meta.loader, meta.loader_version
             )
-
-            # ③ 确认版本 JSON 已生成，失败则回退原版或中止
-            if not (target / "versions" / version_id / f"{version_id}.json").is_file():
-                fallback = target / "versions" / mc_version / f"{mc_version}.json"
-                if fallback.is_file():
-                    self.log.emit(
-                        f"[警告] 未找到加载器版本 {version_id} 的 JSON，已回退到原版 {mc_version}。"
-                    )
-                    version_id = mc_version
-                else:
-                    raise ContentError(
-                        f"版本安装失败：Minecraft {mc_version}（或加载器）未生成有效的版本 JSON，"
-                        "为保证启动可用，未写入整合包内容。"
-                    )
-
-            # ④ 版本完整安装成功后，才刷入整合包内容（overrides + mods 下载）
-            self._emit(0.6, "准备下载整合包文件…", stage="下载整合包内容")
-
-            def _files_progress(done: int, total: int) -> None:
-                ratio = (done / total) if total else 0.0
-                self._emit(
-                    0.6 + ratio * 0.3,
-                    f"{done}/{total} 文件",
-                    stage="下载整合包内容",
-                    files_done=done,
-                    files_total=total,
-                )
-
-            self.ctx.content.install_modpack_files(
-                self.path,
-                meta,
-                target,
-                log=self.log.emit,
-                cancel=self.cancel_event,
-                progress=lambda value, detail: self._emit(
-                    0.6 + value * 0.35, detail, stage="下载整合包内容"
-                ),
-                pause=self.pause_event,
-                files_progress=_files_progress,
-            )
-            instance = self.ctx.config.add_instance(
+            pipeline.install_files(self.path, meta)
+            instance = pipeline.register_instance(
                 meta.name or self.path.stem,
-                str(target),
                 version_id=version_id,
                 loader=meta.loader,
                 mc_version=meta.mc_version,
                 modpack=meta.name or self.path.stem,
                 loader_version=meta.loader_version,
             )
-            write_instance_manifest(instance, target)
-            self.ctx.config.select_instance(instance.id)
-            self.ctx.config.save()
-            self.ctx.bus.instances_changed.emit()
             _import_offline_skin(self.ctx, target, self.log.emit, version_id)
             self._emit(1.0, "整合包导入完成")
             self.done.emit(f"整合包「{instance.name}」已导入并切换为当前实例。")
@@ -585,29 +432,24 @@ class ModpackDropWorker(QThread):
                     _safe_extract(archive, target, _single_root_prefix(names))
             mc_version = self._guess_mc_version(target)
             version_id = mc_version
+            pipeline = self._pipeline(target)
             if mc_version:
                 self.log.emit(f"[整合包] 推断 Minecraft 版本：{mc_version}")
                 self._emit(0.35, f"检查原版 {mc_version}…")
-                installer = self._make_installer(target, 0.35, 0.55)
                 if not (target / "versions" / mc_version / f"{mc_version}.json").is_file():
-                    if not self._install_version_with_retry(installer, mc_version, strict=False):
+                    version_id = pipeline.prepare(mc_version, strict_base=False)
+                    if not version_id:
                         self.log.emit(
                             f"[警告] 版本清单中找不到 Minecraft {mc_version}，请稍后手动安装该版本。"
                         )
-                        version_id = ""
             else:
                 self.log.emit("[警告] 未能从文件推断 Minecraft 版本，请稍后手动补装版本。")
-            instance = self.ctx.config.add_instance(
+            instance = pipeline.register_instance(
                 name,
-                str(target),
                 version_id=version_id,
                 mc_version=mc_version,
                 modpack=name,
             )
-            write_instance_manifest(instance, target)
-            self.ctx.config.select_instance(instance.id)
-            self.ctx.config.save()
-            self.ctx.bus.instances_changed.emit()
             _import_offline_skin(self.ctx, target, self.log.emit, version_id)
             self._emit(1.0, "直装包导入完成")
             self.done.emit(
@@ -644,28 +486,15 @@ class ModpackDropWorker(QThread):
                     names = [name.replace("\\", "/") for name in archive.namelist()]
                     prefix = "overrides/" if any(n.startswith("overrides/") for n in names) else ""
                     _safe_extract(archive, target, prefix)
-            installer = self._make_installer(target, 0.2, 0.35)
-            if not (target / "versions" / mc_version / f"{mc_version}.json").is_file():
-                self.log.emit(f"[恢复] 安装基础版本 {mc_version}…")
-                self._install_version_with_retry(installer, mc_version)
-            version_id = self._install_loader_if_needed(
-                installer, target, mc_version, loader, loader_version, version_id
+            pipeline = self._pipeline(target)
+            version_id = pipeline.prepare(
+                mc_version,
+                loader,
+                loader_version,
+                preferred_version_id=version_id,
             )
-            # 恢复时也先确认版本 JSON 已生成，再继续后续步骤
-            if not (target / "versions" / version_id / f"{version_id}.json").is_file():
-                fallback = target / "versions" / mc_version / f"{mc_version}.json"
-                if fallback.is_file():
-                    self.log.emit(
-                        f"[警告] 未找到加载器版本 {version_id} 的 JSON，已回退到原版 {mc_version}。"
-                    )
-                    version_id = mc_version
-                else:
-                    raise ContentError(
-                        f"版本恢复失败：Minecraft {mc_version}（或加载器）未生成有效的版本 JSON。"
-                    )
-            instance = self.ctx.config.add_instance(
+            instance = pipeline.register_instance(
                 name,
-                str(target),
                 version_id=version_id,
                 loader=loader,
                 mc_version=mc_version,
@@ -675,10 +504,6 @@ class ModpackDropWorker(QThread):
                 window_title=str(data.get("window_title") or ""),
                 extra_jvm_args=str(data.get("extra_jvm_args") or ""),
             )
-            write_instance_manifest(instance, target)
-            self.ctx.config.select_instance(instance.id)
-            self.ctx.config.save()
-            self.ctx.bus.instances_changed.emit()
             _import_offline_skin(self.ctx, target, self.log.emit, version_id)
             self._emit(1.0, "实例恢复完成")
             self.done.emit(f"实例「{instance.name}」已恢复并切换为当前实例。")

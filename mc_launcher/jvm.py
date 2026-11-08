@@ -137,7 +137,11 @@ def version_jvm_args(
 
 
 def smart_jvm_args(
-    java_major: int, memory_mb: int, existing: str = "", mc_version: str = ""
+    java_major: int,
+    memory_mb: int,
+    existing: str = "",
+    mc_version: str = "",
+    pre_touch: bool = True,
 ) -> list[str]:
     """返回适配该 Java 版本、游戏版本与堆大小的调优参数（不含 -Xmx / -Xms）。"""
     if java_major <= 0:
@@ -152,7 +156,7 @@ def smart_jvm_args(
         if uses_zgc_by_default(java_major, mc_version):
             # 26.x 官方默认分代 ZGC（Java 25 起 Generational ZGC 已是默认模式）
             args.append("-XX:+UseZGC")
-            if memory_mb >= 4096:
+            if pre_touch and memory_mb >= 4096:
                 args.append("-XX:+AlwaysPreTouch")
         else:
             region = "16M" if memory_mb >= 12288 else "8M"
@@ -178,7 +182,7 @@ def smart_jvm_args(
                 ]
             )
             # 大堆预触碰可以稳定内存布局，但会延长启动；小堆不加
-            if memory_mb >= 4096:
+            if pre_touch and memory_mb >= 4096:
                 args.append("-XX:+AlwaysPreTouch")
 
     return _filter_existing(args, existing)

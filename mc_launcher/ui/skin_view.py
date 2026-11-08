@@ -215,6 +215,7 @@ class SkinPreview3D(QWidget):
         self.setFixedSize(width, height)
         self._image: QImage | None = None
         self._cape: QImage | None = None
+        self._elytra = False
         self._model = "steve"
         self._layer = "base"
         self._part_filter: str | None = None
@@ -251,6 +252,11 @@ class SkinPreview3D(QWidget):
 
     def clear_cape(self) -> None:
         self.set_cape(None)
+
+    def set_elytra(self, enabled: bool) -> None:
+        """披风预览切换为鞘翅形态（左右两片翅膀）。"""
+        self._elytra = bool(enabled)
+        self.update()
 
     def clear_skin(self) -> None:
         self.set_skin(None)
@@ -457,7 +463,10 @@ class SkinPreview3D(QWidget):
         hits: list[tuple] = []
         for item in sorted(items, key=lambda it: it["key"]):
             if item["kind"] == "cape":
-                self._draw_cape(painter, cape, project)
+                if self._elytra:
+                    self._draw_elytra(painter, cape, project)
+                else:
+                    self._draw_cape(painter, cape, project)
                 continue
             box = item["box"]
             inflate = item["inflate"]
@@ -518,6 +527,31 @@ class SkinPreview3D(QWidget):
         ]
         self._draw_face(painter, cape, _UV_CAPE_SIDE, side, 45, False)
         self._draw_face(painter, cape, _UV_CAPE_MAIN, main, 20, False)
+
+    def _draw_elytra(self, painter, cape: QImage, project) -> None:
+        """鞘翅预览：左右两片翅膀各取披风主面的一半贴图。"""
+        u0, v0, uw, vh = _UV_CAPE_MAIN
+        half = max(1, uw // 2)
+        for side in (-1, 1):
+            x_inner = side * 1.2
+            x_outer = side * 8.6
+            top_y, bottom_y = 24.0, 11.5
+            panel = [
+                project(x_inner, top_y, -2.4),
+                project(x_outer, top_y + 0.6, -3.0),
+                project(x_outer, bottom_y, -4.2),
+                project(x_inner, bottom_y, -3.4),
+            ]
+            uv = (u0 + (0 if side < 0 else half), v0, half, vh)
+            self._draw_face(painter, cape, uv, panel, 22 if side < 0 else 20, False)
+            # 外侧厚度面，让鞘翅看起来有体积
+            edge = [
+                project(x_outer, top_y + 0.6, -3.0),
+                project(x_outer, top_y + 0.6, -3.7),
+                project(x_outer, bottom_y, -4.9),
+                project(x_outer, bottom_y, -4.2),
+            ]
+            self._draw_face(painter, cape, _UV_CAPE_SIDE, edge, 40, False)
 
     def _draw_face(
         self, painter, image: QImage | None, uv, points, shade: int = 0, outline: bool = True

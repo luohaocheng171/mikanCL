@@ -42,6 +42,8 @@ class LaunchOptions:
     root_dir: Path | None = None
     memory_mb: int = 4096
     smart_jvm: bool = True
+    pre_touch: bool = True
+    fixed_heap: bool = False
     width: int = 0
     height: int = 0
     extra_jvm_args: str = ""
@@ -155,6 +157,8 @@ def proxy_jvm_args(proxy_url: str) -> list[str]:
 
 ISOLATION_MODES = {"mods": {"mods"}, "saves": {"saves"}, "all": {"*"}}
 _SHARED_SKIP = {"versions", "libraries", "assets", "logs"}
+# 全部隔离时仍需写两份的共享文件夹（皮肤/登录注入器）
+_SHARED_FOLDERS = {"customskinloader", "authlib-injector", "libraries"}
 
 
 def _same_path(a: Path, b: Path) -> bool:
@@ -252,6 +256,71 @@ def prepare_isolated_dir(root: Path, version_id: str, mode: str) -> Path:
             continue
         _link_shared(entry, base / entry.name)
     return base
+
+
+@dataclass(frozen=True)
+class GameDirs:
+    """一个版本需要写入的全部目录（主目录 + 隔离目录）。
+
+    隔离判断原来散落在 launcher / page_control / page_download，皮肤、Mod、
+    存档、导出脚本各自 if isolation_for(...) 一遍，很容易漏改。
+    统一走这里之后，「全部隔离时皮肤要写两份」这类规则只需要写一次。
+    """
+
+    root: Path
+    version_id: str
+    mode: str
+
+    @property
+    def isolated(self) -> Path | None:
+        if self.mode not in ISOLATION_MODES:
+            return None
+        return isolated_game_dir(self.root, self.version_id, self.mode)
+
+    @property
+    def primary(self) -> Path:
+        """启动时作为 --gameDir 使用的目录。"""
+        return self.isolated or self.root
+
+    def write_targets(self) -> list[Path]:
+        """所有可能需要写入的根目录（主目录 + 隔离目录）。"""
+        isolated = self.isolated
+        if isolated is None:
+            return [self.root]
+        return [self.root, isolated]
+
+    def targets(self, folder: str) -> list[Path]:
+        """返回某类内容需要写入的子目录。
+
+        全部隔离时，游戏实际只读取隔离目录；只有 CustomSkinLoader 这类
+        需要被其他实例共享的内容才同时写主目录一份。
+        """
+        folder = folder.strip("/\\")
+        isolated = self.isolated
+        if isolated is None:
+            return [self.root / folder]
+        if self.mode == "all":
+            head = folder.split("/")[0].lower()
+            if head in _SHARED_FOLDERS:
+                return [self.root / folder, isolated / folder]
+            return [isolated / folder]
+        scopes = ISOLATION_MODES.get(self.mode, set())
+        if folder.split("/")[0].lower() in scopes:
+            return [isolated / folder]
+        return [self.root / folder]
+
+    def skin_targets(self) -> list[Path]:
+        """皮肤写入目标：全部隔离时主目录与隔离目录各一份，其余情况只写主目录。"""
+        return self.write_targets() if self.mode == "all" else [self.root]
+
+    def ensure(self) -> Path:
+        """按隔离模式创建/链接目录，返回启动目录。"""
+        return prepare_isolated_dir(self.root, self.version_id, self.mode)
+
+
+def resolve_game_dirs(root: Path, version_id: str, mode: str = "none") -> GameDirs:
+    """构造 GameDirs；mode 非法时按不隔离处理。"""
+    return GameDirs(Path(root), version_id, mode if mode in ISOLATION_MODES else "none")
 
 
 _WIN_PRIORITIES = {
@@ -510,10 +579,16 @@ def build_launch_plan(options: LaunchOptions) -> LaunchPlan:
         if warning:
             warnings.append(warning)
     # 小堆不用把 Xms 拉满，避免启动时一次性提交过多内存；大堆保持较大初始值减少扩容
-    heap_args = [f"-Xmx{memory}M", f"-Xms{min(memory, 2048)}M"]
+    # 勾选「固定堆大小」后 Xms 直接等于 Xmx，运行期不再扩堆
+    xms = memory if options.fixed_heap else min(memory, 2048)
+    heap_args = [f"-Xmx{memory}M", f"-Xms{xms}M"]
     tune_args = (
         smart_jvm_args(
-            options.java.major, memory, options.extra_jvm_args, version.id
+            options.java.major,
+            memory,
+            options.extra_jvm_args,
+            version.id,
+            pre_touch=options.pre_touch,
         )
         if options.smart_jvm
         else []

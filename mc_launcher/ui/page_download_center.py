@@ -113,7 +113,8 @@ class TaskActions(QWidget):
         self.cancel_btn = self._make("取消", self._cancel)
         self.retry_btn = self._make("重试", self._retry)
         self.folder_btn = self._make("打开目录", self._open_dir)
-        for button in (self.pause_btn, self.cancel_btn, self.retry_btn, self.folder_btn):
+        self.delete_btn = self._make("删除任务", self._delete)
+        for button in (self.pause_btn, self.cancel_btn, self.retry_btn, self.folder_btn, self.delete_btn):
             layout.addWidget(button)
 
     def _make(self, text: str, handler) -> QPushButton:
@@ -155,6 +156,21 @@ class TaskActions(QWidget):
     def _open_dir(self) -> None:
         self.page.open_target(self.task_id)
 
+    def _delete(self) -> None:
+        manager = self.page.ctx.downloads
+        task = manager.find(self.task_id)
+        if task is not None and task.active:
+            answer = QMessageBox.question(
+                self.page,
+                "删除任务",
+                f"「{task.name}」仍在进行，删除会先取消它。确定继续？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+        manager.remove(self.task_id)
+
     def sync(self, task: DownloadTask) -> None:
         self.pause_btn.setVisible(task.pausable)
         self.pause_btn.setText("继续" if task.paused else "暂停")
@@ -162,6 +178,7 @@ class TaskActions(QWidget):
         self.retry_btn.setVisible(task.retryable)
         self.folder_btn.setVisible(bool(task.target_dir))
         self.folder_btn.setEnabled(bool(task.target_dir) and Path(task.target_dir).is_dir())
+        self.delete_btn.setVisible(True)
 
 
 class TaskCard(Card):

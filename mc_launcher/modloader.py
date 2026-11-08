@@ -286,6 +286,82 @@ def _neoforge_versions(mc_version: str) -> list[str]:
     return sorted(set(versions), key=_version_key, reverse=True)
 
 
+def loader_installer_candidates(
+    kind: str, mc_version: str, loader_version: str = ""
+) -> tuple[str, list[Candidate]]:
+    """返回 (建议文件名, 下载候选)：仅下载官方安装器，用于「另存为」。"""
+    if kind in ("fabric", "quilt"):
+        meta = (
+            f"{FABRIC_META}/versions/installer"
+            if kind == "fabric"
+            else f"{QUILT_META}/versions/installer"
+        )
+        data = _http().get_json_url(meta)
+        entries = [
+            item
+            for item in (data if isinstance(data, list) else [])
+            if isinstance(item, dict) and item.get("url")
+        ]
+        chosen = None
+        if loader_version:
+            chosen = next(
+                (item for item in entries if str(item.get("version")) == loader_version), None
+            )
+        if chosen is None:
+            chosen = next((item for item in entries if item.get("stable")), None)
+        if chosen is None and entries:
+            chosen = entries[0]
+        if chosen is None:
+            raise LoaderError(f"{LOADER_LABELS.get(kind, kind)} 官方 meta 未返回安装器信息。")
+        name = f"{kind}-installer-{loader_version or chosen.get('version') or 'latest'}.jar"
+        return name, [
+            Candidate(str(chosen["url"]), {}, "official", f"{LOADER_LABELS[kind]} 官方")
+        ]
+    if kind == "forge":
+        if not loader_version:
+            raise LoaderError("请先选择或填写 Forge 版本")
+        name = f"forge-{mc_version}-{loader_version}-installer.jar"
+        return name, [
+            Candidate(
+                f"{FORGE_MAVEN_BASE}/{mc_version}-{loader_version}/{name}",
+                {},
+                "official",
+                "Forge 官方",
+            ),
+            Candidate(
+                f"{MAVEN_MIRROR_BASE}/net/minecraftforge/forge/{mc_version}-{loader_version}/{name}",
+                {},
+                "bmclapi",
+                "BMCLAPI 镜像",
+            ),
+        ]
+    if kind == "neoforge":
+        if not loader_version:
+            raise LoaderError("请先选择或填写 NeoForge 版本")
+        parts = mc_version.split(".")
+        old = len(parts) >= 3 and parts[0] == "1" and int(parts[1]) == 20 and int(parts[2]) <= 1
+        if old:
+            name = f"forge-{mc_version}-{loader_version}-installer.jar"
+            path = f"/net/neoforged/forge/{mc_version}-{loader_version}/{name}"
+        else:
+            name = f"neoforge-{loader_version}-installer.jar"
+            path = f"/net/neoforged/neoforge/{loader_version}/{name}"
+        return name, [
+            Candidate(f"{NEOFORGE_MAVEN_BASE}{path}", {}, "official", "NeoForge 官方"),
+            Candidate(f"{MAVEN_MIRROR_BASE}{path}", {}, "bmclapi", "BMCLAPI 镜像"),
+        ]
+    if kind == "liteloader":
+        data = _http().get_json_url(LITELOADER_VERSIONS_URL)
+        info = _find_liteloader(data, mc_version)
+        if not info:
+            raise LoaderError(
+                f"LiteLoader 不支持 Minecraft {mc_version}（官方仅提供到 1.12.2）。"
+            )
+        name = f"liteloader-{mc_version}-{info['version']}.jar"
+        return name, [Candidate(info["url"], {}, "official", "LiteLoader 官方")]
+    raise LoaderError(f"未知的加载器：{kind}")
+
+
 def _find_liteloader(data, mc_version: str) -> dict:
     versions = data.get("versions") if isinstance(data, dict) else None
     if not isinstance(versions, dict):

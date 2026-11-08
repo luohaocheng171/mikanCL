@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-AGREEMENT_VERSION = "1.4"
+AGREEMENT_VERSION = "1.7"
 
 # 每种语言：标题、确认文案、按钮文案、条款标签页（标签名 + 正文）
 _TEXTS: dict[str, dict] = {
@@ -31,7 +31,12 @@ _TEXTS: dict[str, dict] = {
                 "MikanCL 是第三方开源启动器，与 Mojang Studios、Microsoft、Bilibili、Modrinth、"
                 "CurseForge、Minecraft Wiki 等均无隶属、授权或赞助关系。\n"
                 "「Minecraft」「我的世界」及相关商标、图像、音效归其权利人所有。\n"
-                "本软件不提供、不分发破解版游戏，也不包含绕过正版验证的功能；请通过官方渠道购买正版游戏。",
+                "本软件不提供、不分发破解版游戏，也不包含绕过正版验证的功能；请通过官方渠道购买正版游戏。\n"
+                "首次启动可选择「经典模式（Qt）」或「美化模式（pywebview + WebView2）」，"
+                "二者共用同一套启动、下载、账号与联机内核，功能完全对齐；"
+                "仅界面渲染方式不同，不改变任何数据、联网与启动行为。"
+                "两套界面可在「设置 → 外观」中随时双向切换，切换后重启启动器生效，"
+                "不会丢失下载进度、设置或账号数据。",
             ),
             (
                 "二、账号与登录",
@@ -48,13 +53,19 @@ _TEXTS: dict[str, dict] = {
                 "其授权与使用条款以来源页面为准，请自行确认并遵守对应许可（含再分发限制）。\n"
                 "第三方内容可能包含不稳定代码、恶意行为、与其他 Mod 冲突或与游戏版本不兼容，"
                 "安装前请备份存档并自行判断风险。\n"
+                "「检查更新」会按照文件指纹（SHA1 / Murmur2）向 Modrinth 与 CurseForge 查询项目信息，"
+                "仅用于识别本地 Mod 对应的项目与最新兼容版本，不会上传 Mod 文件本身。\n"
                 "本软件仅提供下载与安装的技术通道，不对第三方内容的合法性、安全性作出任何担保。",
             ),
             (
-                "四、游戏数据与运行风险",
+                "四、游戏数据、备份与运行风险",
                 "安装版本、加载器、整合包会写入并修改 Minecraft 目录（含 libraries、assets、mods、config、"
                 "saves 等），误操作可能损坏存档或导致游戏无法启动。\n"
                 "启动前请在「版本设置」中确认 Java、内存与隔离策略；重要存档请自行定期备份。\n"
+                "本软件提供存档列表、Zip 备份 / 恢复与可选的启动前自动备份，但备份目录同样位于本机磁盘，"
+                "无法防御磁盘损坏、误删或恶意软件，且不保证每次备份都成功；重要存档请另存到其他设备。\n"
+                "关闭启动器时若仍有下载 / 安装任务，会先询问是否中断；确认关闭将立即终止进程，"
+                "可能留下未完成的临时文件，下次启动时会重新校验并按需补全。\n"
                 "本软件不承诺任何数据可恢复性，也不对存档丢失、配置损坏承担责任。",
             ),
             (
@@ -62,6 +73,8 @@ _TEXTS: dict[str, dict] = {
                 "为完成安装、登录与内容检索，本软件会向 Mojang、BMCLAPI、Modrinth、CurseForge、"
                 "GitHub、rg-adguard 及您配置的镜像站发送网络请求，请求中可能包含版本号、界面语言与账号标识。\n"
                 "本软件不收集、不上传您的存档、日志与本地文件，不向任何第三方出售或共享您的个人信息。\n"
+                "「截图图库」与「崩溃报告」仅读取本机 screenshots 与 data/logs/crashes 目录，"
+                "预览、打包与删除操作均只在本机执行，不会上传任何图片或日志。\n"
                 "内置浏览器访问的第三方站点（含 Bilibili）适用其各自的隐私政策与服务条款。",
             ),
             (
@@ -103,8 +116,11 @@ _TEXTS: dict[str, dict] = {
                 "十、界面效果与毛玻璃",
                 "页面切换淡入淡出等界面动画与毛玻璃背景均为可选增强，可在「设置」中关闭"
                 "以降低 GPU 与内存占用。\n"
-                "毛玻璃效果依赖 Windows 桌面窗口管理器（DWM）合成，不额外启动进程、不联网；"
-                "在不支持的系统上会自动回退为半透明深色背景。",
+                "美化模式下的半透明毛玻璃由 Edge WebView2（Chromium）渲染，主题色以淡色叠加在"
+                "毛玻璃之上；经典模式下的毛玻璃依赖 Windows 桌面窗口管理器（DWM）合成。"
+                "两种实现均不额外启动进程、不联网；在不支持的系统或关闭该选项时，"
+                "会自动回退为不透明/半透明深色背景。\n"
+                "字体渲染按 Windows ClearType 亚像素方案优化，关闭毛玻璃或界面动画不影响任何功能。",
             ),
             (
                 "十一、第三方模块",
@@ -229,9 +245,14 @@ _TEXTS: dict[str, dict] = {
                 "10. UI effects and frosted glass",
                 "Page-switch fade animations and the frosted-glass background are optional "
                 "enhancements and can be turned off in Settings to reduce GPU and memory usage.\n"
-                "The frosted-glass effect relies on the Windows Desktop Window Manager (DWM) "
-                "for composition; it does not spawn extra processes or access the network. On "
-                "unsupported systems it falls back to a translucent dark background.",
+                "In the enhanced (pywebview) mode the translucent frosted glass is rendered by "
+                "Edge WebView2 (Chromium), with the theme colour layered over it as a light tint; "
+                "in classic mode it relies on the Windows Desktop Window Manager (DWM). "
+                "Neither implementation spawns extra processes or accesses the network. On "
+                "unsupported systems, or when the option is off, it falls back to an opaque or "
+                "translucent dark background.\n"
+                "Text rendering is tuned for Windows ClearType; disabling glass or animations "
+                "does not affect any feature.",
             ),
             (
                 "11. Third-party modules",
@@ -358,12 +379,17 @@ _TEXTS: dict[str, dict] = {
             ),
             (
                 "10. Эффекты интерфейса и матовое стекло",
-                "Анимация затухания при переключении страниц и матовое (акриловое) стекло "
-                "являются необязательными улучшениями и могут быть отключены в настройках, "
-                "чтобы снизить нагрузку на GPU и память.\n"
-                "Эффект матового стекла использует композицию DWM (диспетчер окон рабочего "
-                "стола Windows), не запускает дополнительные процессы и не обращается к сети. "
-                "На неподдерживаемых системах он заменяется полупрозрачным тёмным фоном.",
+                "Анимация затухания при переключении страниц и матовое стекло являются "
+                "необязательными улучшениями и могут быть отключены в настройках, чтобы "
+                "снизить нагрузку на GPU и память.\n"
+                "В расширенном режиме (pywebview) полупрозрачное матовое стекло отрисовывает "
+                "Edge WebView2 (Chromium), а цвет темы накладывается поверх как лёгкая подцветка; "
+                "в классическом режиме используется композиция DWM (диспетчер окон рабочего стола "
+                "Windows). Обе реализации не запускают дополнительные процессы и не обращаются к "
+                "сети. На неподдерживаемых системах или при отключении опции фон становится "
+                "непрозрачным либо полупрозрачным тёмным.\n"
+                "Отрисовка текста оптимизирована под Windows ClearType; отключение стекла или "
+                "анимаций не влияет на функции.",
             ),
             (
                 "11. Сторонние модули",
@@ -500,10 +526,14 @@ _TEXTS: dict[str, dict] = {
                 "Les animations de fondu au changement de page et le fond en verre dépoli sont "
                 "des améliorations facultatives et peuvent être désactivées dans les paramètres "
                 "pour réduire la charge GPU et la mémoire.\n"
-                "L'effet de verre dépoli repose sur la composition du Gestionnaire de fenêtres "
-                "du bureau (DWM) de Windows ; il ne lance aucun processus supplémentaire et "
-                "n'accède pas au réseau. Sur les systèmes non pris en charge, il est remplacé "
-                "par un fond sombre translucide.",
+                "En mode enrichi (pywebview), le verre dépoli translucide est rendu par Edge "
+                "WebView2 (Chromium), la couleur du thème étant appliquée en légère teinte ; en "
+                "mode classique, il repose sur la composition du Gestionnaire de fenêtres du "
+                "bureau (DWM) de Windows. Aucune des deux implémentations ne lance de processus "
+                "supplémentaire ni n'accède au réseau. Sur les systèmes non pris en charge, ou "
+                "si l'option est désactivée, le fond devient opaque ou sombre translucide.\n"
+                "Le rendu du texte est optimisé pour ClearType ; désactiver le verre ou les "
+                "animations n'affecte aucune fonction.",
             ),
             (
                 "11. Modules tiers",
@@ -628,9 +658,14 @@ _TEXTS: dict[str, dict] = {
                 "十、UI エフェクトとすりガラス",
                 "ページ切り替えのフェードアニメーションやすりガラス背景はオプションの"
                 "強化機能で、GPU とメモリの負荷を減らすため設定でオフにできます。\n"
-                "すりガラス効果は Windows のデスクトップ ウィンドウ マネージャー（DWM）に"
-                "よる合成に依存し、追加のプロセス起動やネットワーク通信は行いません。"
-                "非対応システムでは半透明の濃い背景に自動でフォールバックします。",
+                "拡張モード（pywebview）では、半透明のすりガラスを Edge WebView2（Chromium）が"
+                "描画し、テーマ色を淡い色合いとして重ねます。クラシックモードでは Windows の"
+                "デスクトップ ウィンドウ マネージャー（DWM）による合成を使用します。"
+                "いずれも追加のプロセス起動やネットワーク通信は行いません。"
+                "非対応システムやオプションがオフの場合、不透明または半透明の濃い背景に"
+                "自動でフォールバックします。\n"
+                "文字描画は Windows ClearType 向けに最適化されており、すりガラスやアニメーションを"
+                "オフにしても機能に影響はありません。",
             ),
             (
                 "十一、第三者モジュール",

@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..config import DATA_DIR
+from ..content import detect_mod_conflicts, scan_mod_metadata
 from ..context import AppContext, wait_thread
 from ..dependencies import (
     DISCLAIMER,
@@ -35,7 +36,7 @@ from ..dependencies import (
 from ..installer import GameInstaller
 from ..java import download_java, java_key
 from ..net import Cancelled
-from ..version import scan_installed_versions
+from ..version import load_version, scan_installed_versions
 from .widgets import Card, page_header
 
 _FILE_KINDS = ("client", "library", "assets", "logging", "version")
@@ -114,6 +115,95 @@ class VersionRepairWorker(QThread):
             self.done.emit(self.version_id)
         except Cancelled:
             pass
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
+class MissingModWorker(QThread):
+    """检测 mods/ 里缺失的前置并自动搜索安装最新兼容版本。"""
+
+    done = Signal(list)
+    failed = Signal(str)
+    logged = Signal(str)
+
+    def __init__(
+        self,
+        ctx: AppContext,
+        version_id: str,
+        game_version: str,
+        loader: str,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.ctx = ctx
+        self.version_id = version_id
+        self.game_version = game_version
+        self.loader = loader
+
+    def run(self) -> None:
+        try:
+            mods_dir = self.ctx.config.resolve_game_dirs(self.version_id).targets("mods")[0]
+            conflicts = (
+                detect_mod_conflicts(scan_mod_metadata(mods_dir))
+                if mods_dir.is_dir()
+                else []
+            )
+            missing = sorted(
+                {
+                    str(item.get("modid") or "")
+                    for item in conflicts
+                    if str(item.get("type") or "") == "missing_dependency"
+                }
+                - {""}
+            )
+            if not missing:
+                self.done.emit([])
+                return
+            installed: list[str] = []
+            for modid in missing:
+                if not self.game_version:
+                    self.logged.emit(f"[补全] 未知游戏版本，跳过 {modid}")
+                    continue
+                try:
+                    projects = self.ctx.content.search(
+                        "modrinth",
+                        "mod",
+                        modid,
+                        game_version=self.game_version,
+                        loader=self.loader,
+                        limit=5,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self.logged.emit(f"[补全] 搜索 {modid} 失败：{exc}")
+                    continue
+                if not projects:
+                    self.logged.emit(f"[补全] 未找到 {modid} 的兼容版本")
+                    continue
+                project = next(
+                    (
+                        item
+                        for item in projects
+                        if item.slug.lower() == modid.lower()
+                        or item.title.lower() == modid.lower()
+                    ),
+                    projects[0],
+                )
+                try:
+                    versions = self.ctx.content.versions(
+                        "modrinth", project.id, self.game_version, self.loader
+                    )
+                    files = [
+                        f for v in versions[:2] for f in v.files if f.filename.endswith(".jar")
+                    ]
+                    if not files:
+                        self.logged.emit(f"[补全] {modid} 没有可下载的 jar")
+                        continue
+                    dest = self.ctx.content.download_to("modrinth", files[0], mods_dir)
+                    installed.append(dest.name)
+                    self.logged.emit(f"[补全] 已安装前置 {modid} → {dest.name}")
+                except Exception as exc:  # noqa: BLE001
+                    self.logged.emit(f"[补全] 安装 {modid} 失败：{exc}")
+            self.done.emit(installed)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
 
@@ -262,6 +352,12 @@ class DependenciesPage(QWidget):
         self._check_btn.setFixedHeight(28)
         self._check_btn.clicked.connect(lambda: self._check())
         toolbar.addWidget(self._check_btn)
+        self._fix_mods_btn = QPushButton("补全缺失前置")
+        self._fix_mods_btn.setObjectName("Mini")
+        self._fix_mods_btn.setFixedHeight(28)
+        self._fix_mods_btn.setToolTip("在 mods/ 中检测缺失的 Mod 前置并自动搜索安装最新兼容版本")
+        self._fix_mods_btn.clicked.connect(lambda: self._install_missing_mods())
+        toolbar.addWidget(self._fix_mods_btn)
         self._check_status = QLabel("")
         self._check_status.setObjectName("Tiny")
         self._check_status.setWordWrap(True)
@@ -462,6 +558,46 @@ class DependenciesPage(QWidget):
         worker.done.connect(self._on_check_done)
         worker.finished.connect(lambda: setattr(self, "_check_worker", None))
         worker.start()
+
+    def _install_missing_mods(self) -> None:
+        version_id = self._version_combo.currentData()
+        if not version_id:
+            self.ctx.bus.toast.emit("请先选择要补全的游戏版本。")
+            return
+        if getattr(self, "_fix_mod_worker", None) is not None and self._fix_mod_worker.isRunning():
+            self.ctx.bus.toast.emit("正在补全前置，请稍候。")
+            return
+        game_version = ""
+        try:
+            merged = load_version(self.ctx.config.game_path, str(version_id))
+            game_version = str(merged.jar_id or "")
+        except Exception:
+            game_version = ""
+        low = str(version_id).lower()
+        loader = next(
+            (name for name in ("neoforge", "forge", "fabric", "quilt") if name in low), ""
+        )
+        self._fix_mods_btn.setEnabled(False)
+        self._check_status.setText("正在检测并补全缺失的 Mod 前置…")
+        worker = MissingModWorker(self.ctx, str(version_id), game_version, loader, self)
+        self._fix_mod_worker = worker
+        worker.logged.connect(self.ctx.bus.log_line.emit)
+        worker.failed.connect(lambda text: self._check_status.setText(f"补全失败：{text}"))
+        worker.done.connect(self._on_missing_mods_done)
+        worker.finished.connect(self._on_missing_mods_finished)
+        worker.start()
+
+    def _on_missing_mods_finished(self) -> None:
+        self._fix_mods_btn.setEnabled(True)
+        self._fix_mod_worker = None
+
+    def _on_missing_mods_done(self, installed: list) -> None:
+        names = [str(name) for name in (installed or [])]
+        if not names:
+            self._check_status.setText("没有发现缺失前置，或未能找到兼容版本（详见日志）。")
+            return
+        self._check_status.setText(f"已补全 {len(names)} 个前置：{', '.join(names[:4])}")
+        self.ctx.bus.toast.emit(f"已补全 {len(names)} 个缺失前置。")
 
     def _on_check_done(self, version_id: str, merged, items) -> None:
         if version_id != self._check_key:

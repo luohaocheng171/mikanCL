@@ -50,6 +50,56 @@ QPushButton#WinClose:hover { background-color: #c23b3b; color: #ffffff; }
 QPushButton#NavButton { text-align: left; padding: 10px 14px; border-radius: 9px; color: #9fb6a7; background: transparent; border: none; font-size: 13px; }
 QPushButton#NavButton:hover { background-color: #142018; color: #dfeee3; }
 QPushButton#NavButton:checked { background-color: #1a2f22; color: #86e88f; font-weight: 600; }
+QButtonGroup { background: transparent; }
+QToolButton#NavTile {
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 12px;
+    color: #9fb6a7;
+    font-size: 11px;
+    padding: 2px;
+}
+QToolButton#NavTile:hover { background-color: rgba(255, 255, 255, 0.09); color: #e0efe4; }
+QToolButton#NavTile:pressed { background-color: rgba(255, 255, 255, 0.13); }
+QToolButton#NavTile:checked {
+    background-color: rgba(101, 212, 110, 0.16);
+    border-color: rgba(101, 212, 110, 0.55);
+    color: #86e88f;
+    font-weight: 600;
+}
+QToolButton#NavTile:disabled { color: #55685c; background-color: rgba(255, 255, 255, 0.02); border-color: rgba(255, 255, 255, 0.04); }
+QLabel#NavGroupLabel {
+    color: #6f8a79;
+    font-size: 10px;
+    letter-spacing: 1px;
+    padding: 6px 0 0 0;
+}
+QToolButton#NavTileRow {
+    text-align: center;
+    padding: 0;
+    border-radius: 11px;
+    background-color: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    color: #9fb6a7;
+    font-size: 12px;
+}
+QToolButton#NavTileRow:hover { background-color: rgba(255, 255, 255, 0.09); color: #e0efe4; }
+QToolButton#NavTileRow:pressed { background-color: rgba(255, 255, 255, 0.13); }
+QToolButton#NavTileRow:checked {
+    background-color: rgba(101, 212, 110, 0.16);
+    border-color: rgba(101, 212, 110, 0.55);
+    color: #86e88f;
+    font-weight: 600;
+}
+QToolButton#NavTileRow:disabled { color: #55685c; background-color: rgba(255, 255, 255, 0.02); border-color: rgba(255, 255, 255, 0.04); }
+QLabel#OfflineBanner {
+    background-color: rgba(200, 120, 40, 0.16);
+    border: 1px solid rgba(200, 120, 40, 0.35);
+    border-radius: 9px;
+    color: #e8c37a;
+    font-size: 11px;
+    padding: 7px 9px;
+}
 QPushButton#DownloadFab {
     background-color: #65d46e; color: #06110a; border: 1px solid rgba(255, 255, 255, 0.22);
     border-radius: 26px; font-size: 19px; font-weight: 700;
@@ -57,6 +107,12 @@ QPushButton#DownloadFab {
 QPushButton#DownloadFab:hover { background-color: #7ae884; }
 QPushButton#DownloadFab:pressed { background-color: #4fbe58; }
 QFrame#Card { background-color: #121d16; border: 1px solid #1f2f25; border-radius: 14px; }
+QFrame#ModeCard { background-color: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.10); border-radius: 14px; }
+QFrame#ModeCard:hover { background-color: rgba(255, 255, 255, 0.07); border-color: rgba(255, 255, 255, 0.18); }
+QFrame#ModeCard[selected="true"] { background-color: rgba(101, 212, 110, 0.14); border-color: rgba(101, 212, 110, 0.62); }
+QLabel#ModeCardTitle { font-size: 16px; font-weight: 700; color: #f1f8f3; }
+QLabel#ModeCardSub { font-size: 12px; font-weight: 600; color: #9fe0ab; }
+QLabel#ModeCardPoint { font-size: 12px; color: #c3d6c8; }
 QLabel#CardTitle { font-size: 15px; font-weight: 600; color: #eaf4ec; }
 QLabel#TaskStage { color: #9fe0ab; font-size: 13px; font-weight: 600; }
 QLabel#StatValue { color: #f1f8f3; font-size: 19px; font-weight: 700; }
@@ -102,6 +158,7 @@ QPushButton#Mini:disabled { color: #5c7263; border-color: #1c2a21; }
 QFrame#VersionRow { background-color: #0f1813; border: 1px solid #1d2c23; border-radius: 11px; }
 QFrame#VersionRow:hover { background-color: #15241b; border-color: #2c4736; }
 QFrame#VersionRow[selected="true"] { background-color: #173024; border-color: #4f9a5f; }
+QFrame#VersionRow[dragging="true"] { background-color: #1b3324; border-color: rgba(101, 212, 110, 0.75); }
 QProgressBar { background-color: #101c15; border: none; border-radius: 4px; min-height: 8px; max-height: 8px; }
 QProgressBar::chunk { background-color: #65d46e; border-radius: 4px; }
 QSlider::groove:horizontal { height: 4px; background: #203027; border-radius: 2px; }
@@ -181,8 +238,54 @@ def _shift_green_hue(hex_text: str, delta: int) -> str:
     return QColor.fromHsv((hue + delta) % 360, saturation, value, alpha).name()
 
 
-def build_stylesheet(accent: str = ACCENT) -> str:
-    """按强调色生成样式表：保留原有明暗关系，只把所有绿色系色相整体旋转。"""
+# 自定义主题：把基础样式表里写死的颜色映射到主题调色板
+_BASE_COLOR_MAP = {
+    "#0c1310": "background",
+    "#0a100c": "sidebar",
+    "#121d16": "card",
+    "#142018": "hover",
+    "#1a2f22": "selected",
+    "#1b2920": "border",
+    "#e8f1ea": "text",
+    "#eef7f0": "text",
+    "#dfeee3": "text",
+    "#e6f2ea": "text",
+    "#e0efe4": "text",
+    "#8aa192": "muted",
+    "#8fa898": "muted",
+    "#9fb6a7": "muted",
+    "#6d8876": "muted_dim",
+    "#86e88f": "accent_text",
+    "#65d46e": "accent",
+}
+_ACCENT_RGBA_RE = re.compile(r"rgba\(\s*101\s*,\s*212\s*,\s*110\s*,\s*([0-9.]+)\s*\)")
+
+
+def _apply_overrides(css: str, colors: dict[str, str]) -> str:
+    """按主题调色板替换基础色；未提供的槽位保持原色。"""
+    mapped = {
+        color: colors[slot]
+        for color, slot in _BASE_COLOR_MAP.items()
+        if colors.get(slot)
+    }
+    css = _HEX_RE.sub(
+        lambda match: mapped.get(match.group(0).lower(), match.group(0)),
+        css,
+    )
+
+    def _rgba(match: re.Match[str]) -> str:
+        accent = QColor(colors.get("accent") or ACCENT)
+        return f"rgba({accent.red()}, {accent.green()}, {accent.blue()}, {match.group(1)})"
+
+    return _ACCENT_RGBA_RE.sub(_rgba, css)
+
+
+def build_stylesheet(
+    accent: str = ACCENT, overrides: dict[str, str] | None = None
+) -> str:
+    """按强调色生成样式表：默认只旋转绿色系色相，自定义主题则替换整套底色。"""
+    if overrides:
+        return _apply_overrides(STYLESHEET, overrides)
     target = QColor(accent)
     if not target.isValid():
         accent = ACCENT
@@ -198,12 +301,24 @@ def build_stylesheet(accent: str = ACCENT) -> str:
     return css
 
 
-def apply_theme(app, accent: str = ACCENT) -> None:
+def apply_theme(app, accent: str = ACCENT, theme_name: str = "") -> None:
     """立即应用主题色（样式表 + 选中高亮），无需重启。"""
     from PySide6.QtGui import QPalette
 
+    overrides = None
+    if theme_name:
+        from ..themes import get, is_light, overrides_for
+
+        theme = get(theme_name)
+        if is_light(theme):
+            # 经典版 QSS 只有深色基底：明亮主题只取它的强调色，底色保持深色以免文字发灰
+            accent = theme.accent or accent
+        else:
+            overrides = overrides_for(theme_name)
+    if overrides:
+        accent = overrides.get("accent") or accent
     accent = accent if QColor(accent).isValid() else ACCENT
-    app.setStyleSheet(build_stylesheet(accent))
+    app.setStyleSheet(build_stylesheet(accent, overrides))
     palette = app.palette()
     color = QColor(accent)
     palette.setColor(QPalette.Highlight, color.darker(160))
@@ -228,15 +343,54 @@ def background_overlay_stylesheet(has_image: bool) -> str:
 
 
 def acrylic_stylesheet() -> str:
-    """毛玻璃开启时：把主窗体与根容器改为半透明，让 DWM 合成的模糊背景透出来。"""
+    """毛玻璃开启时：IOS 风格的半透明材质层。
+
+    背景完全交给 DWM 模糊合成（Root 只画很低的底色），卡片 / 按钮 / 输入框
+    使用半透明白色叠层，同时保留主题绿的强调色，既透出模糊背景又不丢辨识度。
+    文字本身仍由正常合成绘制，避免旧版把整页加 opacity effect 导致的发虚。
+    """
     return (
-        "QMainWindow, QWidget#Root { background-color: rgba(12, 19, 16, 170); }\n"
-        "QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget { background-color: transparent; }\n"
-        "QScrollArea#SidebarScroll, QScrollArea#SidebarScroll > QWidget, QScrollArea#SidebarScroll > QWidget > QWidget { background-color: rgba(10, 16, 12, 180); }\n"
+        "QMainWindow, QWidget#Root { background-color: transparent; }\n"
         "QStackedWidget, QStackedWidget > QWidget { background-color: transparent; }\n"
-        "QFrame#Sidebar { background-color: rgba(10, 16, 12, 180); }\n"
-        "QFrame#TitleBar { background-color: rgba(10, 16, 12, 180); }\n"
-        "QStatusBar { background-color: rgba(10, 16, 12, 180); }\n"
+        "QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget { background-color: transparent; }\n"
+        "QScrollArea#SidebarScroll, QScrollArea#SidebarScroll > QWidget, QScrollArea#SidebarScroll > QWidget > QWidget { background-color: transparent; }\n"
+        "QFrame#Sidebar { background-color: rgba(10, 16, 12, 0.18); border-right: 1px solid rgba(255, 255, 255, 0.08); }\n"
+        "QFrame#TitleBar { background-color: rgba(10, 16, 12, 0.18); border-bottom: 1px solid rgba(255, 255, 255, 0.08); }\n"
+        "QStatusBar { background-color: rgba(10, 16, 12, 0.18); border-top: 1px solid rgba(255, 255, 255, 0.08); }\n"
+        "QFrame#Card, QFrame#ProjectCard, QFrame#LatestCard, QFrame#LoaderCard, "
+        "QFrame#VersionRow, QFrame#TaskRow, QFrame#TaskCenter { "
+        "background-color: rgba(18, 29, 22, 0.55); border: 1px solid rgba(255, 255, 255, 0.10); }\n"
+        "QFrame#VersionRow:hover, QFrame#ProjectCard:hover, QFrame#LoaderCard:hover, "
+        "QFrame#LatestCard:hover, QFrame#TaskRow:hover { background-color: rgba(30, 46, 36, 0.65); }\n"
+        "QFrame#VersionRow[selected=\"true\"], QFrame#LoaderCard[selected=\"true\"] { "
+        "background-color: rgba(35, 74, 51, 0.72); border-color: rgba(101, 212, 110, 0.65); }\n"
+        "QFrame#VersionRow[dragging=\"true\"] { "
+        "background-color: rgba(40, 82, 58, 0.80); border-color: rgba(101, 212, 110, 0.85); }\n"
+        "QPushButton { background-color: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.13); color: #e6f2ea; }\n"
+        "QPushButton:hover { background-color: rgba(255, 255, 255, 0.12); border-color: rgba(255, 255, 255, 0.20); }\n"
+        "QPushButton:pressed { background-color: rgba(255, 255, 255, 0.17); }\n"
+        "QPushButton:disabled { background-color: rgba(255, 255, 255, 0.03); color: #66796c; border-color: rgba(255, 255, 255, 0.06); }\n"
+        "QPushButton#Primary, QPushButton#PrimaryCompact { background-color: rgba(101, 212, 110, 0.80); border: 1px solid rgba(101, 212, 110, 0.55); color: #08200e; }\n"
+        "QPushButton#Primary:hover, QPushButton#PrimaryCompact:hover { background-color: rgba(121, 226, 130, 0.90); }\n"
+        "QPushButton#Primary:pressed, QPushButton#PrimaryCompact:pressed { background-color: rgba(85, 194, 94, 0.90); }\n"
+        "QPushButton#Primary:disabled, QPushButton#PrimaryCompact:disabled { background-color: rgba(36, 55, 42, 0.55); color: #5f7867; }\n"
+        "QPushButton#Ghost, QPushButton#GhostCompact { background-color: transparent; border: none; color: #a9c3b1; }\n"
+        "QPushButton#Ghost:hover, QPushButton#GhostCompact:hover { background-color: rgba(255, 255, 255, 0.09); color: #e0efe4; }\n"
+        "QPushButton#Chip, QPushButton#Mini { background-color: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.12); color: #b6cfbd; }\n"
+        "QPushButton#Chip:hover, QPushButton#Mini:hover { background-color: rgba(255, 255, 255, 0.11); border-color: rgba(101, 212, 110, 0.55); color: #e2f5e7; }\n"
+        "QPushButton#Chip:checked { background-color: rgba(101, 212, 110, 0.20); border-color: rgba(101, 212, 110, 0.65); color: #9fe0ab; }\n"
+        "QPushButton#DownloadFab { background-color: rgba(101, 212, 110, 0.92); color: #06110a; border: 1px solid rgba(255, 255, 255, 0.28); }\n"
+        "QLineEdit, QSpinBox, QComboBox { background-color: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.14); }\n"
+        "QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border-color: rgba(101, 212, 110, 0.70); }\n"
+        "QComboBox QAbstractItemView { background-color: rgba(18, 29, 22, 0.92); border: 1px solid rgba(255, 255, 255, 0.12); }\n"
+        "QTableWidget, QListWidget { background-color: rgba(18, 29, 22, 0.48); border: 1px solid rgba(255, 255, 255, 0.10); }\n"
+        "QHeaderView::section { background-color: rgba(18, 29, 22, 0.66); }\n"
+        "QListWidget#SettingsNav { background-color: rgba(18, 29, 22, 0.48); border: 1px solid rgba(255, 255, 255, 0.10); }\n"
+        "QTabBar::tab { background-color: rgba(255, 255, 255, 0.06); }\n"
+        "QTabBar::tab:selected { background-color: rgba(255, 255, 255, 0.14); }\n"
+        "QMenu { background-color: rgba(18, 29, 22, 0.94); border: 1px solid rgba(255, 255, 255, 0.12); }\n"
+        "QTextEdit#Console, QPlainTextEdit#Console { background-color: rgba(8, 14, 10, 0.66); }\n"
+        "QCheckBox::indicator { background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.18); }\n"
     )
 
 

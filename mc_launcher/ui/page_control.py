@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 import shutil
 import time
 import zipfile
@@ -17,6 +19,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QHeaderView,
     QInputDialog,
     QLabel,
     QLineEdit,
@@ -45,7 +48,8 @@ from ..content import (
     scan_mod_metadata,
 )
 from ..context import AppContext
-from ..installer import repair_version_json
+from ..health import instance_health
+from ..installer import GameInstaller, repair_version_json
 from ..version import (
     InstalledVersion,
     VersionError,
@@ -121,12 +125,6 @@ LOADER_API_KEYS = {
     "LiteLoader": "liteloader",
     "OptiFine": "optifine",
     "原版": "",
-}
-
-ISOLATED_KEYS = {
-    "mods": {"mods"},
-    "saves": {"saves"},
-    "all": {"mods", "saves", "resourcepacks", "shaderpacks"},
 }
 
 
@@ -223,8 +221,11 @@ def _ps_arg(value: str) -> str:
 
 
 def build_script_text(plan, suffix: str) -> str:
-    """根据后缀生成 .bat / .ps1 启动脚本内容。"""
+    """根据后缀生成 .bat / .ps1 / .sh 启动脚本内容。"""
     cwd = str(plan.cwd)
+    if suffix.lower() == ".sh":
+        command = " ".join(shlex.quote(part) for part in plan.command)
+        return f"#!/usr/bin/env bash\nset -e\ncd {shlex.quote(cwd)}\nexec {command}\n"
     if suffix.lower() == ".ps1":
         args = ",".join(_ps_arg(part) for part in plan.command)
         return (
@@ -384,6 +385,34 @@ class ImportPackWorker(QThread):
             self.failed.emit(str(exc))
 
 
+class BatchRepairWorker(QThread):
+    """批量补全主游戏目录下的版本文件（客户端 / 依赖库 / 资源）。"""
+
+    done = Signal(int, int)
+    logged = Signal(str)
+
+    def __init__(self, ctx: AppContext, version_ids: list[str], parent=None):
+        super().__init__(parent)
+        self.ctx = ctx
+        self.version_ids = list(version_ids)
+
+    def run(self) -> None:
+        ok = 0
+        failed = 0
+        for version_id in self.version_ids:
+            try:
+                self.logged.emit(f"[批量修复] 正在检查 {version_id}…")
+                installer = GameInstaller(
+                    self.ctx.config, self.ctx.sources, log_cb=self.logged.emit
+                )
+                installer.ensure_version(version_id)
+                ok += 1
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                self.logged.emit(f"[批量修复] {version_id} 失败：{exc}")
+        self.done.emit(ok, failed)
+
+
 class ControlPage(QWidget):
     """单个 Minecraft 版本/实例的设置页。"""
 
@@ -508,6 +537,7 @@ class ControlPage(QWidget):
             ("path", "所在目录"),
             ("java", "Java 要求"),
             ("modified", "文件修改时间"),
+            ("health", "健康度"),
         ):
             label = QLabel("—")
             label.setWordWrap(True)
@@ -1018,7 +1048,23 @@ class ControlPage(QWidget):
         buttons.addWidget(remove_instance)
         card.body.addLayout(buttons)
 
-        migration_tip = QLabel("导出的整合包已移至左侧「整合包」页，可在该页导出或导入当前版本。")
+        batch_row = QHBoxLayout()
+        batch_row.setSpacing(8)
+        batch_health = QPushButton("批量健康检查…")
+        batch_health.clicked.connect(self._batch_health)
+        batch_row.addWidget(batch_health)
+        batch_repair = QPushButton("批量补全文件…")
+        batch_repair.setToolTip("为所有实例在当前游戏目录中补全客户端、依赖库与资源文件")
+        batch_repair.clicked.connect(self._batch_repair)
+        batch_row.addWidget(batch_repair)
+        batch_export = QPushButton("批量导出配置…")
+        batch_export.clicked.connect(self._batch_export_config)
+        batch_row.addWidget(batch_export)
+        batch_row.addStretch(1)
+        card.body.addLayout(batch_row)
+        migration_tip = QLabel(
+            "导出的整合包已移至左侧「整合包」页，可在该页导出或导入当前版本。"
+        )
         migration_tip.setObjectName("Tiny")
         migration_tip.setWordWrap(True)
         card.body.addWidget(migration_tip)
@@ -1033,6 +1079,58 @@ class ControlPage(QWidget):
         self.repair_status.setVisible(False)
         card.body.addWidget(self.repair_status)
         layout.addWidget(card)
+
+        saves_card = Card(margins=20, spacing=10)
+        saves_card.body.addWidget(
+            card_title_row(
+                "存档与备份",
+                "列出现有世界，打包为 zip 备份；损坏时可一键恢复到当前版本的 saves 目录",
+            )
+        )
+        self.saves_table = QTableWidget(0, 4)
+        self.saves_table.setHorizontalHeaderLabels(["世界", "游戏模式", "最后游玩", "大小"])
+        self.saves_table.verticalHeader().setVisible(False)
+        self.saves_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.saves_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        header = self.saves_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        for column in (1, 2, 3):
+            header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+        self.saves_table.setMinimumHeight(150)
+        saves_card.body.addWidget(self.saves_table)
+
+        saves_buttons = QHBoxLayout()
+        saves_buttons.setSpacing(8)
+        refresh = QPushButton("刷新存档")
+        refresh.clicked.connect(self._refresh_saves)
+        saves_buttons.addWidget(refresh)
+        backup_one = QPushButton("备份选中")
+        backup_one.clicked.connect(self._backup_selected_save)
+        saves_buttons.addWidget(backup_one)
+        backup_all = QPushButton("备份全部")
+        backup_all.clicked.connect(self._backup_all_saves)
+        saves_buttons.addWidget(backup_all)
+        restore = QPushButton("恢复备份…")
+        restore.clicked.connect(self._restore_backup_dialog)
+        saves_buttons.addWidget(restore)
+        open_backup = QPushButton("打开备份目录")
+        open_backup.clicked.connect(self._open_backup_dir)
+        saves_buttons.addWidget(open_backup)
+        saves_buttons.addStretch(1)
+        saves_card.body.addLayout(saves_buttons)
+
+        self.auto_backup_check = QCheckBox("启动游戏前自动备份存档")
+        self.auto_backup_check.setChecked(bool(self.ctx.config.auto_backup_saves))
+        self.auto_backup_check.toggled.connect(self._toggle_auto_backup)
+        save_tip = QLabel(
+            "自动备份保存在「备份目录」中，每个版本独立存放；"
+            "连续启动一分钟内不会重复备份同一世界。"
+        )
+        save_tip.setObjectName("Tiny")
+        save_tip.setWordWrap(True)
+        saves_card.body.addWidget(self.auto_backup_check)
+        saves_card.body.addWidget(save_tip)
+        layout.addWidget(saves_card)
 
         hint = QLabel(
             "移除实例记录只删除启动器中的实例配置，磁盘上的游戏文件会保留；"
@@ -1067,6 +1165,133 @@ class ControlPage(QWidget):
         dialog = NbtEditorDialog(self.ctx, self)
         dialog.open_path(str(target))
         dialog.exec()
+
+    # ------------------------------------------------------------------
+    def _saves_path(self) -> Path:
+        """返回存档所在实例的“游戏目录”。
+
+        saves.* 接口内部会再拼一层 saves/，因此这里不能直接返回 saves 目录本身。
+        """
+        version = self._current_version()
+        base = self._instance_dir()
+        if version is None:
+            return base
+        return self.ctx.config.resolve_game_dirs(version.id, base).targets("saves")[0].parent
+
+    def _refresh_saves(self) -> None:
+        from ..saves import list_saves
+
+        if not hasattr(self, "saves_table"):
+            return
+        self.saves_table.setRowCount(0)
+        for row, info in enumerate(list_saves(self._saves_path())):
+            self.saves_table.insertRow(row)
+            name_item = QTableWidgetItem(info.name)
+            name_item.setData(Qt.UserRole, info.folder)
+            name_item.setToolTip(f"文件夹：{info.folder}\n版本：{info.version_name or '未知'}")
+            self.saves_table.setItem(row, 0, name_item)
+            self.saves_table.setItem(row, 1, QTableWidgetItem(info.game_mode))
+            played = time.strftime("%Y-%m-%d %H:%M", time.localtime(info.last_played))
+            self.saves_table.setItem(row, 2, QTableWidgetItem(played))
+            self.saves_table.setItem(row, 3, QTableWidgetItem(_human_size(info.size)))
+
+    def _selected_save(self) -> str:
+        row = self.saves_table.currentRow() if hasattr(self, "saves_table") else -1
+        if row < 0:
+            return ""
+        item = self.saves_table.item(row, 0)
+        return str(item.data(Qt.UserRole) or "") if item else ""
+
+    def _backup_selected_save(self) -> None:
+        from ..saves import backup_save
+
+        folder = self._selected_save()
+        if not folder:
+            QMessageBox.information(self, APP_NAME, "请先在表格里选择一个世界。")
+            return
+        version = self._current_version()
+        version_id = version.id if version else ""
+        path = backup_save(
+            self._saves_path(),
+            folder,
+            self.ctx.config.backup_root,
+            version_id,
+            log=self.ctx.bus.log.emit,
+        )
+        if path is None:
+            QMessageBox.warning(self, APP_NAME, "备份失败：存档为空或文件无法读取。")
+            return
+        self.ctx.bus.toast.emit(f"已备份存档「{folder}」到 {path.parent}")
+
+    def _backup_all_saves(self) -> None:
+        from ..saves import backup_all_saves
+
+        version = self._current_version()
+        version_id = version.id if version else ""
+        saved = backup_all_saves(
+            self._saves_path(),
+            self.ctx.config.backup_root,
+            version_id,
+            log=self.ctx.bus.log.emit,
+        )
+        if not saved:
+            QMessageBox.information(self, APP_NAME, "当前没有可备份的世界存档。")
+            return
+        self.ctx.bus.toast.emit(f"已备份 {len(saved)} 个世界到 {saved[0].parent}")
+
+    def _restore_backup_dialog(self) -> None:
+        from ..saves import list_backups, restore_backup
+
+        version = self._current_version()
+        version_id = version.id if version else ""
+        backups = list_backups(self.ctx.config.backup_root, version_id)
+        if not backups:
+            QMessageBox.information(
+                self,
+                APP_NAME,
+                f"当前版本还没有备份。\n备份目录：{self.ctx.config.backup_root}",
+            )
+            return
+        labels = [
+            f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(item.created))} · "
+            f"{item.world} · {_human_size(item.size)}{' · 自动' if item.auto else ''}"
+            for item in backups
+        ]
+        label, ok = QInputDialog.getItem(
+            self, "恢复存档备份", "选择要恢复的备份：", labels, 0, False
+        )
+        if not ok:
+            return
+        chosen = backups[labels.index(label)]
+        answer = QMessageBox.question(
+            self,
+            "确认恢复",
+            f"将把备份「{chosen.world}」恢复到当前版本的存档文件夹。\n"
+            "如果同名世界已存在，会先删除再恢复。是否继续？",
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            world = restore_backup(
+                chosen.path,
+                self._saves_path(),
+                overwrite=True,
+                log=self.ctx.bus.log.emit,
+            )
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, APP_NAME, f"恢复失败：{exc}")
+            return
+        self._refresh_saves()
+        self.ctx.bus.toast.emit(f"已恢复存档「{world}」")
+
+    def _open_backup_dir(self) -> None:
+        root = self.ctx.config.backup_root
+        root.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(root)))
+
+    def _toggle_auto_backup(self, enabled: bool) -> None:
+        self.ctx.config.auto_backup_saves = bool(enabled)
+        self.ctx.config.save()
 
     # ------------------------------------------------------------------
     def _update_repair_state(self) -> None:
@@ -1235,6 +1460,9 @@ class ControlPage(QWidget):
                 player_name=player_name,
                 java=java,
                 memory_mb=memory,
+                smart_jvm=bool(config.smart_jvm),
+                pre_touch=bool(config.opt_pre_touch),
+                fixed_heap=bool(config.opt_fixed_heap),
                 width=int(config.width),
                 height=int(config.height),
                 extra_jvm_args=extra_jvm,
@@ -1271,17 +1499,26 @@ class ControlPage(QWidget):
             self,
             "导出启动脚本",
             str(Path.home() / f"启动-{version.id}.bat"),
-            "Windows 批处理 (*.bat);;PowerShell 脚本 (*.ps1)",
+            "Windows 批处理 (*.bat);;PowerShell 脚本 (*.ps1);;Linux/macOS 脚本 (*.sh)",
         )
         if not target:
             return
         path = Path(target)
         suffix = path.suffix.lower()
-        if suffix not in (".bat", ".ps1"):
-            suffix = ".ps1" if "ps1" in (selected or "").lower() else ".bat"
+        if suffix not in (".bat", ".ps1", ".sh"):
+            suffix = ".ps1" if "ps1" in (selected or "").lower() else (
+                ".sh" if "sh" in (selected or "").lower() else ".bat"
+            )
             path = Path(target + suffix)  # 直接补后缀，避免误截断版本号里的点
         try:
-            path.write_text(build_script_text(plan, suffix), encoding="utf-8-sig")
+            # .sh 不能带 BOM，否则 shebang 失效；Bat/PowerShell 用 utf-8-sig 兼容中文路径
+            encoding = "utf-8" if suffix == ".sh" else "utf-8-sig"
+            path.write_text(build_script_text(plan, suffix), encoding=encoding)
+            if suffix == ".sh":
+                try:
+                    os.chmod(path, 0o755)
+                except OSError:
+                    pass
         except OSError as exc:
             QMessageBox.warning(self, APP_NAME, f"写入脚本失败：{exc}")
             return
@@ -1441,14 +1678,10 @@ class ControlPage(QWidget):
     def _files_dir(self, key: str) -> Path:
         base = self._instance_dir()
         version = self._current_version()
-        mode = self.ctx.config.isolation_for(version.id) if version else "none"
-        if key == "mods" and "mods" in ISOLATED_KEYS.get(mode, set()):
-            return base / "versions" / version.id / "game" / key
-        if key in ("saves",) and "saves" in ISOLATED_KEYS.get(mode, set()):
-            return base / "versions" / version.id / "game" / key
-        if key in ("resourcepacks", "shaderpacks") and mode == "all":
-            return base / "versions" / version.id / "game" / key
-        return base / key
+        if version is None:
+            return base / key
+        # 隔离目录判断统一由 resolve_game_dirs 收敛，避免各处手写规则
+        return self.ctx.config.resolve_game_dirs(version.id, base).targets(key)[0]
 
     def _current_version(self) -> InstalledVersion | None:
         version_id = str(self.version_combo.currentData() or "")
@@ -1562,6 +1795,20 @@ class ControlPage(QWidget):
         else:
             self.overview_labels["modified"].setText("—")
 
+        report = instance_health(
+            self.ctx.config, version.id, self.ctx.javas, self._instance_dir()
+        )
+        health_label = self.overview_labels.get("health")
+        if health_label is not None:
+            color = {"green": "#8fe89b", "yellow": "#e8c37a", "red": "#e8909a"}.get(
+                report.level, "#8aa192"
+            )
+            text = f"<span style='color:{color};font-weight:600'>{report.label}</span>"
+            if report.issues:
+                text += f" · {'；'.join(report.issues[:2])}"
+            health_label.setText(text)
+            health_label.setToolTip("\n".join(report.issues) or "未发现问题")
+
         if version.type == "broken":
             self.overview_badge.setText("损坏")
             self.overview_badge.set_kind("orange")
@@ -1579,6 +1826,7 @@ class ControlPage(QWidget):
                 label.setText("—")
             self.manage_badge.setText("未知")
             self.manage_badge.set_kind("gray")
+            self._refresh_saves()
             return
         self.manage_labels["name"].setText(instance.name)
         self.manage_labels["dir"].setText(str(self.ctx.config.instance_path(instance.id)))
@@ -1592,6 +1840,7 @@ class ControlPage(QWidget):
             self.manage_labels["modpack"].setText("否")
             self.manage_badge.setText("普通实例")
             self.manage_badge.set_kind("gray")
+        self._refresh_saves()
 
     # ------------------------------------------------------------------
     def _reload_game_settings(self) -> None:
@@ -2295,6 +2544,95 @@ class ControlPage(QWidget):
         self.ctx.bus.versions_changed.emit()
         self.ctx.bus.instances_changed.emit()
         self.ctx.bus.toast.emit(f"已删除版本：{version.id}")
+
+    def _batch_health(self) -> None:
+        instances = self.ctx.config.instance_list()
+        if not instances:
+            self.ctx.bus.toast.emit("还没有任何实例。")
+            return
+        counts = {"green": 0, "yellow": 0, "red": 0}
+        lines: list[str] = []
+        for instance in instances:
+            report = instance_health(
+                self.ctx.config,
+                instance.version_id,
+                self.ctx.javas,
+                self.ctx.config.instance_path(instance.id),
+            )
+            counts[report.level] = counts.get(report.level, 0) + 1
+            lines.append(
+                f"● {instance.name}（{instance.version_id or '未绑定版本'}）：{report.label}"
+            )
+            for issue in report.issues[:5]:
+                lines.append(f"    · {issue}")
+        box = QMessageBox(self)
+        box.setWindowTitle(f"{APP_NAME} · 批量健康检查")
+        box.setIcon(QMessageBox.Information)
+        box.setText(
+            f"共 {len(instances)} 个实例 —— 健康 {counts['green']} · "
+            f"有警告 {counts['yellow']} · 需修复 {counts['red']}"
+        )
+        box.setDetailedText("\n".join(lines))
+        box.exec()
+
+    def _batch_repair(self) -> None:
+        config = self.ctx.config
+        version_ids = sorted(
+            {
+                instance.version_id
+                for instance in config.instance_list()
+                if instance.version_id
+                and (config.versions_path / instance.version_id / f"{instance.version_id}.json").is_file()
+            }
+        )
+        if not version_ids:
+            self.ctx.bus.toast.emit("没有可在主游戏目录中补全的版本。")
+            return
+        answer = QMessageBox.question(
+            self,
+            APP_NAME,
+            f"将为 {len(version_ids)} 个版本补全客户端、依赖库与资源文件，继续？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        worker = BatchRepairWorker(self.ctx, version_ids, self)
+        self._batch_worker = worker
+        worker.logged.connect(self.ctx.bus.log_line.emit)
+        worker.done.connect(self._on_batch_repair_done)
+        worker.finished.connect(lambda: setattr(self, "_batch_worker", None))
+        self.ctx.bus.toast.emit(f"开始批量补全 {len(version_ids)} 个版本…")
+        worker.start()
+
+    def _on_batch_repair_done(self, ok: int, failed: int) -> None:
+        self.ctx.bus.toast.emit(f"批量补全完成：成功 {ok}，失败 {failed}")
+        self.refresh()
+
+    def _batch_export_config(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "选择配置导出目录")
+        if not folder:
+            return
+        from dataclasses import asdict
+
+        from ..config import read_instance_manifest
+
+        target = Path(folder)
+        count = 0
+        for instance in self.ctx.config.instance_list():
+            safe = re.sub(r'[\\/:*?"<>|]+', "_", instance.name) or instance.id
+            data = {
+                "instance": asdict(instance),
+                "manifest": read_instance_manifest(self.ctx.config.instance_path(instance.id)),
+            }
+            try:
+                (target / f"{safe}.json").write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+                count += 1
+            except OSError as exc:
+                self.ctx.bus.log_line.emit(f"[导出] {instance.name} 失败：{exc}")
+        self.ctx.bus.toast.emit(f"已导出 {count} 个实例配置到 {target}")
 
     def _rename_instance(self) -> None:
         instance = self.ctx.config.get_instance(self._current_instance_id())

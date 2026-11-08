@@ -1,4 +1,12 @@
-"""MikanCL 应用入口。"""
+"""MikanCL 应用入口。
+
+启动路径按界面框架分成两条，未选中的框架不导入：
+- classic：Qt Widgets 主窗口（功能完整，低占用）
+- webview：pywebview + WebView2 美化版外壳（Chromium 渲染）
+
+重模块（QtWebEngine、MainWindow、ContentClient、Net 等）全部放到函数内惰性导入，
+避免美化版启动时白等几百毫秒。
+"""
 
 from __future__ import annotations
 
@@ -10,25 +18,16 @@ os.environ.setdefault(
     "--autoplay-policy=no-user-gesture-required --disable-features=RendererCodeIntegrity",
 )
 
-# QtWebEngine 要求在创建 QApplication 之前导入 WebEngineWidgets
-from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: E402,F401
-from PySide6.QtCore import QCoreApplication, QSharedMemory, Qt  # noqa: E402
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QPalette  # noqa: E402
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox  # noqa: E402
+from . import APP_NAME, APP_NAME_CN
+from .config import LOG_DIR, Config
 
-from . import APP_NAME, APP_NAME_CN  # noqa: E402
-from . import agreement  # noqa: E402
-from .auth import AccountStore  # noqa: E402
-from .config import LOG_DIR, Config  # noqa: E402
-from .content import ContentClient  # noqa: E402
-from .context import AppBus, AppContext  # noqa: E402
-from .i18n import Translator  # noqa: E402
-from .net import SourceManager, apply_proxy  # noqa: E402
-from .ui.main_window import MainWindow  # noqa: E402
-from .ui.theme import STYLESHEET, apply_theme, make_block_icon  # noqa: E402
+_SINGLE_INSTANCE = None
+_FAULT_HANDLE = None
 
 
-def _dark_palette() -> QPalette:
+def _dark_palette():
+    from PySide6.QtGui import QColor, QPalette
+
     palette = QPalette()
     colors = {
         QPalette.Window: "#0c1310",
@@ -54,7 +53,7 @@ def _dark_palette() -> QPalette:
     return palette
 
 
-def _install_log_sink(bus: AppBus) -> None:
+def _install_log_sink(bus) -> None:
     """把界面日志同步落盘到 data/logs/launcher.log（5MB × 3 轮转）。"""
     try:
         import logging
@@ -76,11 +75,27 @@ def _install_log_sink(bus: AppBus) -> None:
         pass
 
 
-_SINGLE_INSTANCE: QSharedMemory | None = None
+def _enable_fault_handler() -> None:
+    """崩溃现场捕获：仅调试模式开启，把 C 层崩溃栈写进 data/logs/faulthandler.log。"""
+    if os.environ.get("MIKAN_DEBUG_STARTUP") != "1":
+        return
+    global _FAULT_HANDLE
+    try:
+        import faulthandler
+
+        from .config import LOG_DIR
+
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        _FAULT_HANDLE = open(LOG_DIR / "faulthandler.log", "a", encoding="utf-8")
+        faulthandler.enable(_FAULT_HANDLE, all_threads=True)
+    except Exception:  # noqa: BLE001 - 调试设施失败不影响启动
+        _FAULT_HANDLE = None
 
 
-def _acquire_single_instance() -> QSharedMemory | None:
+def _acquire_single_instance():
     """单实例保护：避免两个进程同时读写 config.json / accounts.json / 浏览器 profile。"""
+    from PySide6.QtCore import QSharedMemory
+
     try:
         memory = QSharedMemory(f"{APP_NAME}-single-instance")
         if memory.attach():
@@ -104,13 +119,48 @@ def release_single_instance() -> None:
         pass
 
 
+def _run_webview(config) -> bool:
+    """运行美化版；返回 True 表示正常结束。"""
+    from .ui_web import shell
+
+    code = shell.run(config)
+    if code != 0:
+        return False
+    try:
+        config.cancel_debounced_save()
+        config.save()
+    except Exception:  # noqa: BLE001 - 退出阶段不再抛异常
+        pass
+    return True
+
+
 def main() -> None:
-    # PyInstaller 打包后：工作目录重定向到 exe 所在目录，数据文件也在此自动生成
-    if getattr(sys, "frozen", False):
+    from ._trace import trace as _startup_trace
+
+    _enable_fault_handler()
+    _startup_trace("enter main")
+    # 打包后：工作目录重定向到 exe 所在目录，数据文件也在此自动生成
+    if getattr(sys, "frozen", False) or "__compiled__" in globals():
+        from .config import APP_ROOT
+
         try:
-            os.chdir(os.path.dirname(sys.executable))
+            os.chdir(APP_ROOT)
         except OSError:
             pass
+    _startup_trace("after chdir")
+
+    config = Config.load()
+    _startup_trace("after config load")
+
+    # 已选定美化版时不再导入 QtWebEngine；经典版仍需在 QApplication 之前导入
+    if not (config.frame_mode_asked and config.frame_mode == "webview"):
+        from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
+    _startup_trace("after qtwebengine")
+
+    from PySide6.QtCore import QCoreApplication, Qt
+    from PySide6.QtGui import QFont, QGuiApplication
+    from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+
     QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
@@ -123,8 +173,13 @@ def main() -> None:
     app.setStyle("Fusion")
     app.setPalette(_dark_palette())
     app.setFont(QFont("Microsoft YaHei UI", 10))
+
+    from .ui.theme import STYLESHEET, apply_theme, make_block_icon
+
     app.setStyleSheet(STYLESHEET)
     app.setWindowIcon(make_block_icon(64))
+    apply_theme(app, config.accent_color, config.theme_name)
+    _startup_trace("after QApplication")
 
     global _SINGLE_INSTANCE
     guard = _acquire_single_instance()
@@ -136,15 +191,41 @@ def main() -> None:
         )
         return
     _SINGLE_INSTANCE = guard
+    _startup_trace("after single instance")
 
-    config = Config.load()
-    # 主题色在配置加载后才能确定：重算样式表与高亮色
-    apply_theme(app, config.accent_color)
     # 翻译器需在 QApplication 之后、MainWindow 之前安装；Translator 自身挂到 app 上防 GC
-    Translator(app).load(config.language)
+    from .i18n import Translator
 
-    # 用户协议门禁：未同意当前版本时必须先确认；选择不同意则直接退出，不进入主界面
-    if agreement.needs_prompt(config):
+    Translator(app).load(config.language)
+    _startup_trace("after translator")
+
+    # 首次启动：先选界面框架（经典 Qt / 美化 pywebview）；之后可在设置页双向切换
+    if not config.frame_mode_asked:
+        from .ui.dialog_frame import FrameModeDialog
+
+        frame_dialog = FrameModeDialog()
+        frame_dialog.exec()
+        config.frame_mode = frame_dialog.mode
+        config.frame_mode_asked = True
+        config.frame_locked = False
+        config.save()
+    _startup_trace(f"frame mode: {config.frame_mode}")
+
+    # 经典版首次启动再选「界面运行模式」（毛玻璃程度），美化版不需要
+    if config.frame_mode == "classic" and not config.ui_mode_asked:
+        from .ui.dialog_ui_mode import UiModeDialog
+
+        mode_dialog = UiModeDialog()
+        mode_dialog.exec()
+        config.ui_mode = mode_dialog.mode
+        config.ui_acrylic = mode_dialog.mode == UiModeDialog.MODE_VISUAL
+        config.ui_mode_asked = True
+        config.save()
+
+    # 用户协议门禁：经典版用 Qt 对话框；美化版在网页内展示同一份协议文本
+    from . import agreement
+
+    if config.frame_mode == "classic" and agreement.needs_prompt(config):
         from .ui.dialog_agreement import AgreementDialog
 
         dialog = AgreementDialog(config.language)
@@ -154,6 +235,41 @@ def main() -> None:
             _SINGLE_INSTANCE = None
             os._exit(0)
         agreement.accept(config)
+    _startup_trace("after dialogs")
+
+    if config.frame_mode == "webview":
+        _startup_trace("before webview shell")
+        if _run_webview(config):
+            _startup_trace("webview closed")
+            os._exit(0)
+        # 美化版启动失败：询问是否自动切回经典版，避免用户被卡死在无法使用的框架
+        guard.detach()
+        _SINGLE_INSTANCE = None
+        answer = QMessageBox.question(
+            None,
+            APP_NAME,
+            "美化版无法启动（缺少 WebView2 Runtime 或渲染器初始化失败）。\n\n"
+            "请安装 Microsoft Edge WebView2 Runtime 后重试；也可以把运行时解包到安装目录的 "
+            "webview2 文件夹使用内置版本。\n\n"
+            "是否立即切回经典版（Qt）？切换后重新启动启动器即可进入经典版。\n\n"
+            "详细错误已写入 data/logs/webview_error.log。",
+        )
+        if answer == QMessageBox.Yes:
+            config.frame_mode = "classic"
+            config.frame_locked = False
+            try:
+                config.save()
+            except OSError:
+                pass
+            QMessageBox.information(None, APP_NAME, "已切回经典版，请重新启动启动器。")
+        os._exit(2)
+
+    # ---- 经典 Qt 界面 ----
+    from .auth import AccountStore
+    from .content import ContentClient
+    from .context import AppBus, AppContext
+    from .net import SourceManager, apply_proxy
+    from .ui.main_window import MainWindow
 
     apply_proxy(config.effective_proxy)
     context = AppContext(
@@ -164,6 +280,7 @@ def main() -> None:
         content=ContentClient(config),
     )
     _install_log_sink(context.bus)
+    _startup_trace("after log sink")
 
     def final_save() -> None:
         """退出前兜底落盘，避免异常关闭时丢失配置与账号。"""
@@ -176,8 +293,10 @@ def main() -> None:
                 pass
 
     window = MainWindow(context)
+    _startup_trace("after MainWindow")
     app.aboutToQuit.connect(final_save)
     window.show()
+    _startup_trace("after show")
     code = app.exec()
     # 跳过 Qt/Python 析构：退出时可能仍有后台线程在收尾，直接结束进程避免崩溃
     try:

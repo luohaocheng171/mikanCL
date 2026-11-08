@@ -28,6 +28,7 @@ from PySide6.QtGui import (
     QColor,
     QDesktopServices,
     QGuiApplication,
+    QIcon,
     QPainter,
     QPixmap,
     QSyntaxHighlighter,
@@ -35,12 +36,14 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
     QGraphicsOpacityEffect,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -457,6 +460,9 @@ class VersionRow(QFrame):
     selected = Signal(str)
     activated = Signal(str)
     settings_requested = Signal(str)
+    # 拖拽排序：鼠标移动时报告版本 id 与全局坐标，松手时通知页面持久化顺序
+    drag_moved = Signal(str, QPoint)
+    drag_released = Signal()
 
     def __init__(
         self,
@@ -469,6 +475,8 @@ class VersionRow(QFrame):
         self.version = version
         self.ctx = ctx
         self.game_dir = game_dir
+        self._drag_origin: QPoint | None = None
+        self._dragging = False
         self.setObjectName("VersionRow")
         self.setProperty("selected", False)
         self.setCursor(Qt.PointingHandCursor)
@@ -531,8 +539,39 @@ class VersionRow(QFrame):
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
+            self._drag_origin = event.globalPosition().toPoint()
             self.selected.emit(self.version.id)
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_origin is None or not (event.buttons() & Qt.LeftButton):
+            return super().mouseMoveEvent(event)
+        point = event.globalPosition().toPoint()
+        if not self._dragging:
+            # 超过系统拖拽阈值才进入拖拽，避免普通点击被误判成拖动
+            if (point - self._drag_origin).manhattanLength() < QApplication.startDragDistance():
+                return super().mouseMoveEvent(event)
+            self._dragging = True
+            self.setCursor(Qt.ClosedHandCursor)
+            self.setProperty("dragging", True)
+            self.style().unpolish(self)
+            self.style().polish(self)
+        self.drag_moved.emit(self.version.id, point)
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._dragging:
+            self._dragging = False
+            self._drag_origin = None
+            self.setCursor(Qt.PointingHandCursor)
+            self.setProperty("dragging", False)
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.drag_released.emit()
+            event.accept()
+            return
+        self._drag_origin = None
+        super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == Qt.LeftButton and not self.version.error:
@@ -703,37 +742,19 @@ def _loader_kind(loader: str) -> str:
 
 
 class ServerPingWorker(QThread):
-    """并发测试服务器延迟，并尝试读取在线人数。"""
+    """按 Minecraft Server List Ping 协议读取延迟、MOTD、图标与在线人数。"""
 
-    result = Signal(str, int, str)
+    result = Signal(str, object)
 
     def __init__(self, servers: list[ServerEntry], parent=None):
         super().__init__(parent)
         self.servers = list(servers)
 
     def run(self) -> None:
+        from ..serverping import ping_server
+
         for entry in self.servers:
-            latency = -1
-            try:
-                started = time.perf_counter()
-                with socket.create_connection((entry.host, int(entry.port)), timeout=4):
-                    pass
-                latency = int((time.perf_counter() - started) * 1000)
-            except OSError:
-                self.result.emit(entry.id, -1, "无法连接")
-                continue
-            players = ""
-            try:
-                data = Http().get_json_url(
-                    f"https://api.mcstatus.io/v2/status/java/{entry.host}:{int(entry.port)}",
-                    timeout=6,
-                )
-                if isinstance(data, dict) and data.get("online"):
-                    info = data.get("players") or {}
-                    players = f"在线 {info.get('online', 0)}/{info.get('max', 0)}"
-            except Exception:  # noqa: BLE001 - 在线人数仅作为附加信息
-                players = ""
-            self.result.emit(entry.id, latency, players)
+            self.result.emit(entry.id, ping_server(entry.host, int(entry.port), 4.0))
 
 
 class ServerDialog(QDialog):
@@ -743,25 +764,30 @@ class ServerDialog(QDialog):
         super().__init__(parent)
         self.ctx = ctx
         self._ping_worker: ServerPingWorker | None = None
+        self._icons: dict[str, QIcon] = {}
         self.setWindowTitle(t("HomePage", "服务器列表"))
-        self.resize(660, 440)
+        self.resize(780, 460)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(10)
 
-        self.table = QTableWidget(0, 4)
+        self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
             [
                 t("HomePage", "名称"),
                 t("HomePage", "地址"),
                 t("HomePage", "状态"),
-                t("HomePage", "备注"),
+                t("HomePage", "在线"),
+                t("HomePage", "MOTD / 版本"),
             ]
         )
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setColumnWidth(0, 160)
-        self.table.setColumnWidth(1, 210)
-        self.table.setColumnWidth(2, 150)
+        self.table.setColumnWidth(1, 190)
+        self.table.setColumnWidth(2, 110)
+        self.table.setColumnWidth(3, 80)
+        self.table.setIconSize(QSize(32, 32))
+        self.table.verticalHeader().setDefaultSectionSize(42)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         layout.addWidget(self.table, 1)
@@ -806,10 +832,14 @@ class ServerDialog(QDialog):
         for row, entry in enumerate(entries):
             name_item = QTableWidgetItem(entry.name)
             name_item.setData(Qt.UserRole, entry.id)
+            if entry.id in self._icons:
+                name_item.setIcon(self._icons[entry.id])
+            name_item.setToolTip(entry.note or entry.name)
             self.table.setItem(row, 0, name_item)
             self.table.setItem(row, 1, QTableWidgetItem(f"{entry.host}:{entry.port}"))
             self.table.setItem(row, 2, QTableWidgetItem("未测试"))
-            self.table.setItem(row, 3, QTableWidgetItem(entry.note))
+            self.table.setItem(row, 3, QTableWidgetItem("—"))
+            self.table.setItem(row, 4, QTableWidgetItem(entry.note))
 
     def _add_server(self) -> None:
         host = self.host_edit.text().strip()
@@ -852,18 +882,35 @@ class ServerDialog(QDialog):
         self._ping_worker.finished.connect(self._on_ping_done)
         self._ping_worker.start()
 
-    def _on_ping_result(self, server_id: str, latency: int, players: str) -> None:
+    def _on_ping_result(self, server_id: str, result) -> None:
+        latency = getattr(result, "latency", -1)
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 0)
             if item is None or item.data(Qt.UserRole) != server_id:
                 continue
-            if latency >= 0:
-                text = f"{latency} ms"
-                if players:
-                    text += f" · {players}"
+            if latency >= 0 and getattr(result, "online", False):
+                status = f"{latency} ms"
+            elif latency >= 0:
+                status = f"{latency} ms · 仅端口"
             else:
-                text = players or t("HomePage", "无法连接")
-            self.table.setItem(row, 2, QTableWidgetItem(text))
+                status = t("HomePage", "无法连接")
+            self.table.setItem(row, 2, QTableWidgetItem(status))
+            self.table.setItem(
+                row, 3, QTableWidgetItem(getattr(result, "players_text", "") or "—")
+            )
+            motd = getattr(result, "motd", "") or getattr(result, "error", "")
+            version = getattr(result, "version", "")
+            detail = f"{motd} · {version}" if version else motd
+            motd_item = QTableWidgetItem(detail)
+            motd_item.setToolTip(detail)
+            self.table.setItem(row, 4, motd_item)
+            icon_png = getattr(result, "icon_png", b"")
+            if icon_png:
+                pixmap = QPixmap()
+                if pixmap.loadFromData(icon_png, "PNG"):
+                    icon = QIcon(pixmap)
+                    self._icons[server_id] = icon
+                    item.setIcon(icon)
             break
 
     def _on_ping_done(self) -> None:
@@ -941,6 +988,18 @@ class LaunchWorker(QThread):
             game_dir = prepare_isolated_dir(root_dir, self.version_id, isolation)
             if isolation != "none":
                 self.log.emit(f"[隔离] 模式：{ISOLATION_LABELS.get(isolation, isolation)} → {game_dir}")
+            if cfg.auto_backup_saves:
+                try:
+                    from ..saves import auto_backup_saves
+
+                    auto_backup_saves(
+                        game_dir,
+                        cfg.backup_root,
+                        self.version_id,
+                        log=self.log.emit,
+                    )
+                except Exception as exc:  # noqa: BLE001 - 备份失败不应阻塞启动
+                    self.log.emit(f"[备份] 启动前自动备份失败：{exc}")
             account = self.account
             authlib_jar = ""
             auth_server = ""
@@ -1031,6 +1090,8 @@ class LaunchWorker(QThread):
                     java=self.java,
                     memory_mb=memory,
                     smart_jvm=bool(cfg.smart_jvm),
+                    pre_touch=bool(cfg.opt_pre_touch),
+                    fixed_heap=bool(cfg.opt_fixed_heap),
                     width=self.width,
                     height=self.height,
                     extra_jvm_args=extra_jvm,
@@ -1270,6 +1331,19 @@ class HomePage(QWidget):
         account.body.addLayout(account_row)
         account.body.addWidget(manage_button, alignment=Qt.AlignRight)
         left_layout.addWidget(account)
+
+        # 最近皮肤（与美化版主页一致，点击即可切换）
+        self.skin_card = Card()
+        self.skin_card.body.addWidget(
+            self._card_title(self.tr("最近皮肤"), self.tr("点击即可切换到该皮肤"))
+        )
+        self.skin_grid = QGridLayout()
+        self.skin_grid.setContentsMargins(0, 0, 0, 0)
+        self.skin_grid.setSpacing(8)
+        skin_host = QWidget()
+        skin_host.setLayout(self.skin_grid)
+        self.skin_card.body.addWidget(skin_host)
+        left_layout.addWidget(self.skin_card)
 
         # 启动配置
         config_card = Card()
@@ -1544,6 +1618,11 @@ class HomePage(QWidget):
         except OSError as exc:
             self._append_log(f"[错误] 游戏目录不可写：{exc}")
         versions = scan_installed_versions(game_dir)
+        order = self.ctx.config.version_order
+        if order:
+            rank = {vid: index for index, vid in enumerate(order)}
+            # 未排过序的版本保持扫描原始顺序，排在已排序版本之后
+            versions.sort(key=lambda v: rank.get(v.id, len(rank)))
 
         while self.version_layout.count():
             item = self.version_layout.takeAt(0)
@@ -1592,6 +1671,8 @@ class HomePage(QWidget):
             row.selected.connect(self._select_version)
             row.activated.connect(self._launch_version)
             row.settings_requested.connect(self.ctx.bus.focus_version.emit)
+            row.drag_moved.connect(self._on_version_drag)
+            row.drag_released.connect(self._save_version_order)
             self.version_layout.insertWidget(self.version_layout.count() - 1, row)
             self._rows[version.id] = row
 
@@ -1666,6 +1747,51 @@ class HomePage(QWidget):
         if self._bedrock_row is not None:
             haystack = (t("HomePage", "基岩版") + " bedrock").lower()
             self._bedrock_row.setVisible(not needle or needle in haystack)
+
+    # ------------------------------------------------------------------
+    # 版本列表拖拽排序（上移/下移换位，松手后写回配置）
+    def _version_rows(self) -> list["VersionRow"]:
+        rows: list[VersionRow] = []
+        for index in range(self.version_layout.count()):
+            widget = self.version_layout.itemAt(index).widget()
+            if isinstance(widget, VersionRow):
+                rows.append(widget)
+        return rows
+
+    def _on_version_drag(self, version_id: str, global_pos: QPoint) -> None:
+        row = self._rows.get(version_id)
+        if row is None or not row.isVisible():
+            return
+        rows = self._version_rows()
+        # 搜索过滤时隐藏行没有可靠坐标，先不允许拖动，避免顺序错乱
+        if len(rows) < 2 or not all(item.isVisible() for item in rows):
+            return
+        rest = [item for item in rows if item is not row]
+        insert_at = len(rest)
+        for index, other in enumerate(rest):
+            center = other.mapToGlobal(QPoint(0, other.height() // 2)).y()
+            if global_pos.y() < center:
+                insert_at = index
+                break
+        new_order = rest[:insert_at] + [row] + rest[insert_at:]
+        if new_order == rows:
+            return
+        # 先把版本行全部摘下，再按新顺序插到基岩版行之后，末尾的 stretch 保持不动
+        for item in rows:
+            self.version_layout.removeWidget(item)
+        base = 1 if self._bedrock_row is not None else 0
+        for offset, item in enumerate(new_order):
+            self.version_layout.insertWidget(base + offset, item)
+            item.show()
+
+    def _save_version_order(self) -> None:
+        rows = self._version_rows()
+        if not rows:
+            return
+        order = [row.version.id for row in rows]
+        if order != self.ctx.config.version_order:
+            self.ctx.config.version_order = order
+            self.ctx.config.save_debounced()
 
     def _select_version(self, version_id: str) -> None:
         self._selected_id = version_id
@@ -1834,8 +1960,9 @@ class HomePage(QWidget):
         self._server_ping = worker
         worker.start()
 
-    def _on_server_ping(self, server_id: str, latency: int, players: str) -> None:
-        self._server_ping_cache[server_id] = (time.time(), latency, players)
+    def _on_server_ping(self, server_id: str, result) -> None:
+        latency = getattr(result, "latency", -1)
+        self._server_ping_cache[server_id] = (time.time(), latency)
         index = self.server_combo.findData(server_id)
         if index < 0:
             return
@@ -1846,6 +1973,10 @@ class HomePage(QWidget):
         if latency < 0:
             label += f" · {t('HomePage', '无法连接')}"
         else:
+            players = getattr(result, "players_text", "")
+            motd = getattr(result, "motd", "")
+            if motd:
+                label += f" · {motd[:26]}"
             label += f" · {players or t('HomePage', '可连接')} · {latency}ms"
         self.server_combo.setItemText(index, label)
 
@@ -2057,12 +2188,109 @@ class HomePage(QWidget):
         if account.auth_server:
             tip += f" · {account.auth_server}"
         self.name_edit.setToolTip(tip)
+        self._refresh_recent_skins()
 
     def _on_avatar_ready(self, pixmap) -> None:
         try:
             self.avatar_label.setPixmap(pixmap)
         except RuntimeError:
             pass
+
+    # ------------------------------------------------------------------
+    def _refresh_recent_skins(self) -> None:
+        """刷新主页「最近皮肤」：皮肤库 + 当前账号皮肤 + data/skins 下的 PNG。"""
+        grid = getattr(self, "skin_grid", None)
+        if grid is None:
+            return
+        while grid.count():
+            item = grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        entries: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        def add(path: str, label: str = "") -> None:
+            text = str(path or "").strip()
+            if not text or not Path(text).is_file():
+                return
+            key = os.path.normcase(str(Path(text).resolve()))
+            if key in seen:
+                return
+            seen.add(key)
+            entries.append((text, label or Path(text).stem))
+
+        account = self.ctx.current_account()
+        if account is not None:
+            add(getattr(account, "skin_path", "") or "", account.name)
+        try:
+            from ..skins import entries as skin_entries
+
+            for entry in skin_entries(limit=12):
+                add(entry.path, entry.name)
+        except Exception:  # noqa: BLE001 - 皮肤库损坏不影响主页
+            pass
+        skin_dir = DATA_DIR / "skins"
+        if skin_dir.is_dir():
+            for file in sorted(
+                skin_dir.glob("*.png"),
+                key=lambda p: p.stat().st_mtime if p.exists() else 0,
+                reverse=True,
+            ):
+                add(str(file))
+        entries = entries[:12]
+        if not entries:
+            hint = QLabel(self.tr("还没有导入皮肤，到「账号与皮肤」导入一张 PNG。"))
+            hint.setObjectName("Muted")
+            hint.setWordWrap(True)
+            grid.addWidget(hint, 0, 0, 1, 6)
+            return
+        for index, (path, label) in enumerate(entries):
+            pixmap = QPixmap(path)
+            button = QPushButton()
+            button.setFixedSize(42, 42)
+            button.setFlat(True)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setToolTip(label)
+            if not pixmap.isNull():
+                button.setIcon(QIcon(make_skin_avatar(pixmap, 36)))
+                button.setIconSize(QSize(36, 36))
+            button.clicked.connect(lambda _=False, p=path: self._apply_recent_skin(p))
+            grid.addWidget(button, index // 6, index % 6)
+
+    def _apply_recent_skin(self, path: str) -> None:
+        """点击最近皮肤：复制到 data/skins、更新账号并逐版本写入皮肤包。"""
+        account = self.ctx.current_account()
+        if account is None:
+            return
+        source = Path(path)
+        if not source.is_file():
+            return
+        target = DATA_DIR / "skins" / f"{account.name}.png"
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        except OSError as exc:
+            self.ctx.bus.toast.emit(t("HomePage", "应用皮肤失败：{0}", exc))
+            return
+        account.skin_path = str(target)
+        account.skin_url = ""
+        self.ctx.accounts.update(account)
+        try:
+            from ..skins import remember
+
+            remember(target, account.skin_model or "classic", name=source.stem)
+        except Exception:  # noqa: BLE001 - 入库失败不影响应用
+            pass
+        window = self.window()
+        applied = 0
+        if window is not None and hasattr(window, "_apply_skin_to_versions"):
+            applied = window._apply_skin_to_versions(account)
+        self.ctx.bus.accounts_changed.emit()
+        if applied:
+            self.ctx.bus.toast.emit(t("HomePage", "已切换到皮肤「{0}」，并适配 {1} 个游戏目录", source.stem, applied))
+        else:
+            self.ctx.bus.toast.emit(t("HomePage", "已切换到皮肤「{0}」", source.stem))
 
     def _open_nbt_editor(self) -> None:
         from .dialog_nbt import NbtEditorDialog
@@ -2152,6 +2380,34 @@ class HomePage(QWidget):
         self._select_version(version_id)
         self._start_launch()
 
+    def _maybe_support_prompt(self) -> bool:
+        """每累计启动 N 次提示一次支持正版；返回 False 表示本次不启动。"""
+        cfg = self.ctx.config
+        cfg.launch_count = int(cfg.launch_count) + 1
+        every = max(1, int(cfg.support_prompt_every or 10))
+        cfg.save_debounced()
+        if cfg.launch_count % every:
+            return True
+        box = QMessageBox(self)
+        box.setWindowTitle("支持正版")
+        box.setIcon(QMessageBox.Information)
+        box.setText(f"你已经累计启动游戏 {cfg.launch_count} 次啦。")
+        box.setInformativeText(
+            "Minecraft 正版可以体验官方皮肤、服务器与联机大厅，也能支持 Mojang 持续更新。\n"
+            "是否前往官方商店购买正版？"
+        )
+        later = box.addButton("下次一定", QMessageBox.AcceptRole)
+        buy = box.addButton("这就去买", QMessageBox.ActionRole)
+        box.setDefaultButton(later)
+        box.exec()
+        if box.clickedButton() is buy:
+            self.ctx.bus.open_browser.emit(
+                "https://www.minecraft.net/zh-hans/store/minecraft-java-bedrock-edition-pc"
+            )
+            self._append_log("[支持正版] 已打开官方商店页面，本次启动已取消。")
+            return False
+        return True
+
     def _on_launch_clicked(self) -> None:
         if self._queue_running:
             self.ctx.bus.toast.emit("多选启动队列进行中，请先点击“停止队列”。")
@@ -2171,6 +2427,8 @@ class HomePage(QWidget):
         version_id = self._selected_id
         if not version_id:
             QMessageBox.information(self, APP_NAME, "请先选择一个版本。")
+            return
+        if not self._maybe_support_prompt():
             return
         if version_id == BEDROCK_ID:
             self._start_bedrock_launch()

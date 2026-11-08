@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -14,10 +15,41 @@ from typing import Any
 
 from . import APP_NAME, APP_VERSION
 
-if getattr(sys, "frozen", False):
-    APP_ROOT = Path(sys.executable).resolve().parent
-else:
-    APP_ROOT = Path(__file__).resolve().parent.parent
+
+def _is_packaged() -> bool:
+    # PyInstaller 会设置 sys.frozen；Nuitka 不设，但在编译过的模块里注入 __compiled__
+    return bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()
+
+
+def _app_root() -> Path:
+    """用户双击的 exe 所在目录（打包后 data/ 就放在这里）。
+
+    Nuitka 单文件模式下 ``sys.executable`` 与 ``__file__`` 都指向缓存目录里解包后的
+    副本，直接取它们会把 data/（配置、实例、账号）建到 %LOCALAPPDATA% 的临时缓存，
+    换个版本就等于丢数据。Nuitka 在编译模块里注入的 ``__compiled__.original_argv0``
+    保存了用户实际启动的那个 exe（引导程序还会把目录写进 ``NUITKA_ONEFILE_DIRECTORY``）。
+    """
+    if not IS_PACKAGED:
+        return Path(__file__).resolve().parent.parent
+    info = globals().get("__compiled__")
+    original = getattr(info, "original_argv0", None)
+    for candidate in (original, sys.argv[0]):
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.suffix.lower() == ".exe" and path.is_file():
+            return path.resolve().parent
+    onefile_dir = os.environ.get("NUITKA_ONEFILE_DIRECTORY")
+    if onefile_dir:
+        return Path(onefile_dir)
+    return Path(sys.executable).resolve().parent
+
+
+IS_PACKAGED = _is_packaged()
+APP_ROOT = _app_root()
+EXE_PATH = (
+    APP_ROOT / Path(sys.executable).name if IS_PACKAGED else Path(sys.executable)
+)
 DATA_DIR = APP_ROOT / "data"
 CACHE_DIR = DATA_DIR / "cache"
 LOG_DIR = DATA_DIR / "logs"
@@ -67,6 +99,7 @@ FEATURE_DEFAULTS: dict[str, bool] = {
     "forbric": True,
     "java": True,
     "deps": True,
+    "modgraph": True,
     "wiki": True,
     "bedrock": True,
     "offline_login": True,
@@ -74,6 +107,8 @@ FEATURE_DEFAULTS: dict[str, bool] = {
     "skin_factory": True,
     "skin_pack": True,
     "seed_terrain": True,
+    "gallery": True,
+    "crash": True,
 }
 # 可在设置里开关的侧边栏标签页（顺序与主窗口导航一致）
 FEATURE_PAGE_KEYS: tuple[str, ...] = (
@@ -91,11 +126,14 @@ FEATURE_PAGE_KEYS: tuple[str, ...] = (
     "forbric",
     "java",
     "deps",
+    "modgraph",
     "wiki",
     "bedrock",
     "skin_factory",
     "skin_pack",
     "seed_terrain",
+    "gallery",
+    "crash",
 )
 
 
@@ -227,6 +265,38 @@ class GameDir:
             name=str(data.get("name") or "未命名目录"),
             path=str(data.get("path") or ""),
         )
+
+
+def detect_game_root(path: str | Path) -> Path:
+    """把用户选择的目录归一成 Minecraft 根目录。
+
+    兼容常见的几种选择：根目录（含 ``versions/``）、``versions`` 目录本身、
+    某个版本文件夹（``versions/<id>``），以及外层包了一层 ``.minecraft`` 的目录；
+    都不匹配时原样返回。
+    """
+    root = Path(os.path.expandvars(str(path))).expanduser()
+    if not root.is_dir():
+        return root
+
+    def _has_version_dirs(folder: Path) -> bool:
+        versions = folder / "versions"
+        if not versions.is_dir():
+            return False
+        try:
+            return any(item.is_dir() for item in os.scandir(versions))
+        except OSError:
+            return False
+
+    if _has_version_dirs(root):
+        return root
+    if root.name.lower() == "versions":
+        return root.parent
+    if root.parent.name.lower() == "versions":
+        return root.parent.parent
+    nested = root / ".minecraft"
+    if nested.is_dir() and _has_version_dirs(nested):
+        return nested
+    return root
 
 
 @dataclass
@@ -402,6 +472,8 @@ class Config:
     java_known_paths: list[str] = field(default_factory=list)
     memory_mb: int = 4096
     smart_jvm: bool = True   # 按 Java 版本自动启用 G1GC 等调优参数
+    opt_pre_touch: bool = True    # 大堆（≥4GB）启用 AlwaysPreTouch，稳定内存布局
+    opt_fixed_heap: bool = False  # -Xms 与 -Xmx 相同，避免运行中扩堆
     width: int = 0
     height: int = 0
     extra_jvm_args: str = ""
@@ -425,12 +497,28 @@ class Config:
     # ---- 界面 ----
     language: str = "zh_CN"
     accent_color: str = "#65d46e"
+    theme_name: str = "晨光"   # 主题方案名（内置或 data/themes/*.json）
+    text_color: str = ""        # 自定义字体颜色（空 = 跟随主题）
+    color_mode: str = "light"  # 明暗模式：light（明亮）/ dark（黑暗）
+    light_theme_name: str = "晨光"  # 明亮模式下记住的主题
+    dark_theme_name: str = "森林绿"  # 黑暗模式下记住的主题
     background_image: str = ""
+    dynamic_wallpaper: str = ""  # 动态壁纸（MP4/WebM/GIF/WebP，循环静音播放）
+    extensions_disabled: list[str] = field(default_factory=list)  # 已禁用的扩展 id
     ui_animations: bool = True   # 页面切换淡入淡出等动画（关闭可降低 GPU 占用）
+    glass_effect: bool = True     # 美化版半透明毛玻璃（低配显卡可关闭，退化为不透明底色）
+    glass_see_through: bool = False  # 毛玻璃透视桌面：窗口背景透明 + DWM 模糊，开启时忽略背景图与动态壁纸
+    glass_strength: int = 62     # 毛玻璃强度 0~100（控制模糊半径与染色浓度）
+    glass_blur: int = 20         # 毛玻璃模糊半径（px），与强度分开可调
     ui_acrylic: bool = False     # 毛玻璃背景（依赖 Windows DWM 合成，GPU 加速、低 CPU）
+    ui_mode: str = "classic"     # 界面运行模式：classic（经典稳定）/ visual（视觉增强）
+    ui_mode_asked: bool = False  # 是否已在首次启动时询问过界面模式
+    frame_mode: str = "classic"  # 界面框架：classic（Qt）/ webview（pywebview + WebView2）
+    frame_mode_asked: bool = False  # 是否已在首次启动时询问过界面框架
+    frame_locked: bool = False  # 兼容旧配置保留的字段：5.3.0 起框架可双向切换，不再锁定
 
     # ---- 版本隔离与单版本设置 ----
-    isolation_mode: str = "none"
+    isolation_mode: str = "all"
     process_priority: str = "normal"
     window_title: str = ""
     version_settings: dict[str, VersionSettings] = field(default_factory=dict)
@@ -454,7 +542,14 @@ class Config:
     curseforge_api_key: str = DEFAULT_CURSEFORGE_API_KEY
     curseforge_cdn_mirror: str = ""
     download_threads: int = 16
+    download_speed_limit: int = 0  # 全局下载限速，单位 KB/s，0 表示不限速
     download_accel_dir: str = ""  # 下载加速页上次使用的保存目录
+
+    # ---- 启动统计 / 存档备份 ----
+    launch_count: int = 0           # 累计启动次数，用于「支持正版」提示节奏
+    support_prompt_every: int = 10  # 每 N 次启动提示一次支持正版
+    auto_backup_saves: bool = True  # 启动游戏前自动备份存档
+    backup_dir: str = ""            # 存档备份目录，空表示 data/backups
 
     # ---- JVM 预加载（实验性） ----
     preload_jvm: bool = False
@@ -470,6 +565,8 @@ class Config:
     instances: list[Instance] = field(default_factory=list)
     selected_instance_id: str = "default"
     default_version_id: str = ""
+    # 版本列表自定义排序（存版本 id，拖拽排序后写回；未列出的按原顺序排在后面）
+    version_order: list[str] = field(default_factory=list)
 
     # ---- 运行时 ----
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
@@ -606,8 +703,23 @@ class Config:
 
     def isolation_for(self, version_id: str) -> str:
         setting = self.version_settings.get(version_id)
-        mode = (setting.isolation if setting and setting.isolation else self.isolation_mode) or "none"
-        return mode if mode in ISOLATION_LABELS else "none"
+        mode = (setting.isolation if setting and setting.isolation else self.isolation_mode) or "all"
+        return mode if mode in ISOLATION_LABELS else "all"
+
+    def resolve_game_dirs(self, version_id: str, root: Path | None = None):
+        """收敛隔离目录判断：返回主目录 + 隔离目录，供皮肤/Mod/存档/导出脚本统一使用。"""
+        from .launcher import resolve_game_dirs as _resolve
+
+        base = Path(root) if root is not None else self.game_path
+        return _resolve(base, version_id, self.isolation_for(version_id))
+
+    @property
+    def backup_root(self) -> Path:
+        """存档备份目录（配置为空时使用 data/backups）。"""
+        text = (self.backup_dir or "").strip()
+        if text:
+            return Path(os.path.expandvars(text)).expanduser()
+        return DATA_DIR / "backups"
 
     @property
     def effective_proxy(self) -> str:
@@ -754,9 +866,25 @@ class Config:
             selected_source_id=self.selected_source_id,
             sources=list(self.sources),
             accent_color=self.accent_color,
+            theme_name=self.theme_name,
+            text_color=self.text_color,
+            color_mode=self.color_mode,
+            light_theme_name=self.light_theme_name,
+            dark_theme_name=self.dark_theme_name,
             background_image=self.background_image,
+            dynamic_wallpaper=self.dynamic_wallpaper,
+            extensions_disabled=list(self.extensions_disabled),
             ui_animations=self.ui_animations,
+            glass_effect=self.glass_effect,
+            glass_see_through=self.glass_see_through,
+            glass_strength=self.glass_strength,
+            glass_blur=self.glass_blur,
             ui_acrylic=self.ui_acrylic,
+            ui_mode=self.ui_mode,
+            ui_mode_asked=self.ui_mode_asked,
+            frame_mode=self.frame_mode,
+            frame_mode_asked=self.frame_mode_asked,
+            frame_locked=self.frame_locked,
             isolation_mode=self.isolation_mode,
             process_priority=self.process_priority,
             window_title=self.window_title,
@@ -809,10 +937,28 @@ class Config:
                 "features": {str(k): bool(v) for k, v in self.features.items()},
                 "language": self.language,
                 "accent_color": self.accent_color,
+                "theme_name": self.theme_name,
+                "text_color": self.text_color,
+                "color_mode": self.color_mode,
+                "light_theme_name": self.light_theme_name,
+                "dark_theme_name": self.dark_theme_name,
                 "background_image": self.background_image,
+                "dynamic_wallpaper": self.dynamic_wallpaper,
+                "extensions_disabled": list(self.extensions_disabled),
                 "ui_animations": bool(self.ui_animations),
+                "glass_effect": bool(self.glass_effect),
+                "glass_see_through": bool(self.glass_see_through),
+                "glass_strength": int(self.glass_strength),
+                "glass_blur": int(self.glass_blur),
                 "ui_acrylic": bool(self.ui_acrylic),
+                "ui_mode": self.ui_mode,
+                "ui_mode_asked": bool(self.ui_mode_asked),
+                "frame_mode": self.frame_mode,
+                "frame_mode_asked": bool(self.frame_mode_asked),
+                "frame_locked": bool(self.frame_locked),
                 "smart_jvm": bool(self.smart_jvm),
+                "opt_pre_touch": bool(self.opt_pre_touch),
+                "opt_fixed_heap": bool(self.opt_fixed_heap),
                 "selected_source_id": self.selected_source_id,
                 "sources": [s.to_dict() for s in self.sources],
                 "isolation_mode": self.isolation_mode,
@@ -836,7 +982,12 @@ class Config:
                 "curseforge_api_key": self.curseforge_api_key,
                 "curseforge_cdn_mirror": self.curseforge_cdn_mirror,
                 "download_threads": int(self.download_threads),
+                "download_speed_limit": int(self.download_speed_limit),
                 "download_accel_dir": self.download_accel_dir,
+                "launch_count": int(self.launch_count),
+                "support_prompt_every": int(self.support_prompt_every),
+                "auto_backup_saves": bool(self.auto_backup_saves),
+                "backup_dir": self.backup_dir,
                 "preload_jvm": bool(self.preload_jvm),
                 "preload_java_path": self.preload_java_path,
                 "selected_account_id": self.selected_account_id,
@@ -846,6 +997,7 @@ class Config:
                 "instances": [i.to_dict() for i in self.instances],
                 "selected_instance_id": self.selected_instance_id,
                 "default_version_id": self.default_version_id,
+                "version_order": list(self.version_order),
             }
             CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
             tmp = CONFIG_PATH.with_suffix(".json.tmp")
@@ -930,6 +1082,8 @@ class Config:
         except (TypeError, ValueError):
             cfg.memory_mb = 4096
         cfg.smart_jvm = bool(data.get("smart_jvm", True))
+        cfg.opt_pre_touch = bool(data.get("opt_pre_touch", True))
+        cfg.opt_fixed_heap = bool(data.get("opt_fixed_heap", False))
         cfg.width = int(data.get("width") or 0)
         cfg.height = int(data.get("height") or 0)
         cfg.extra_jvm_args = str(data.get("extra_jvm_args") or "")
@@ -952,15 +1106,49 @@ class Config:
         if cfg.language not in SUPPORTED_LANGUAGES:
             cfg.language = "zh_CN"
         cfg.accent_color = str(data.get("accent_color") or "#65d46e")
+        cfg.theme_name = str(data.get("theme_name") or "森林绿")
+        text_color = str(data.get("text_color") or "").strip()
+        cfg.text_color = text_color if re.fullmatch(r"#[0-9a-fA-F]{6}", text_color) else ""
+        cfg.light_theme_name = str(data.get("light_theme_name") or "晨光")
+        cfg.dark_theme_name = str(data.get("dark_theme_name") or "森林绿")
+        raw_mode = str(data.get("color_mode") or "").lower()
+        if raw_mode in ("light", "dark"):
+            cfg.color_mode = raw_mode
+        else:
+            # 旧配置没有明暗字段：默认回到明亮模式，并把原先的主题记成黑暗模式主题
+            cfg.color_mode = "light"
+            cfg.dark_theme_name = cfg.theme_name
+            cfg.theme_name = cfg.light_theme_name
         cfg.background_image = str(data.get("background_image") or "")
+        cfg.dynamic_wallpaper = str(data.get("dynamic_wallpaper") or "")
+        disabled = data.get("extensions_disabled") or []
+        cfg.extensions_disabled = [str(item) for item in disabled] if isinstance(disabled, list) else []
         cfg.ui_animations = bool(data.get("ui_animations", True))
+        cfg.glass_effect = bool(data.get("glass_effect", True))
+        cfg.glass_see_through = bool(data.get("glass_see_through", False))
+        try:
+            cfg.glass_strength = max(0, min(100, int(data.get("glass_strength", 62))))
+        except (TypeError, ValueError):
+            cfg.glass_strength = 62
+        try:
+            cfg.glass_blur = max(0, min(40, int(data.get("glass_blur", 20))))
+        except (TypeError, ValueError):
+            cfg.glass_blur = 20
         cfg.ui_acrylic = bool(data.get("ui_acrylic", False))
+        mode = str(data.get("ui_mode") or "classic")
+        cfg.ui_mode = mode if mode in ("classic", "visual") else "classic"
+        cfg.ui_mode_asked = bool(data.get("ui_mode_asked", False))
+        frame = str(data.get("frame_mode") or "classic")
+        cfg.frame_mode = frame if frame in ("classic", "webview") else "classic"
+        cfg.frame_mode_asked = bool(data.get("frame_mode_asked", False))
+        # 5.3.0 起经典版 / 美化版可随时双向切换，旧配置里的 frame_locked 不再生效
+        cfg.frame_locked = False
         cfg.after_launch_action = str(data.get("after_launch_action") or "")
         if cfg.after_launch_action not in AFTER_LAUNCH_ACTIONS:
             cfg.after_launch_action = "hide" if cfg.hide_after_launch else "nothing"
-        cfg.isolation_mode = str(data.get("isolation_mode") or "none")
+        cfg.isolation_mode = str(data.get("isolation_mode") or "all")
         if cfg.isolation_mode not in ISOLATION_LABELS:
-            cfg.isolation_mode = "none"
+            cfg.isolation_mode = "all"
         cfg.process_priority = str(data.get("process_priority") or "normal")
         if cfg.process_priority not in PROCESS_PRIORITIES:
             cfg.process_priority = "normal"
@@ -1004,6 +1192,15 @@ class Config:
         cfg.curseforge_cdn_mirror = str(data.get("curseforge_cdn_mirror") or "")
         try:
             cfg.download_threads = max(1, min(328, int(data.get("download_threads") or 16)))
+            cfg.download_speed_limit = max(
+                0, int(data.get("download_speed_limit") or 0)
+            )
+            cfg.launch_count = max(0, int(data.get("launch_count") or 0))
+            cfg.support_prompt_every = max(
+                1, min(1000, int(data.get("support_prompt_every") or 10))
+            )
+            cfg.auto_backup_saves = bool(data.get("auto_backup_saves", True))
+            cfg.backup_dir = str(data.get("backup_dir") or "")
         except (TypeError, ValueError):
             cfg.download_threads = 16
         cfg.preload_jvm = bool(data.get("preload_jvm", False))
@@ -1028,6 +1225,12 @@ class Config:
                     )
         cfg.selected_instance_id = str(data.get("selected_instance_id") or "default")
         cfg.default_version_id = str(data.get("default_version_id") or "")
+        raw_version_order = data.get("version_order")
+        cfg.version_order = (
+            [str(v) for v in raw_version_order if v]
+            if isinstance(raw_version_order, list)
+            else []
+        )
         if not cfg.get_instance(cfg.selected_instance_id):
             cfg.selected_instance_id = "default"
 

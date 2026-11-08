@@ -283,6 +283,39 @@ def _normalize_mc_versions(values: list[str]) -> list[str]:
     return [v for v in values if re.fullmatch(r"\d+\.\d+(\.\d+)?", str(v).strip())]
 
 
+def _murmur2(data: bytes, seed: int = 1) -> int:
+    """MurmurHash2（CurseForge 指纹算法），返回 32 位无符号整数。"""
+    m = 0x5BD1E995
+    r = 24
+    length = len(data)
+    h = (seed ^ length) & 0xFFFFFFFF
+    end = length - (length & 3)
+    for index in range(0, end, 4):
+        k = int.from_bytes(data[index:index + 4], "little")
+        k = (k * m) & 0xFFFFFFFF
+        k ^= k >> r
+        k = (k * m) & 0xFFFFFFFF
+        h = (h * m) & 0xFFFFFFFF
+        h ^= k
+    remainder = length & 3
+    if remainder == 3:
+        h ^= data[end + 2] << 16
+    if remainder >= 2:
+        h ^= data[end + 1] << 8
+    if remainder >= 1:
+        h ^= data[end]
+        h = (h * m) & 0xFFFFFFFF
+    h ^= h >> 13
+    h = (h * m) & 0xFFFFFFFF
+    h ^= h >> 15
+    return h
+
+
+def _curseforge_fingerprint(path: Path) -> int:
+    """读取整个文件计算 CurseForge 指纹（1MB 以下的小文件同样适用）。"""
+    return _murmur2(path.read_bytes(), 1)
+
+
 def _modrinth_dependencies(raw: dict) -> list[dict]:
     """把 Modrinth 的 dependencies 归一化为统一结构，只保留必装/可选前置。"""
     result: list[dict] = []
@@ -925,62 +958,138 @@ class ContentClient:
         loader: str = "",
         log: Callable[[str], None] | None = None,
     ) -> list[tuple[Path, ContentVersion]]:
-        """通过 Modrinth 哈希接口识别本地 Mod，再查询各自的最新兼容版本。"""
+        """按文件指纹识别本地 Mod，并查询两个平台的最新兼容版本。
+
+        Modrinth 用 /version_files 的 SHA1 哈希匹配；CurseForge 用 /mods/fingerprint
+        的 Murmur2 指纹匹配。这样两边的 Mod 都能检测更新，不再跳过一半文件。
+        """
         digests: dict[str, Path] = {}
+        cf_enabled = bool((self.config.curseforge_api_key or "").strip())
         for path in jars:
             try:
-                digest = hashlib.sha1()
-                with path.open("rb") as handle:
-                    for chunk in iter(lambda: handle.read(1024 * 256), b""):
-                        digest.update(chunk)
-                digests[digest.hexdigest()] = path
+                blob = path.read_bytes()
             except OSError:
                 continue
-        if not digests:
-            return []
-        base = (self.config.modrinth_api_base or "https://api.modrinth.com/v2").rstrip("/")
-        try:
-            matched = self.http.post_json_url(
-                base + "/version_files",
-                {"hashes": list(digests), "algorithm": "sha1"},
-                headers={"User-Agent": USER_AGENT},
-            )
-        except DownloadError as exc:
-            raise ContentError(f"检查更新失败：{exc}") from exc
-
-        current: dict[str, tuple[Path, str]] = {}
-        for digest, row in (matched or {}).items() if isinstance(matched, dict) else []:
-            if not isinstance(row, dict):
-                continue
-            path = digests.get(digest)
-            if path is None:
-                continue
-            project_id = str(row.get("project_id") or "")
-            if project_id:
-                current.setdefault(project_id, (path, str(row.get("version_number") or "")))
-
+            digests[hashlib.sha1(blob).hexdigest()] = path
+        matched_paths: set[Path] = set()
         updates: list[tuple[Path, ContentVersion]] = []
 
-        def fetch(item: tuple[str, tuple[Path, str]]) -> tuple[Path, ContentVersion] | None:
-            project_id, (path, installed_number) = item
+        if digests:
+            base = (self.config.modrinth_api_base or "https://api.modrinth.com/v2").rstrip("/")
             try:
-                versions = self._modrinth_versions(project_id, game_version, loader)
+                matched = self.http.post_json_url(
+                    base + "/version_files",
+                    {"hashes": list(digests), "algorithm": "sha1"},
+                    headers={"User-Agent": USER_AGENT},
+                )
+            except DownloadError as exc:
+                raise ContentError(f"检查更新失败：{exc}") from exc
+
+            current: dict[str, tuple[Path, str]] = {}
+            for digest, row in (matched or {}).items() if isinstance(matched, dict) else []:
+                if not isinstance(row, dict):
+                    continue
+                path = digests.get(digest)
+                if path is None:
+                    continue
+                project_id = str(row.get("project_id") or "")
+                if project_id:
+                    current.setdefault(project_id, (path, str(row.get("version_number") or "")))
+                    # 已被 Modrinth 识别过的文件不再送去 CurseForge，避免重复建议更新
+                    matched_paths.add(path)
+
+            def fetch(item: tuple[str, tuple[Path, str]]) -> tuple[Path, ContentVersion] | None:
+                project_id, (path, installed_number) = item
+                try:
+                    versions = self._modrinth_versions(project_id, game_version, loader)
+                except ContentError:
+                    return None
+                if not versions:
+                    return None
+                latest = versions[0]
+                if latest.version_number and latest.version_number == installed_number:
+                    return None
+                return path, latest
+
+            if current:
+                with ThreadPoolExecutor(max_workers=min(4, len(current))) as pool:
+                    for result in pool.map(fetch, list(current.items())):
+                        if result is not None:
+                            updates.append(result)
+                            matched_paths.add(result[0])
+
+        remaining = [path for path in digests.values() if path not in matched_paths]
+        if remaining and cf_enabled:
+            updates.extend(
+                self._curseforge_fingerprint_updates(remaining, game_version, loader, log)
+            )
+        if log:
+            log(f"[更新] 已检查 {len(jars)} 个 Mod，发现 {len(updates)} 个可更新。")
+        return updates
+
+    def _curseforge_fingerprint_updates(
+        self,
+        jars: list[Path],
+        game_version: str,
+        loader: str,
+        log: Callable[[str], None] | None = None,
+    ) -> list[tuple[Path, ContentVersion]]:
+        """用 CurseForge 指纹接口识别本地 Mod，并查询最新兼容版本。"""
+        fingerprints: dict[int, Path] = {}
+        for path in jars:
+            try:
+                fingerprints[_curseforge_fingerprint(path)] = path
+            except OSError:
+                continue
+        if not fingerprints:
+            return []
+        try:
+            data = self._curseforge_post(
+                "/mods/fingerprint", {"fingerprints": list(fingerprints)}
+            )
+        except DownloadError:
+            return []
+        payload = data.get("data") if isinstance(data, dict) else None
+        matches = payload.get("exactMatches") if isinstance(payload, dict) else None
+        if not isinstance(matches, list):
+            return []
+
+        current: dict[str, tuple[Path, str]] = {}
+        for row in matches:
+            if not isinstance(row, dict):
+                continue
+            file_row = row.get("file") if isinstance(row.get("file"), dict) else {}
+            try:
+                fingerprint = int(file_row.get("fingerprint") or 0)
+            except (TypeError, ValueError):
+                continue
+            path = fingerprints.get(fingerprint)
+            mod_id = str(row.get("id") or "")
+            if path is None or not mod_id:
+                continue
+            current.setdefault(mod_id, (path, str(file_row.get("id") or "")))
+
+        def fetch(item: tuple[str, tuple[Path, str]]) -> tuple[Path, ContentVersion] | None:
+            mod_id, (path, installed_file_id) = item
+            try:
+                versions = self._curseforge_versions(mod_id, game_version, loader)
             except ContentError:
                 return None
             if not versions:
                 return None
             latest = versions[0]
-            if latest.version_number and latest.version_number == installed_number:
+            if installed_file_id and latest.id == installed_file_id:
                 return None
             return path, latest
 
+        updates: list[tuple[Path, ContentVersion]] = []
         if current:
             with ThreadPoolExecutor(max_workers=min(4, len(current))) as pool:
                 for result in pool.map(fetch, list(current.items())):
                     if result is not None:
                         updates.append(result)
         if log:
-            log(f"[更新] 已检查 {len(current)} 个 Mod，发现 {len(updates)} 个可更新。")
+            log(f"[更新] CurseForge 指纹匹配 {len(current)} 个 Mod，发现 {len(updates)} 个可更新。")
         return updates
 
     def _download_single(
@@ -990,6 +1099,7 @@ class ContentClient:
         dest: Path,
         cancel: threading.Event | None = None,
         pause: threading.Event | None = None,
+        on_bytes: Callable[[int], None] | None = None,
     ) -> Path:
         candidates = []
         rewritten = rewrite_download_url(file.url, source, self.config)
@@ -1023,6 +1133,7 @@ class ContentClient:
                     sha1=file.sha1 or None,
                     cancel=cancel,
                     pause=pause,
+                    on_bytes=on_bytes,
                 )
                 return dest
             except Cancelled:
@@ -1054,6 +1165,19 @@ class ContentClient:
     ) -> Path:
         directory.mkdir(parents=True, exist_ok=True)
         return self._download_single(source, file, directory / file.filename, cancel, pause)
+
+    def save_as(
+        self,
+        source: str,
+        file: ContentFile,
+        dest: Path,
+        cancel: threading.Event | None = None,
+        pause: threading.Event | None = None,
+        on_bytes: Callable[[int], None] | None = None,
+    ) -> Path:
+        """把单个文件保存到指定路径（另存为），不写入游戏目录。"""
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        return self._download_single(source, file, dest, cancel, pause, on_bytes=on_bytes)
 
     def download_many(
         self,

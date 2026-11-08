@@ -46,7 +46,6 @@ from ..installer import (
     estimate_version_size,
 )
 from ..java import pick_java
-from ..launcher import isolated_game_dir
 from ..modloader import (
     LOADER_LABELS,
     LoaderError,
@@ -818,12 +817,13 @@ class DownloadPage(QWidget):
         self._pending_loader_save: tuple[str, str, str, Path] | None = None
         self._loader_save_buttons: dict[str, QPushButton] = {}
         self._loader_version_edited = False
+        # 不再写死版本号：默认留空表示「最新稳定版」，避免切换到旧版本时显示不匹配的加载器版本
         self._loader_version_defaults = {
-            "fabric": "0.16.10",
-            "quilt": "0.9.3",
-            "forge": "49.1.0",
-            "neoforge": "20.4.237",
-            "liteloader": "1.12.2-SNAPSHOT",
+            "fabric": "",
+            "quilt": "",
+            "forge": "",
+            "neoforge": "",
+            "liteloader": "",
         }
         self._installing_mc = ""
         self._installing_kind = ""
@@ -1081,13 +1081,15 @@ class DownloadPage(QWidget):
         mc_caption = QLabel("MC 版本")
         mc_caption.setObjectName("Muted")
         inputs.addWidget(mc_caption)
-        self.loader_mc_edit = QLineEdit("1.20.1")
-        self.loader_mc_edit.setFixedWidth(96)
+        self.loader_mc_edit = QLineEdit("")
+        self.loader_mc_edit.setPlaceholderText("选择版本后自动填入")
+        self.loader_mc_edit.setFixedWidth(112)
         inputs.addWidget(self.loader_mc_edit)
         ver_caption = QLabel("加载器版本")
         ver_caption.setObjectName("Muted")
         inputs.addWidget(ver_caption)
-        self.loader_version_edit = QLineEdit("49.1.0")
+        self.loader_version_edit = QLineEdit("")
+        self.loader_version_edit.setPlaceholderText("留空=最新稳定版")
         self.loader_version_edit.setFixedWidth(150)
         inputs.addWidget(self.loader_version_edit)
         inputs.addStretch(1)
@@ -1415,6 +1417,9 @@ class DownloadPage(QWidget):
         self._update_detail_header()
         self.location_label.setText(str(self.ctx.config.game_path))
         self._select_loader(_ORIGINAL)
+        self._loader_version_edited = False
+        self.loader_mc_edit.setText(str(entry.get("id") or ""))
+        self.loader_version_edit.setText("")
         self._start_loader_scan(str(entry.get("id") or ""))
         self.stack.setCurrentIndex(1)
 
@@ -1787,6 +1792,8 @@ class DownloadPage(QWidget):
             detail = progress.detail
             if progress.speed > 0:
                 detail += f" · {progress.speed / 1048576:.1f} MB/s"
+            if progress.files_total > 0:
+                detail += f" · 剩余 {max(0, progress.files_total - progress.files_done)} 个文件"
             self.ctx.downloads.update(
                 task_id,
                 percent=progress.percent,
@@ -1806,6 +1813,8 @@ class DownloadPage(QWidget):
         detail = progress.detail
         if progress.speed > 0:
             detail += f" · {progress.speed / 1048576:.1f} MB/s"
+        if progress.files_total > 0:
+            detail += f" · 剩余 {max(0, progress.files_total - progress.files_done)} 个文件"
         self.progress_detail.setText(detail)
 
     def _on_install_done(self, key: str, final_version_id: str) -> None:
@@ -1848,9 +1857,8 @@ class DownloadPage(QWidget):
         """
         account = self.ctx.current_account()
         config = self.ctx.config
-        dirs = [config.game_path]
-        if config.isolation_for(version_id) == "all":
-            dirs.append(isolated_game_dir(config.game_path, version_id, "all"))
+        # 全部隔离时皮肤需要主目录与隔离目录各写一份，规则已收敛到 resolve_game_dirs
+        dirs = config.resolve_game_dirs(version_id).skin_targets()
         for game_dir in dirs:
             paths = import_offline_skin(
                 account, game_dir, log=self.ctx.bus.log.emit, version_id=version_id
@@ -2008,8 +2016,9 @@ class DownloadPage(QWidget):
             QMessageBox.information(self, APP_NAME, "已有加载器源文件下载任务正在进行，请稍候。")
             return
         if not self._loader_version_edited:
-            self.loader_version_edit.setText(self._loader_version_defaults.get(kind, ""))
-        mc = self.loader_mc_edit.text().strip() or "1.20.1"
+            card = self._loader_cards.get(kind)
+            self.loader_version_edit.setText(card.combo.currentText() if card and card.combo.count() else "")
+        mc = self.loader_mc_edit.text().strip() or str((self._detail_entry or {}).get("id") or "")
         ver = self.loader_version_edit.text().strip()
         default_name = _loader_installer_file_name(kind, mc, ver)
         path, _filter = QFileDialog.getSaveFileName(

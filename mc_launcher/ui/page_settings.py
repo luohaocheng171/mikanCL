@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSlider,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -36,13 +38,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import APP_NAME, APP_VERSION, agreement
+from .. import APP_NAME, APP_VERSION, agreement, themes
+from .._trace import trace as _trace
 from ..config import (
     AFTER_LAUNCH_ACTIONS,
     CACHE_DIR,
     DATA_DIR,
+    EXE_PATH,
     FEATURE_PAGE_KEYS,
     ISOLATION_LABELS,
+    IS_PACKAGED,
     PROCESS_PRIORITIES,
     SOURCE_MAPPINGS,
     DownloadSource,
@@ -218,15 +223,21 @@ class SourceDialog(QDialog):
 class SettingsPage(QWidget):
     def __init__(self, ctx: AppContext, parent: QWidget | None = None):
         super().__init__(parent)
+        _trace("settings: init entry")
         self.ctx = ctx
         self._test_worker: TestSourceWorker | None = None
         self._rescan_worker: RescanJavaWorker | None = None
         self._java_download_worker: JavaDownloadWorker | None = None
         self._build()
+        _trace("settings: _build done")
         self._connect()
+        _trace("settings: _connect done")
         self._sync_ui_from_config()
+        _trace("settings: sync done")
         self._rebuild_source_table()
+        _trace("settings: source table done")
         self._rebuild_java_table()
+        _trace("settings: java table done")
 
     # ------------------------------------------------------------------
     def _build(self) -> None:
@@ -241,16 +252,26 @@ class SettingsPage(QWidget):
         self.tabs = QTabWidget()
         outer.addWidget(self.tabs, 1)
         self.tabs.insertTab(0, scroll_page(self._build_general_tab()), self.tr("通用"))
+        _trace("settings: tab general")
         self.tabs.insertTab(1, scroll_page(self._build_features_tab()), self.tr("功能开关"))
+        _trace("settings: tab features")
         self.tabs.insertTab(2, scroll_page(self._build_appearance_tab()), self.tr("外观"))
+        _trace("settings: tab appearance")
         self.tabs.addTab(self._build_sources_tab(), self.tr("下载源"))
+        _trace("settings: tab sources")
         self.tabs.addTab(scroll_page(self._build_content_tab()), self.tr("内容源与镜像"))
+        _trace("settings: tab content")
         self.tabs.addTab(scroll_page(self._build_auth_tab()), self.tr("账号与登录"))
+        _trace("settings: tab auth")
         self.tabs.addTab(scroll_page(self._build_game_tab()), self.tr("游戏设置"))
+        _trace("settings: tab game")
         self.tabs.addTab(self._build_java_tab(), self.tr("Java 运行时"))
+        _trace("settings: tab java")
         self.tabs.addTab(scroll_page(self._build_about_tab()), self.tr("关于"))
+        _trace("settings: tab about")
 
     def _build_general_tab(self) -> QWidget:
+        _trace("gt: entry")
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 14, 0, 0)
@@ -258,6 +279,7 @@ class SettingsPage(QWidget):
 
         card = Card(margins=20, spacing=12)
         form = QFormLayout()
+        _trace("gt: card+form")
         form.setSpacing(11)
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignTrailing)
 
@@ -276,6 +298,7 @@ class SettingsPage(QWidget):
         language_row.addWidget(self.language_combo, 1)
         language_row.addWidget(restart)
         form.addRow(self.tr("界面语言"), language_row)
+        _trace("gt: language row")
 
         self.general_memory_spin = QSpinBox()
         self.general_memory_spin.setRange(512, 65536)
@@ -292,19 +315,22 @@ class SettingsPage(QWidget):
         memory_row.addWidget(self.general_memory_spin, 1)
         memory_row.addWidget(detect_memory)
         form.addRow(self.tr("默认最大内存"), memory_row)
-
-        self.smart_jvm_check = QCheckBox(
-            self.tr("智能 JVM 参数（自动启用 G1GC 等调优，减少卡顿）")
-        )
-        self.smart_jvm_check.setToolTip(
-            self.tr("按 Java 版本与内存自动追加 Aikar 风格 G1GC 参数；已自定义 GC 参数时自动跳过。")
-        )
-        form.addRow("", self.smart_jvm_check)
+        _trace("gt: memory row")
 
         self.general_threads_spin = QSpinBox()
         self.general_threads_spin.setRange(1, 328)
         self.general_threads_spin.setSuffix(f" {t('SettingsPage', '线程')}")
         form.addRow(self.tr("下载线程数"), self.general_threads_spin)
+
+        self.speed_limit_spin = QSpinBox()
+        self.speed_limit_spin.setRange(0, 102400)
+        self.speed_limit_spin.setSingleStep(128)
+        self.speed_limit_spin.setSuffix(" KB/s")
+        self.speed_limit_spin.setSpecialValueText(self.tr("不限速"))
+        self.speed_limit_spin.setToolTip(
+            self.tr("全局带宽上限，边下载边看视频时可设为 1024 左右；0 表示不限速。")
+        )
+        form.addRow(self.tr("下载限速"), self.speed_limit_spin)
 
         self.preload_check = QCheckBox(self.tr("预加载 JVM（实验性）"))
         self.preload_check.setToolTip(
@@ -318,12 +344,14 @@ class SettingsPage(QWidget):
         self.preload_java_combo.setMinimumWidth(220)
         self.preload_check.toggled.connect(self.preload_java_combo.setEnabled)
         form.addRow(self.tr("预加载的 Java"), self.preload_java_combo)
+        _trace("gt: preload row")
 
         self.general_hide_check = QCheckBox(self.tr("启动游戏后隐藏启动器（可从托盘恢复）"))
         form.addRow("", self.general_hide_check)
 
         self.start_anim_check = QCheckBox(self.tr("启动游戏时显示启动动画"))
         form.addRow("", self.start_anim_check)
+        _trace("gt: all form rows")
 
         card.body.addLayout(form)
         buttons = QHBoxLayout()
@@ -342,6 +370,7 @@ class SettingsPage(QWidget):
         hint.setWordWrap(True)
         card.body.addWidget(hint)
         layout.addWidget(card)
+        _trace("gt: main card added")
 
         paths_card = Card(margins=20, spacing=12)
         paths_card.body.addWidget(
@@ -399,6 +428,7 @@ class SettingsPage(QWidget):
         paths_card.body.addWidget(path_hint)
         layout.addWidget(paths_card)
         layout.addStretch(1)
+        _trace("gt: paths card added")
         return page
 
     # ------------------------------------------------------------------
@@ -435,11 +465,14 @@ class SettingsPage(QWidget):
             "forbric": "Forbric",
             "java": "Java 中心",
             "deps": "依赖补全",
+            "modgraph": "Mod 关系网",
             "wiki": "教程中心",
             "bedrock": "基岩版",
             "skin_factory": "皮肤工厂",
             "skin_pack": "皮肤包",
             "seed_terrain": "世界种子",
+            "gallery": "截图图库",
+            "crash": "崩溃报告",
         }
         for key in FEATURE_PAGE_KEYS:
             check = QCheckBox(t("MainWindow", nav_names[key]))
@@ -508,6 +541,34 @@ class SettingsPage(QWidget):
             )
         )
 
+        theme_row = QHBoxLayout()
+        theme_row.setSpacing(8)
+        self.theme_combo = QComboBox()
+        self.theme_combo.setMinimumWidth(140)
+        for name in themes.all_themes():
+            self.theme_combo.addItem(name)
+        self.theme_combo.activated.connect(
+            lambda _index: self._apply_named_theme(self.theme_combo.currentText())
+        )
+        theme_row.addWidget(self.theme_combo)
+        import_theme = QPushButton(self.tr("导入主题…"))
+        import_theme.setObjectName("Ghost")
+        import_theme.clicked.connect(self._import_theme)
+        theme_row.addWidget(import_theme)
+        export_theme = QPushButton(self.tr("导出模板…"))
+        export_theme.setObjectName("Ghost")
+        export_theme.clicked.connect(self._export_theme_template)
+        theme_row.addWidget(export_theme)
+        theme_row.addStretch(1)
+        card.body.addWidget(QLabel(self.tr("主题方案")))
+        card.body.addLayout(theme_row)
+        theme_hint = QLabel(
+            self.tr("自定义主题是 data/themes/*.json，改完点「导入主题」即可生效；只换主题色时用下方色块。")
+        )
+        theme_hint.setObjectName("Tiny")
+        theme_hint.setWordWrap(True)
+        card.body.addWidget(theme_hint)
+
         accent_row = QHBoxLayout()
         accent_row.setSpacing(8)
         self.accent_buttons: dict[str, QPushButton] = {}
@@ -559,6 +620,32 @@ class SettingsPage(QWidget):
         hint.setObjectName("Tiny")
         hint.setWordWrap(True)
         card.body.addWidget(hint)
+
+        self.dynamic_label = QLabel("未设置（静态背景）")
+        self.dynamic_label.setObjectName("Tiny")
+        self.dynamic_label.setWordWrap(True)
+        self.dynamic_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        card.body.addWidget(QLabel(self.tr("动态壁纸（GIF / WebP 动图）")))
+        card.body.addWidget(self.dynamic_label)
+        dynamic_row = QHBoxLayout()
+        pick_dynamic = QPushButton(self.tr("选择动图…"))
+        pick_dynamic.clicked.connect(self._pick_dynamic_wallpaper)
+        dynamic_row.addWidget(pick_dynamic)
+        clear_dynamic = QPushButton(self.tr("清除动态壁纸"))
+        clear_dynamic.setObjectName("Ghost")
+        clear_dynamic.clicked.connect(self._clear_dynamic_wallpaper)
+        dynamic_row.addWidget(clear_dynamic)
+        dynamic_row.addStretch(1)
+        card.body.addLayout(dynamic_row)
+        dynamic_hint = QLabel(
+            self.tr(
+                "动态壁纸会循环播放，优先于静态背景图；仅支持 GIF / WebP 动图。"
+                "美化版另外支持 MP4 / WebM 视频壁纸，可在美化版设置中配置。"
+            )
+        )
+        dynamic_hint.setObjectName("Tiny")
+        dynamic_hint.setWordWrap(True)
+        card.body.addWidget(dynamic_hint)
         layout.addWidget(card)
 
         effects_card = Card(margins=20, spacing=10)
@@ -572,10 +659,54 @@ class SettingsPage(QWidget):
         self.anim_check.setChecked(self.ctx.config.ui_animations)
         self.anim_check.toggled.connect(self._on_animations_toggled)
         effects_card.body.addWidget(self.anim_check)
+        frame_row = QHBoxLayout()
+        frame_row.setSpacing(10)
+        frame_row.addWidget(QLabel(self.tr("界面框架")))
+        self.frame_combo = QComboBox()
+        self.frame_combo.addItem(self.tr("经典版（Qt，功能完整）"), "classic")
+        self.frame_combo.addItem(self.tr("美化版（pywebview + WebView2）"), "webview")
+        self.frame_combo.setCurrentIndex(0 if self.ctx.config.frame_mode == "classic" else 1)
+        self.frame_combo.currentIndexChanged.connect(self._on_frame_mode_changed)
+        frame_row.addWidget(self.frame_combo, 1)
+        effects_card.body.addLayout(frame_row)
+        frame_hint = QLabel(
+            self.tr(
+                "经典版 / 美化版可随时双向切换，两套界面共用同一套启动、下载、账号与联机内核；"
+                "修改后重启启动器生效，不会丢失下载进度或设置。"
+            )
+        )
+        frame_hint.setObjectName("Tiny")
+        frame_hint.setWordWrap(True)
+        effects_card.body.addWidget(frame_hint)
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(10)
+        mode_row.addWidget(QLabel(self.tr("运行模式")))
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem(self.tr("经典模式（稳定 · 低占用）"), "classic")
+        self.mode_combo.addItem(self.tr("视觉增强（毛玻璃 · 磁贴）"), "visual")
+        index = 1 if self.ctx.config.ui_mode == "visual" else 0
+        self.mode_combo.setCurrentIndex(index)
+        self.mode_combo.currentIndexChanged.connect(self._on_ui_mode_changed)
+        mode_row.addWidget(self.mode_combo, 1)
+        effects_card.body.addLayout(mode_row)
         self.acrylic_check = QCheckBox(self.tr("毛玻璃背景（依赖 Windows DWM 合成）"))
         self.acrylic_check.setChecked(self.ctx.config.ui_acrylic)
         self.acrylic_check.toggled.connect(self._on_acrylic_toggled)
         effects_card.body.addWidget(self.acrylic_check)
+        strength_row = QHBoxLayout()
+        strength_row.setSpacing(10)
+        strength_row.addWidget(QLabel(self.tr("毛玻璃强度")))
+        self.glass_strength_slider = QSlider(Qt.Horizontal)
+        self.glass_strength_slider.setRange(0, 100)
+        self.glass_strength_slider.setValue(int(self.ctx.config.glass_strength or 62))
+        self.glass_strength_slider.setEnabled(bool(self.ctx.config.ui_acrylic))
+        self.glass_strength_slider.valueChanged.connect(self._on_glass_strength_changed)
+        strength_row.addWidget(self.glass_strength_slider, 1)
+        self.glass_strength_label = QLabel(f"{self.glass_strength_slider.value()}%")
+        self.glass_strength_label.setObjectName("Tiny")
+        self.glass_strength_label.setMinimumWidth(38)
+        strength_row.addWidget(self.glass_strength_label)
+        effects_card.body.addLayout(strength_row)
         effects_hint = QLabel(
             self.tr(
                 "毛玻璃仅在 Windows 10/11 桌面窗口管理器开启时生效，不额外启动进程、不联网；"
@@ -600,20 +731,144 @@ class SettingsPage(QWidget):
     def _on_acrylic_toggled(self, checked: bool) -> None:
         cfg = self.ctx.config
         cfg.ui_acrylic = bool(checked)
+        if getattr(self, "glass_strength_slider", None) is not None:
+            self.glass_strength_slider.setEnabled(bool(checked))
         cfg.save()
         self.ctx.bus.config_changed.emit()
         self.ctx.bus.toast.emit(self.tr("毛玻璃设置已保存。"))
 
+    def _on_glass_strength_changed(self, value: int) -> None:
+        cfg = self.ctx.config
+        cfg.glass_strength = max(0, min(100, int(value)))
+        if getattr(self, "glass_strength_label", None) is not None:
+            self.glass_strength_label.setText(f"{cfg.glass_strength}%")
+        cfg.save()
+        self.ctx.bus.config_changed.emit()
+
+    def _on_frame_mode_changed(self, index: int) -> None:
+        """经典 Qt / 美化 pywebview 双向切换：重启后生效。"""
+        from .dialog_frame import webview2_installed
+
+        cfg = self.ctx.config
+        mode = self.frame_combo.itemData(index) or "classic"
+        if mode == cfg.frame_mode:
+            return
+        if mode == "webview" and not webview2_installed():
+            answer = QMessageBox.question(
+                self,
+                APP_NAME,
+                self.tr(
+                    "未检测到 WebView2 Runtime，美化版可能无法启动。\n"
+                    "仍要切换吗？（启动时会引导安装 WebView2 Runtime；"
+                    "若启动失败会提示是否切回经典版）"
+                ),
+            )
+            if answer != QMessageBox.Yes:
+                self.frame_combo.blockSignals(True)
+                self.frame_combo.setCurrentIndex(0 if cfg.frame_mode == "classic" else 1)
+                self.frame_combo.blockSignals(False)
+                return
+        cfg.frame_mode = mode
+        cfg.frame_mode_asked = True
+        cfg.frame_locked = False
+        cfg.save()
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit(self.tr("界面框架已保存，重启启动器后生效。"))
+
+
+    def _on_ui_mode_changed(self, index: int) -> None:
+        """经典 / 视觉模式切换：视觉模式自动开启毛玻璃，经典模式关闭。"""
+        cfg = self.ctx.config
+        mode = self.mode_combo.itemData(index) or "classic"
+        cfg.ui_mode = str(mode)
+        visual = cfg.ui_mode == "visual"
+        cfg.ui_acrylic = visual
+        cfg.save()
+        self.acrylic_check.blockSignals(True)
+        self.acrylic_check.setChecked(visual)
+        self.acrylic_check.blockSignals(False)
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit(
+            self.tr("已切换到视觉增强模式。") if visual else self.tr("已切换到经典模式。")
+        )
+
     def _apply_accent(self, color: str) -> None:
         cfg = self.ctx.config
         cfg.accent_color = color
+        cfg.theme_name = ""   # 只换主题色：退出主题方案，改走色相旋转
         cfg.save()
         app = QApplication.instance()
         if isinstance(app, QApplication):
-            theme.apply_theme(app, color)
+            theme.apply_theme(app, color, "")
         for key, chip in self.accent_buttons.items():
             chip.setChecked(key == color.lower())
+        if hasattr(self, "theme_combo"):
+            self.theme_combo.blockSignals(True)
+            self.theme_combo.setCurrentIndex(-1)
+            self.theme_combo.blockSignals(False)
         self.ctx.bus.toast.emit(f"主题色已切换为 {color}")
+
+    def _apply_named_theme(self, name: str) -> None:
+        """切换整套主题（背景 / 卡片 / 文字 / 强调色一起变）。"""
+        theme_obj = themes.get(name)
+        cfg = self.ctx.config
+        cfg.theme_name = name
+        cfg.accent_color = theme_obj.accent or cfg.accent_color
+        cfg.save()
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            theme.apply_theme(app, cfg.accent_color, name)
+        for key, chip in self.accent_buttons.items():
+            chip.setChecked(key == cfg.accent_color.lower())
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit(self.tr("已切换到主题「{0}」").format(name))
+
+    def _reload_theme_combo(self, selected: str = "") -> None:
+        if not hasattr(self, "theme_combo"):
+            return
+        self.theme_combo.blockSignals(True)
+        self.theme_combo.clear()
+        for name in themes.all_themes():
+            self.theme_combo.addItem(name)
+        if selected and self.theme_combo.findText(selected) >= 0:
+            self.theme_combo.setCurrentText(selected)
+        self.theme_combo.blockSignals(False)
+
+    def _import_theme(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, self.tr("导入主题"), str(DATA_DIR), "主题文件 (*.json)"
+        )
+        if not path:
+            return
+        try:
+            item = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, APP_NAME, f"主题文件读取失败：{exc}")
+            return
+        registered = themes.register(item) if isinstance(item, dict) else None
+        if registered is None:
+            QMessageBox.warning(
+                self, APP_NAME, "主题文件缺少 name 字段，或 accent 不是 #RRGGBB。"
+            )
+            return
+        self._reload_theme_combo(registered.name)
+        self._apply_named_theme(registered.name)
+
+    def _export_theme_template(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            self.tr("导出主题模板"),
+            str(Path.home() / "mikan-theme.json"),
+            "主题文件 (*.json)",
+        )
+        if not path:
+            return
+        try:
+            themes.write_template(path)
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, f"写入失败：{exc}")
+            return
+        self.ctx.bus.toast.emit("主题模板已导出，改完 color 后点「导入主题」即可生效。")
 
     def _pick_accent(self) -> None:
         current = self.ctx.config.accent_color or theme.ACCENT
@@ -647,11 +902,44 @@ class SettingsPage(QWidget):
         self.ctx.bus.config_changed.emit()
         self.ctx.bus.toast.emit("已恢复默认背景。")
 
+    def _pick_dynamic_wallpaper(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            self.tr("选择动态壁纸"),
+            str(DATA_DIR),
+            "动态图片 (*.gif *.webp);;所有文件 (*.*)",
+        )
+        if not path:
+            return
+        cfg = self.ctx.config
+        cfg.dynamic_wallpaper = path
+        cfg.save()
+        self._sync_appearance()
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit("动态壁纸已更新。")
+
+    def _clear_dynamic_wallpaper(self) -> None:
+        cfg = self.ctx.config
+        if not cfg.dynamic_wallpaper:
+            return
+        cfg.dynamic_wallpaper = ""
+        cfg.save()
+        self._sync_appearance()
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit("已清除动态壁纸。")
+
     def _sync_appearance(self) -> None:
         cfg = self.ctx.config
         accent = (cfg.accent_color or theme.ACCENT).lower()
         for key, chip in self.accent_buttons.items():
             chip.setChecked(key == accent)
+        if hasattr(self, "theme_combo"):
+            self.theme_combo.blockSignals(True)
+            if cfg.theme_name and self.theme_combo.findText(cfg.theme_name) >= 0:
+                self.theme_combo.setCurrentText(cfg.theme_name)
+            else:
+                self.theme_combo.setCurrentIndex(-1)
+            self.theme_combo.blockSignals(False)
         image = cfg.background_image
         if image and Path(image).exists():
             self.background_label.setText(image)
@@ -659,6 +947,13 @@ class SettingsPage(QWidget):
             self.background_label.setText(f"{image}（文件不存在）")
         else:
             self.background_label.setText("未设置（使用默认深色背景）")
+        dynamic = cfg.dynamic_wallpaper
+        if dynamic and Path(dynamic).exists():
+            self.dynamic_label.setText(dynamic)
+        elif dynamic:
+            self.dynamic_label.setText(f"{dynamic}（文件不存在）")
+        else:
+            self.dynamic_label.setText("未设置（静态背景）")
 
     def _build_sources_tab(self) -> QWidget:
         page = QWidget()
@@ -935,6 +1230,50 @@ class SettingsPage(QWidget):
         note.setWordWrap(True)
         card.body.addWidget(note)
         layout.addWidget(card)
+
+        opt_card = Card(margins=20, spacing=10)
+        opt_card.body.addWidget(
+            card_title_row(
+                self.tr("游戏优化"),
+                self.tr("全部为开关键，改动立即生效，下次启动游戏时应用"),
+            )
+        )
+        self.smart_jvm_check = QCheckBox(
+            self.tr("智能 JVM 参数（自动启用 G1GC 等调优，减少卡顿）")
+        )
+        self.smart_jvm_check.setToolTip(
+            self.tr("按 Java 版本与内存自动追加 Aikar 风格 G1GC 参数；已自定义 GC 参数时自动跳过。")
+        )
+        self.smart_jvm_check.toggled.connect(self._on_optimization_changed)
+        opt_card.body.addWidget(self.smart_jvm_check)
+
+        self.opt_pretouch_check = QCheckBox(
+            self.tr("大堆预触碰（AlwaysPreTouch，稳定内存占用）")
+        )
+        self.opt_pretouch_check.setToolTip(
+            self.tr("仅在分配内存 ≥ 4 GB 时追加，启动稍慢一点，但运行中更少卡顿。")
+        )
+        self.opt_pretouch_check.toggled.connect(self._on_optimization_changed)
+        opt_card.body.addWidget(self.opt_pretouch_check)
+
+        self.opt_fixed_heap_check = QCheckBox(
+            self.tr("固定堆大小（-Xms 与 -Xmx 相同）")
+        )
+        self.opt_fixed_heap_check.setToolTip(
+            self.tr("启动时一次性占满分配内存，避免运行中扩堆；内存紧张的老机器不建议开启。")
+        )
+        self.opt_fixed_heap_check.toggled.connect(self._on_optimization_changed)
+        opt_card.body.addWidget(self.opt_fixed_heap_check)
+
+        opt_hint = QLabel(
+            "这些开关只影响启动参数，不改动游戏内的画面设置。\n"
+            "老机器建议只开「智能 JVM 参数」，其余按需开启。"
+        )
+        opt_hint.setObjectName("Tiny")
+        opt_hint.setWordWrap(True)
+        opt_card.body.addWidget(opt_hint)
+        layout.addWidget(opt_card)
+
         layout.addStretch(1)
         return page
 
@@ -981,14 +1320,16 @@ class SettingsPage(QWidget):
         self.java_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.java_table.verticalHeader().setDefaultSectionSize(32)
         self.java_table.doubleClicked.connect(self._use_selected_java)
+        self.java_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.java_table.customContextMenuRequested.connect(self._java_context_menu)
         card.body.addWidget(self.java_table, 1)
-        tip = QLabel(
+        self.java_tip = QLabel(
             self.tr(
-                "双击一行可将其设为默认 Java。若未检测到合适的 Java，请安装对应版本后在游戏设置中手动指定。"
+                "双击一行可将其设为默认 Java。同一主版本默认只显示一个，右键可查看所有版本。"
             )
         )
-        tip.setObjectName("Tiny")
-        card.body.addWidget(tip)
+        self.java_tip.setObjectName("Tiny")
+        card.body.addWidget(self.java_tip)
         layout.addWidget(card, 1)
         return page
 
@@ -1316,6 +1657,8 @@ class SettingsPage(QWidget):
             (self.general_hide_check, cfg.after_launch_action == "hide"),
             (self.start_anim_check, cfg.start_animation),
             (self.smart_jvm_check, cfg.smart_jvm),
+            (self.opt_pretouch_check, cfg.opt_pre_touch),
+            (self.opt_fixed_heap_check, cfg.opt_fixed_heap),
             (self.preload_check, cfg.preload_jvm),
         ):
             check.blockSignals(True)
@@ -1327,6 +1670,9 @@ class SettingsPage(QWidget):
         self.general_threads_spin.blockSignals(True)
         self.general_threads_spin.setValue(max(1, min(328, int(cfg.download_threads))))
         self.general_threads_spin.blockSignals(False)
+        self.speed_limit_spin.blockSignals(True)
+        self.speed_limit_spin.setValue(max(0, int(cfg.download_speed_limit)))
+        self.speed_limit_spin.blockSignals(False)
         self._rebuild_preload_java()
         index = self.preload_java_combo.findData(cfg.preload_java_path or "")
         self.preload_java_combo.setCurrentIndex(index if index >= 0 else 0)
@@ -1386,9 +1732,9 @@ class SettingsPage(QWidget):
         from ..main import release_single_instance
 
         # 源码运行时 sys.argv[0] 是脚本路径（python run.py），必须带上；打包后 sys.argv[0] 是 exe 自身
-        if getattr(sys, "frozen", False):
+        if IS_PACKAGED:
             args = sys.argv[1:]
-            cwd = str(Path(sys.executable).parent)
+            cwd = str(EXE_PATH.parent)
         else:
             script = Path(sys.argv[0]).resolve()
             args = [str(script), *sys.argv[1:]]
@@ -1401,7 +1747,7 @@ class SettingsPage(QWidget):
             if key in os.environ:
                 inherited[key] = os.environ.pop(key)
         try:
-            QProcess.startDetached(sys.executable, args, cwd)
+            QProcess.startDetached(str(EXE_PATH), args, cwd)
         finally:
             os.environ.update(inherited)
         QApplication.quit()
@@ -1428,11 +1774,13 @@ class SettingsPage(QWidget):
         cfg.memory_mb = int(self.general_memory_spin.value())
         cfg.smart_jvm = self.smart_jvm_check.isChecked()
         cfg.download_threads = int(self.general_threads_spin.value())
+        cfg.download_speed_limit = int(self.speed_limit_spin.value())
         cfg.preload_jvm = self.preload_check.isChecked()
         cfg.preload_java_path = str(self.preload_java_combo.currentData() or "")
-        from ..net import set_default_download_workers
+        from ..net import set_default_download_workers, set_download_speed_limit
 
         set_default_download_workers(cfg.download_threads)
+        set_download_speed_limit(cfg.download_speed_limit)
         if self.general_hide_check.isChecked():
             if cfg.after_launch_action != "hide":
                 cfg.after_launch_action = "hide"
@@ -1543,15 +1891,18 @@ class SettingsPage(QWidget):
         )
         if not path:
             return
+        from ..config import detect_game_root
+
+        root = detect_game_root(path)
         cfg = self.ctx.config
         existing = next(
-            (entry for entry in cfg.game_dirs if Path(entry.path) == Path(path)), None
+            (entry for entry in cfg.game_dirs if Path(entry.path) == root), None
         )
         if existing is not None:
             cfg.select_game_dir(existing.id)
             message = f"已切换到数据目录：{existing.name}"
         else:
-            entry = cfg.add_game_dir(Path(path).name or "新目录", path)
+            entry = cfg.add_game_dir(root.name or "新目录", str(root))
             cfg.select_game_dir(entry.id)
             message = f"已添加数据目录：{entry.name}"
         self.ctx.bus.config_changed.emit()
@@ -1779,7 +2130,30 @@ class SettingsPage(QWidget):
 
     def _rebuild_java_table(self) -> None:
         self.java_table.setRowCount(0)
-        for row, java in enumerate(self.ctx.javas):
+        javas = list(self.ctx.javas)
+        if not getattr(self, "_show_all_java", False):
+            # 同一主版本只显示一个（优先保留位数更高、路径更短的条目）
+            grouped: dict[int, object] = {}
+            for java in javas:
+                current = grouped.get(java.major)
+                if current is None:
+                    grouped[java.major] = java
+                    continue
+                if (java.bits, -len(java.path)) > (current.bits, -len(current.path)):
+                    grouped[java.major] = java
+            javas = sorted(grouped.values(), key=lambda j: (-j.major, j.path))
+            hidden = max(0, len(self.ctx.javas) - len(javas))
+            if hidden and hasattr(self, "java_tip"):
+                self.java_tip.setText(
+                    self.tr(
+                        "双击一行可将其设为默认 Java。已合并 {hidden} 个同版本条目，右键可查看所有 Java。"
+                    ).format(hidden=hidden)
+                )
+        elif hasattr(self, "java_tip"):
+            self.java_tip.setText(
+                self.tr("双击一行可将其设为默认 Java。右键可切回「每个版本只显示一个」。")
+            )
+        for row, java in enumerate(javas):
             self.java_table.insertRow(row)
             version_item = QTableWidgetItem(f"Java {java.major}  ({java.version})")
             version_item.setData(Qt.UserRole, java.path)
@@ -1788,6 +2162,24 @@ class SettingsPage(QWidget):
             bits_item.setTextAlignment(Qt.AlignCenter)
             self.java_table.setItem(row, 1, bits_item)
             self.java_table.setItem(row, 2, QTableWidgetItem(java.path))
+
+    def _java_context_menu(self, pos) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self.java_table)
+        action = menu.addAction(
+            self.tr("查看所有 Java 版本") if not getattr(self, "_show_all_java", False)
+            else self.tr("每个版本只显示一个")
+        )
+        action.triggered.connect(self._toggle_all_java)
+        menu.addSeparator()
+        pick = menu.addAction(self.tr("把当前行设为默认 Java"))
+        pick.triggered.connect(self._use_selected_java)
+        menu.exec(self.java_table.viewport().mapToGlobal(pos))
+
+    def _toggle_all_java(self) -> None:
+        self._show_all_java = not getattr(self, "_show_all_java", False)
+        self._rebuild_java_table()
 
     def _use_selected_java(self) -> None:
         row = self.java_table.currentRow()
@@ -1809,6 +2201,14 @@ class SettingsPage(QWidget):
     def _on_jvm_changed(self) -> None:
         self.ctx.config.extra_jvm_args = self.jvm_edit.text()
         self._ctx_save()
+
+    def _on_optimization_changed(self) -> None:
+        """游戏优化开关：立即写回配置，下次启动游戏即生效。"""
+        cfg = self.ctx.config
+        cfg.smart_jvm = self.smart_jvm_check.isChecked()
+        cfg.opt_pre_touch = self.opt_pretouch_check.isChecked()
+        cfg.opt_fixed_heap = self.opt_fixed_heap_check.isChecked()
+        cfg.save_debounced()
 
     def _on_keep_changed(self, checked: bool) -> None:
         self.ctx.config.keep_launcher_on_game_exit = bool(checked)

@@ -71,6 +71,45 @@ def default_download_workers() -> int:
     return _default_download_workers
 
 
+# ---- 全局下载限速（令牌桶）----
+# 限速对所有下载线程生效，按字节数预约时间片；0 表示不限速。
+_SPEED_LIMIT_KBPS = 0
+_SPEED_NEXT_ALLOWED = 0.0
+_SPEED_LOCK = threading.Lock()
+
+
+def set_download_speed_limit(kb_per_second: int) -> None:
+    """设置全局下载带宽上限（KB/s），0 表示不限速。"""
+    global _SPEED_LIMIT_KBPS, _SPEED_NEXT_ALLOWED
+    try:
+        value = int(kb_per_second)
+    except (TypeError, ValueError):
+        return
+    with _SPEED_LOCK:
+        _SPEED_LIMIT_KBPS = max(0, value)
+        _SPEED_NEXT_ALLOWED = 0.0
+
+
+def download_speed_limit() -> int:
+    return _SPEED_LIMIT_KBPS
+
+
+def _throttle_bytes(count: int) -> None:
+    """按全局带宽预约本次读取的时间片，超额时短暂休眠。"""
+    global _SPEED_NEXT_ALLOWED
+    limit = _SPEED_LIMIT_KBPS
+    if limit <= 0 or count <= 0:
+        return
+    now = time.monotonic()
+    slot = count / (limit * 1024.0)
+    with _SPEED_LOCK:
+        start = max(now, _SPEED_NEXT_ALLOWED)
+        _SPEED_NEXT_ALLOWED = start + slot
+    wait = start - now
+    if wait > 0:
+        time.sleep(min(wait, 2.0))
+
+
 def download_slot() -> threading.BoundedSemaphore:
     """供包内其它下载实现（如基岩版分块下载）复用的全局 328 线程预算。"""
     return _DOWNLOAD_SLOTS
@@ -443,6 +482,7 @@ def _segmented_download(
                             if not chunk:
                                 break
                             fh.write(chunk)
+                            _throttle_bytes(len(chunk))
                             if on_bytes:
                                 on_bytes(len(chunk))
             except Cancelled:
@@ -783,6 +823,7 @@ class Http:
                                     if not chunk:
                                         break
                                     fh.write(chunk)
+                                    _throttle_bytes(len(chunk))
                                     downloaded += len(chunk)
                                     if on_bytes:
                                         on_bytes(len(chunk))

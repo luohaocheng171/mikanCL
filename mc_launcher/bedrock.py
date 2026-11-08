@@ -192,7 +192,7 @@ def _parse_store_listing(text: str, ring: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 def _powershell(script: str, timeout: int = 120) -> tuple[int, str]:
     command = [
-        "powershell",
+        _powershell_exe(),
         "-NoProfile",
         "-NonInteractive",
         "-ExecutionPolicy",
@@ -209,6 +209,17 @@ def _powershell(script: str, timeout: int = 120) -> tuple[int, str]:
         return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
     except subprocess.TimeoutExpired as exc:
         raise DownloadError("PowerShell 执行超时") from exc
+    except OSError as exc:
+        return 1, f"PowerShell 无法启动：{exc}"
+
+
+def _powershell_exe() -> str:
+    """定位 powershell.exe：PATH 被裁剪时回退到系统目录，避免 FileNotFoundError。"""
+    found = shutil.which("powershell") or shutil.which("powershell.exe")
+    if found:
+        return found
+    root = os.environ.get("SystemRoot") or r"C:\Windows"
+    return os.path.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
 
 
 def installed_package() -> dict | None:

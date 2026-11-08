@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSlider,
     QSpinBox,
     QVBoxLayout,
@@ -630,6 +631,8 @@ class SkinFactoryPage(QWidget):
         super().__init__(parent)
         self.ctx = ctx
         self._recent: list[QColor] = []
+        self._cape_image: QImage | None = None
+        self._cape_path = ""
         self._build()
 
     # ------------------------------------------------------------------
@@ -656,7 +659,15 @@ class SkinFactoryPage(QWidget):
         self.canvas.history_changed.connect(self._on_history_changed)
         self.canvas.cursor_info.connect(self._on_cursor_info)
         self.canvas.color_picked.connect(self._on_color_picked)
-        canvas_card.body.addWidget(self.canvas, alignment=Qt.AlignHCenter)
+        # 画布放进可滚动视口：放大到 6×/8×、或窗口较矮时也能滚到脚部像素
+        self._canvas_area = QScrollArea()
+        self._canvas_area.setWidgetResizable(False)
+        self._canvas_area.setWidget(self.canvas)
+        self._canvas_area.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self._canvas_area.setMaximumHeight(392)
+        self._canvas_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._canvas_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        canvas_card.body.addWidget(self._canvas_area, alignment=Qt.AlignHCenter)
 
         tool_row = QHBoxLayout()
         tool_row.setSpacing(6)
@@ -845,6 +856,25 @@ class SkinFactoryPage(QWidget):
         self.preview.hover_changed.connect(self._on_preview_hover)
         self.preview.yaw_changed.connect(self._on_preview_yaw)
         preview_card.body.addWidget(self.preview, alignment=Qt.AlignHCenter)
+
+        cape_row = QHBoxLayout()
+        cape_row.setSpacing(6)
+        cape_btn = QPushButton(self.tr("导入披风…"))
+        cape_btn.setObjectName("Mini")
+        cape_btn.clicked.connect(self._pick_cape)
+        cape_row.addWidget(cape_btn)
+        self.elytra_check = QCheckBox(self.tr("鞘翅形态"))
+        self.elytra_check.toggled.connect(self.preview.set_elytra)
+        cape_row.addWidget(self.elytra_check)
+        cape_clear = QPushButton(self.tr("清除披风"))
+        cape_clear.setObjectName("Mini")
+        cape_clear.clicked.connect(self._clear_cape)
+        cape_row.addWidget(cape_clear)
+        cape_row.addStretch(1)
+        preview_card.body.addLayout(cape_row)
+        self.cape_hint = QLabel(self.tr("披风 64×32；导入后预览会显示在模型背后"))
+        self.cape_hint.setObjectName("Tiny")
+        preview_card.body.addWidget(self.cape_hint)
 
         layer_row = QHBoxLayout()
         layer_row.setSpacing(6)
@@ -1301,6 +1331,27 @@ class SkinFactoryPage(QWidget):
         self._reload_library()
         self.ctx.bus.toast.emit(self.tr("已删除皮肤：{0}").format(path.stem))
 
+    def _pick_cape(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, self.tr("选择披风 PNG（64×32）"), str(Path.home()), "PNG 图片 (*.png)"
+        )
+        if not path:
+            return
+        image = QImage(path)
+        if image.isNull() or image.width() != 64 or image.height() != 32:
+            QMessageBox.warning(self, APP_NAME, self.tr("披风需要是 64×32 的 PNG 图片。"))
+            return
+        self._cape_image = image
+        self._cape_path = path
+        self.preview.set_cape(image)
+        self.cape_hint.setText(self.tr("当前披风：{0}").format(path))
+
+    def _clear_cape(self) -> None:
+        self._cape_image = None
+        self._cape_path = ""
+        self.preview.clear_cape()
+        self.cape_hint.setText(self.tr("披风 64×32；导入后预览会显示在模型背后"))
+
     def _apply_image(self, image: QImage) -> None:
         account = self.ctx.current_account()
         if account is None:
@@ -1317,8 +1368,51 @@ class SkinFactoryPage(QWidget):
         account.skin_model = model
         self.ctx.accounts.update(account)
         self.ctx.bus.accounts_changed.emit()
+        self._sync_local_skin(account, image, model)
         self._reload_library()
         self.ctx.bus.toast.emit(t("AccountsPage", "皮肤已应用到账号 {0}", account.name))
+
+    def _sync_local_skin(self, account, image: QImage, model: str) -> None:
+        """把皮肤（以及导入的披风）同步写入 CustomSkinLoader/LocalSkin。
+
+        全部隔离时 resolve_game_dirs 会给出主目录 + 隔离目录，两个都写，
+        保证其他实例和当前版本都能读到同一份披风。
+        """
+        cape_bytes = b""
+        if getattr(self, "_cape_image", None) is not None and not self._cape_image.isNull():
+            cape_file = skins_dir() / f"{account.name}-cape.png"
+            if self._cape_image.save(str(cape_file), "PNG"):
+                try:
+                    cape_bytes = cape_file.read_bytes()
+                except OSError:
+                    cape_bytes = b""
+        try:
+            skin_bytes = Path(account.skin_path).read_bytes()
+        except OSError:
+            return
+        config = self.ctx.config
+        instance = config.selected_instance()
+        version_id = instance.version_id or ""
+        root = Path(instance.game_dir or config.game_path)
+        elytra = cape_bytes if cape_bytes and self.elytra_check.isChecked() else None
+        for game_dir in config.resolve_game_dirs(version_id, root).skin_targets():
+            try:
+                from ..skinpack import apply_player_skin_bytes
+
+                result = apply_player_skin_bytes(
+                    skin_bytes,
+                    account.name,
+                    model,
+                    game_dir,
+                    version_id,
+                    install_pack=False,
+                    cape=cape_bytes or None,
+                    elytra=elytra,
+                )
+                if result.get("cape"):
+                    self.ctx.bus.log.emit(f"[披风] 已写入 {result['cape']}")
+            except Exception as exc:  # noqa: BLE001 - 单目录失败不影响账号皮肤
+                self.ctx.bus.log.emit(f"[披风] 写入 {game_dir} 失败：{exc}")
 
     def shutdown(self) -> None:
         pass

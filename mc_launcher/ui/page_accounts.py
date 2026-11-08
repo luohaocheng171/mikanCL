@@ -13,6 +13,7 @@ from PySide6.QtGui import QDesktopServices, QImage
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -34,7 +35,7 @@ from PySide6.QtWidgets import (
 
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
-from .. import APP_NAME, USER_AGENT, auth
+from .. import APP_NAME, USER_AGENT, auth, skins
 from ..config import DATA_DIR
 from ..auth import (
     MS_LEGACY_REDIRECT,
@@ -43,7 +44,9 @@ from ..auth import (
     DeviceFlow,
     MicrosoftAuth,
     authlib_login,
+    import_offline_skin,
 )
+from ..version import scan_installed_versions
 from ..context import AppContext, wait_thread
 from ..i18n import t
 from .skin_view import SkinPreview3D
@@ -637,6 +640,11 @@ class AccountsPage(QWidget):
         model_row.addWidget(self.skin_model_combo, 1)
         skin_card.body.addLayout(model_row)
         self.skin_preview.set_model("classic")
+        self.skin_overwrite_check = QCheckBox(
+            self.tr("覆盖所有已安装版本（新装的版本也会自动补做适配包）")
+        )
+        self.skin_overwrite_check.setChecked(True)
+        skin_card.body.addWidget(self.skin_overwrite_check)
 
         self.skin_upload_button = QPushButton(self.tr("上传皮肤…"))
         self.skin_upload_button.setEnabled(False)
@@ -972,6 +980,8 @@ class AccountsPage(QWidget):
         model = ask_skin_model(self, account.skin_model or "classic")
         if model is None:
             return
+        # 导入即入库：之后可在侧栏头像菜单里快速切回这张皮肤
+        skins.remember(path, model)
         skins_dir = DATA_DIR / "skins"
         skins_dir.mkdir(parents=True, exist_ok=True)
         target = skins_dir / f"{account.name}.png"
@@ -984,7 +994,32 @@ class AccountsPage(QWidget):
         account.skin_model = model
         self.ctx.accounts.update(account)
         self.ctx.bus.accounts_changed.emit()
-        self.ctx.bus.toast.emit("本地皮肤已保存，启动游戏时会自动应用。")
+        # 自动检测已安装版本并按需覆盖生成适配皮肤包（新版本由启动器安装后自动补做）
+        if self.skin_overwrite_check.isChecked():
+            try:
+                installed = scan_installed_versions(self.ctx.config.game_path)
+            except OSError:
+                installed = []
+            applied = 0
+            for item in installed:
+                try:
+                    targets = self.ctx.config.resolve_game_dirs(item.id).skin_targets()
+                except Exception:  # noqa: BLE001
+                    targets = [self.ctx.config.game_path]
+                for game_dir in targets:
+                    try:
+                        import_offline_skin(account, game_dir, log=None, version_id=item.id)
+                        applied += 1
+                    except Exception:  # noqa: BLE001
+                        continue
+            if applied:
+                self.ctx.bus.toast.emit(
+                    f"皮肤已覆盖应用到 {applied} 个游戏目录（共 {len(installed)} 个版本）。"
+                )
+            else:
+                self.ctx.bus.toast.emit("本地皮肤已保存，启动游戏时会自动应用。")
+        else:
+            self.ctx.bus.toast.emit("本地皮肤已保存，启动游戏时会自动应用。")
 
     def _search_premium_skin(self) -> None:
         if not self.ctx.config.feature_enabled("offline_skin"):

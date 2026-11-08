@@ -261,6 +261,21 @@ class DownloadManager(QObject):
         self._tasks = [task for task in self._tasks if not task.finished]
         self.changed.emit()
 
+    def remove(self, task_id: str) -> None:
+        """删除单条任务记录；进行中的任务先取消，不会删除已下载的文件。"""
+        task = self.find(task_id)
+        if task is None:
+            return
+        if not task.finished:
+            self.cancel(task_id)
+        if task.worker is not None and task.worker.isRunning():
+            task.worker.requestInterruption()
+        try:
+            self._tasks.remove(task)
+        except ValueError:
+            pass
+        self.changed.emit()
+
     # ------------------------------------------------------------------
     def _trim(self) -> None:
         finished = [task for task in self._tasks if task.finished]

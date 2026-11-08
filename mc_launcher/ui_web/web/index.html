@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="color-scheme" content="light dark" />
+<title>MikanCL</title>
+<link rel="stylesheet" href="app.css" />
+</head>
+<body>
+<div class="bg-media" id="bgMedia" aria-hidden="true"></div>
+<div class="resize-grips" id="resizeGrips">
+  <i class="rg rg-n" data-dir="n"></i>
+  <i class="rg rg-s" data-dir="s"></i>
+  <i class="rg rg-e" data-dir="e"></i>
+  <i class="rg rg-w" data-dir="w"></i>
+  <i class="rg rg-ne" data-dir="ne"></i>
+  <i class="rg rg-nw" data-dir="nw"></i>
+  <i class="rg rg-se" data-dir="se"></i>
+  <i class="rg rg-sw" data-dir="sw"></i>
+</div>
+<div class="app">
+  <aside class="rail">
+    <button class="brand" id="brandBtn" title="MikanCL">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 4 7v10l8 4 8-4V7l-8-4Z"/><path d="m4 7 8 4 8-4M12 11v10"/></svg>
+    </button>
+    <nav class="rail-nav" id="railNav"></nav>
+    <div class="rail-foot">
+      <button class="avatar-btn" id="railAvatar" title="账号">
+        <i class="skin-head" id="railAvatarHead"></i>
+        <span id="railAvatarText">M</span>
+      </button>
+    </div>
+  </aside>
+
+  <main>
+    <header class="titlebar" id="titlebar" title="拖动边缘可调整窗口大小，双击标题栏最大化">
+
+      <div class="title-left pywebview-drag-region">
+        <b>MikanCL</b>
+        <span id="pageTitle">主页</span>
+        <small id="runtimeLabel"></small>
+      </div>
+      <div class="title-right">
+        <span class="task-pill" id="taskPill" hidden></span>
+        <button class="mode-btn" id="modeBtn" data-act="toggle-mode" title="切换到黑暗模式">☾</button>
+        <div class="winbtns">
+          <button id="minBtn" title="最小化">—</button>
+          <button id="maxBtn" title="最大化">▢</button>
+          <button id="closeBtn" title="关闭">✕</button>
+        </div>
+      </div>
+    </header>
+    <section class="stage" id="view"></section>
+    <footer class="statusbar">
+      <span id="statusLeft">就绪</span>
+      <span id="statusRight"></span>
+    </footer>
+  </main>
+</div>
+
+<div class="toast-stack" id="toasts"></div>
+<div class="overlay" id="overlay" hidden>
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true">
+    <header class="sheet-head">
+      <h2 id="sheetTitle">标题</h2>
+      <button class="icon-btn" id="sheetClose" title="关闭">✕</button>
+    </header>
+    <div class="sheet-body" id="sheetBody"></div>
+    <footer class="sheet-foot" id="sheetFoot"></footer>
+  </div>
+</div>
+
+<div class="overlay agreement" id="agreementOverlay" hidden>
+  <div class="agreement-card">
+    <header>
+      <h2 id="agreementTitle">用户协议</h2>
+      <small>与经典版使用同一份协议文本</small>
+    </header>
+    <div class="agreement-body" id="agreementBody"></div>
+    <label class="agree-check"><input type="checkbox" id="agreeCheck" /> <span id="agreeLabel">我已阅读并同意以上条款</span></label>
+    <div class="agreement-actions">
+      <button class="btn ghost" id="declineBtn">不同意并退出</button>
+      <button class="btn primary" id="acceptBtn" disabled>同意并继续</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

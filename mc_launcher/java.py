@@ -95,27 +95,49 @@ def _candidate_dirs() -> list[Path]:
     java_home = os.environ.get("JAVA_HOME")
     if java_home:
         dirs.append(Path(java_home))
+    vendors = (
+        "Java",
+        "Eclipse Adoptium",
+        "Eclipse Foundation",
+        "AdoptOpenJDK",
+        "Microsoft",
+        "BellSoft",
+        "Zulu",
+        "Azul",
+        "Amazon Corretto",
+        "OpenLogic",
+        "Temurin",
+        "Semeru",
+        "Dragonwell",
+        "GraalVM",
+        "SapMachine",
+        "Tencent",
+        "Alibaba",
+        "Kona",
+        "Corretto",
+        "RedHat",
+        "jdk",
+        "jre",
+    )
+    # ProgramW6432 / ProgramFiles(x86) 都要扫：32 位进程看到的 ProgramFiles 可能不是 64 位目录
+    for env_key in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+        base = os.environ.get(env_key)
+        if not base:
+            continue
+        for vendor in vendors:
+            dirs.append(Path(base) / vendor)
+    for key in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
+        base = os.environ.get(key)
+        if base:
+            # Oracle 的 javapath 软链接目录（Java 8 常见）
+            dirs.append(Path(base) / "Common Files" / "Oracle" / "Java" / "javapath")
     for key, value in (
-        ("ProgramFiles", "Java"),
-        ("ProgramFiles", "Eclipse Adoptium"),
-        ("ProgramFiles", "Eclipse Foundation"),
-        ("ProgramFiles", "AdoptOpenJDK"),
-        ("ProgramFiles", "Microsoft"),
-        ("ProgramFiles", "BellSoft"),
-        ("ProgramFiles", "Zulu"),
-        ("ProgramFiles", "Amazon Corretto"),
-        ("ProgramFiles", "OpenLogic"),
-        ("ProgramFiles", "Temurin"),
-        ("ProgramFiles", "Semeru"),
-        ("ProgramFiles", "Dragonwell"),
-        ("ProgramFiles", "GraalVM"),
-        ("ProgramFiles", "SapMachine"),
-        ("ProgramFiles", "Tencent"),
-        ("ProgramFiles", "Alibaba"),
-        ("ProgramFiles(x86)", "Java"),
         ("LOCALAPPDATA", "Programs"),
         ("LOCALAPPDATA", "Programs/Java"),
+        ("LOCALAPPDATA", "Programs/Eclipse Adoptium"),
         ("LOCALAPPDATA", "Microsoft"),
+        ("LOCALAPPDATA", "JetBrains"),
+        ("LOCALAPPDATA", "Programs/Microsoft"),
     ):
         root = os.environ.get(key)
         if root:
@@ -123,15 +145,44 @@ def _candidate_dirs() -> list[Path]:
     # 启动器自身安装的运行时
     dirs.append(DATA_DIR / "runtime")
     # 常见启动器自带的 Java
-    for launcher in (".minecraft/runtime", ".hmcl/java", ".mclauncher/java"):
+    for launcher in (
+        ".minecraft/runtime",
+        ".minecraft/java",
+        ".hmcl/java",
+        ".hmcl/runtime",
+        ".mclauncher/java",
+        ".pcl/runtime",
+        ".pcl2/runtime",
+    ):
         appdata = os.environ.get("APPDATA")
         if appdata:
             dirs.append(Path(appdata) / launcher)
         dirs.append(Path.home() / launcher)
+    # Scoop / Chocolatey 安装的 JDK
+    for launcher in ("scoop/apps", "scoop/persist"):
+        profile = os.environ.get("USERPROFILE")
+        if profile:
+            dirs.append(Path(profile) / launcher)
+    programdata = os.environ.get("ProgramData")
+    if programdata:
+        dirs.append(Path(programdata) / "chocolatey" / "lib")
     # IDE / 构建工具自带的 JDK
     dirs.append(Path.home() / ".gradle" / "jdks")
     dirs.append(Path.home() / ".jdks")
-    return dirs
+    # 其他盘的常见安装位置，覆盖 Java 装在 D/E/F 盘的情况
+    for drive in ("C:", "D:", "E:", "F:"):
+        for folder in (r"Program Files\Java", r"Program Files\Eclipse Adoptium", r"Java"):
+            dirs.append(Path(f"{drive}\\{folder}"))
+    # 去重（保持顺序）
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for item in dirs:
+        key = os.path.normcase(os.path.normpath(str(item)))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
 
 
 def _collect_root_paths(root: Path, out: list[Path], max_children: int = 2000) -> None:
@@ -316,7 +367,20 @@ def _registry_java_paths() -> list[str]:
         (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\JavaSoft\JDK"),
         (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\JavaSoft\Java Development Kit"),
         (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\JavaSoft\Java Runtime Environment"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\JavaSoft\JRE"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\JavaSoft\JDK"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\JavaSoft\Java Development Kit"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\JavaSoft\Java Runtime Environment"),
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\JavaSoft\JDK"),
         (winreg.HKEY_CURRENT_USER, r"SOFTWARE\JavaSoft\Java Development Kit"),
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\JavaSoft\Java Runtime Environment"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Eclipse Adoptium\JDK"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Eclipse Adoptium\JRE"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\AdoptOpenJDK\JDK"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\JDK"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Azul Systems\Zulu"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Semeru"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\SapMachine"),
     ]
     for hive, root in roots:
         try:
@@ -333,6 +397,18 @@ def _registry_java_paths() -> list[str]:
                         found.append(str(java_home))
             except OSError:
                 continue
+    # jar 文件关联里通常记录了默认 javaw.exe（Oracle / 各发行版安装器都会写）
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CLASSES_ROOT, r"jarfile\shell\open\command"
+        ) as key:
+            command, _ = winreg.QueryValueEx(key, "")
+            text = str(command or "")
+            match = re.search(r'"([^"]+\.exe)"', text)
+            if match:
+                found.append(match.group(1))
+    except OSError:
+        pass
     return found
 
 

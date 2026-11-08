@@ -181,6 +181,14 @@ class GameInstaller:
         self.cancel = cancel or threading.Event()
         self.pause = pause
         self._last_emit = 0.0
+        # 整个安装流程的累计文件计数：每个阶段的文件都计入（包括几 KB 的资源对象），
+        # 下载中心/主页据此显示“剩余 N / 共 M 个文件”，而不是每个阶段单独从 0 开始。
+        self._files_total_seen = 0
+        self._files_done_acc = 0
+
+    def _reset_file_stats(self) -> None:
+        self._files_total_seen = 0
+        self._files_done_acc = 0
 
     # ------------------------------------------------------------------
     def log(self, message: str) -> None:
@@ -215,6 +223,7 @@ class GameInstaller:
     # ------------------------------------------------------------------
     def install_version(self, entry: dict, version_id: str | None = None) -> MergedVersion:
         """按版本清单条目安装一个原版版本。"""
+        self._reset_file_stats()
         version_id = version_id or str(entry.get("id") or "")
         if not version_id:
             raise VersionError("版本清单条目缺少 id")
@@ -264,6 +273,7 @@ class GameInstaller:
     # ------------------------------------------------------------------
     def ensure_version(self, version_id: str) -> MergedVersion:
         """启动前补全版本文件（对 HMCL/Forge/Fabric 等继承版本同样有效）。"""
+        self._reset_file_stats()
         game_dir = self.config.game_path
         self.report("检查文件", 0.01, version_id)
         merged = load_version(game_dir, version_id)
@@ -520,6 +530,8 @@ class GameInstaller:
     ) -> None:
         if not tasks:
             return
+        self._files_total_seen += len(tasks)
+        stage_done_base = self._files_done_acc
         workers = workers or max(8, int(getattr(self.config, "download_threads", 16)))
         self._check_cancel()
 
@@ -544,13 +556,20 @@ class GameInstaller:
             fraction = min(1.0, done / total_units)
             elapsed = max(0.001, now - started_at)
             speed = done / elapsed if done else 0.0
-            total_files = len(tasks)
-            detail = f"{files}/{total_files} 文件 · {done / 1048576:.1f} / {total_units / 1048576:.1f} MB"
+            total_files = self._files_total_seen
+            files_cum = stage_done_base + files
+            detail = f"{files_cum}/{total_files} 文件 · {done / 1048576:.1f} / {total_units / 1048576:.1f} MB"
             if unknown_count:
                 detail += f" · {unknown_count} 个未知大小"
-            self.report(stage, base + span * fraction, detail, speed, files, total_files)
+            self.report(stage, base + span * fraction, detail, speed, files_cum, total_files)
 
-        self.report(stage, base, f"检查 {len(tasks)} 个文件…", files_total=len(tasks))
+        self.report(
+            stage,
+            base,
+            f"检查 {len(tasks)} 个文件…",
+            files_done=self._files_done_acc,
+            files_total=self._files_total_seen,
+        )
         for task in tasks:
             if self.cancel.is_set():
                 raise Cancelled()
@@ -565,12 +584,13 @@ class GameInstaller:
         emit(force=True)
 
         if not missing:
+            self._files_done_acc = stage_done_base + len(tasks)
             self.report(
                 stage,
                 base + span,
                 "全部文件已就绪",
-                files_done=len(tasks),
-                files_total=len(tasks),
+                files_done=self._files_done_acc,
+                files_total=self._files_total_seen,
             )
             return
 
@@ -636,12 +656,13 @@ class GameInstaller:
                 )
 
         emit(force=True)
+        self._files_done_acc = stage_done_base + len(tasks)
         self.report(
             stage,
             base + span,
-            f"{len(tasks)}/{len(tasks)} 文件 · {total_units / 1048576:.1f} MB",
-            files_done=len(tasks),
-            files_total=len(tasks),
+            f"{self._files_done_acc}/{self._files_total_seen} 文件 · {total_units / 1048576:.1f} MB",
+            files_done=self._files_done_acc,
+            files_total=self._files_total_seen,
         )
 
 

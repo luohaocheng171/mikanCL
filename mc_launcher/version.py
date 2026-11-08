@@ -544,12 +544,30 @@ def scan_installed_versions(game_dir: Path) -> list[InstalledVersion]:
         if not entry.is_dir():
             continue
         json_path = entry / f"{entry.name}.json"
-        if not json_path.exists():
+        jar_path = entry / f"{entry.name}.jar"
+        # 允许缺少版本 JSON 的版本文件夹（例如从别处复制来的游戏），
+        # 只要有同名 Jar 或目录内任意游戏 Jar
+        if json_path.exists():
+            game_file = json_path
+        elif jar_path.exists():
+            game_file = jar_path
+        else:
+            try:
+                game_file = next(
+                    (item for item in entry.iterdir() if item.is_file() and item.suffix.lower() == ".jar"),
+                    None,
+                )
+            except OSError:
+                game_file = None
+        if game_file is None:
             continue
         try:
-            data = json.loads(json_path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                raise ValueError("不是 JSON 对象")
+            if json_path.exists():
+                data = json.loads(json_path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("不是 JSON 对象")
+            else:
+                data = {}
             result.append(
                 InstalledVersion(
                     id=entry.name,
@@ -557,7 +575,7 @@ def scan_installed_versions(game_dir: Path) -> list[InstalledVersion]:
                     type=str(data.get("type") or "custom"),
                     loader=detect_loader(entry.name, data),
                     base_version=str(data.get("inheritsFrom") or ""),
-                    modified=json_path.stat().st_mtime,
+                    modified=game_file.stat().st_mtime,
                 )
             )
         except (OSError, ValueError) as exc:

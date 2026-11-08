@@ -26,7 +26,6 @@ from .. import APP_NAME
 from ..config import DATA_DIR
 from ..context import AppContext
 from ..i18n import t
-from ..launcher import isolated_game_dir
 from ..skinpack import (
     MODEL_LABELS,
     SkinPackError,
@@ -53,6 +52,7 @@ class SkinPackPage(QWidget):
         super().__init__(parent)
         self.ctx = ctx
         self._skin_path = ""
+        self._cape_path = ""
         self._build()
         self.refresh()
 
@@ -110,6 +110,28 @@ class SkinPackPage(QWidget):
         self.model_combo.addItem(t("SkinPack", "Alex（纤细）"), "slim")
         player_row.addWidget(self.model_combo)
         make_card.body.addLayout(player_row)
+
+        cape_row = QHBoxLayout()
+        cape_row.setSpacing(8)
+        cape_row.addWidget(QLabel(t("SkinPack", "披风（可选）")))
+        self.cape_edit = QLineEdit()
+        self.cape_edit.setPlaceholderText(t("SkinPack", "64×32 披风 PNG，留空则不写入披风"))
+        self.cape_edit.setReadOnly(True)
+        cape_row.addWidget(self.cape_edit, 1)
+        cape_btn = QPushButton(t("SkinPack", "选择披风…"))
+        cape_btn.setObjectName("Ghost")
+        cape_btn.clicked.connect(self._pick_cape)
+        cape_row.addWidget(cape_btn)
+        cape_clear = QPushButton(t("SkinPack", "清除"))
+        cape_clear.setObjectName("Ghost")
+        cape_clear.clicked.connect(self._clear_cape)
+        cape_row.addWidget(cape_clear)
+        make_card.body.addLayout(cape_row)
+        self.elytra_check = QCheckBox(
+            t("SkinPack", "把披风同时作为鞘翅纹理写入 LocalSkin/elytra")
+        )
+        self.elytra_check.setChecked(False)
+        make_card.body.addWidget(self.elytra_check)
 
         version_row = QHBoxLayout()
         version_row.setSpacing(8)
@@ -269,6 +291,30 @@ class SkinPackPage(QWidget):
         self.source_combo.setCurrentIndex(1)
         self._update_source_label()
 
+    def _pick_cape(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, t("SkinPack", "选择披风 PNG（64×32）"), str(Path.home()), "PNG 图片 (*.png)"
+        )
+        if not path:
+            return
+        self._cape_path = path
+        self.cape_edit.setText(path)
+        self.cape_edit.setToolTip(path)
+
+    def _clear_cape(self) -> None:
+        self._cape_path = ""
+        self.cape_edit.clear()
+        self.cape_edit.setToolTip("")
+
+    def _cape_bytes(self) -> bytes:
+        path = getattr(self, "_cape_path", "")
+        if not path or not Path(path).is_file():
+            return b""
+        try:
+            return Path(path).read_bytes()
+        except OSError:
+            return b""
+
     def _current_version(self) -> str:
         return self.version_combo.currentText().strip() or "1.21.8"
 
@@ -308,7 +354,9 @@ class SkinPackPage(QWidget):
         if not target:
             return
         try:
-            path = export_skin_pack(target, skin_path, player, model, version)
+            path = export_skin_pack(
+                target, skin_path, player, model, version, self._cape_path or None
+            )
         except SkinPackError as exc:
             QMessageBox.warning(self, APP_NAME, str(exc))
             return
@@ -364,6 +412,7 @@ class SkinPackPage(QWidget):
     def _apply_skin(self, image: bytes, player: str, model: str, game_dir: Path, version: str) -> str:
         from ..skinpack import apply_player_skin_bytes
 
+        cape = self._cape_bytes()
         result = apply_player_skin_bytes(
             image,
             player,
@@ -372,6 +421,8 @@ class SkinPackPage(QWidget):
             version,
             install_pack=True,
             enable_pack=self.enable_check.isChecked(),
+            cape=cape or None,
+            elytra=cape if cape and self.elytra_check.isChecked() else None,
         )
         self.ctx.bus.log.emit(
             f"[皮肤包] 已写入 {result['skin']}（{version} · {MODEL_LABELS.get(model, model)}）"
@@ -379,13 +430,10 @@ class SkinPackPage(QWidget):
         return result["skin"]
 
     def _game_dirs(self, version: str = "") -> list[Path]:
-        """主目录 + 版本隔离目录（仅 all 隔离需要单独写）。"""
+        """主目录；全部隔离时再加隔离目录（皮肤需要写两份）。"""
         config = self.ctx.config
         version = version or self._current_version()
-        dirs = [Path(config.game_path)]
-        if config.isolation_for(version) == "all":
-            dirs.append(Path(isolated_game_dir(config.game_path, version, "all")))
-        return dirs
+        return config.resolve_game_dirs(version).skin_targets()
 
     def _install_to_game_dirs(self, apply, version: str = "") -> list[str]:
         results: list[str] = []
