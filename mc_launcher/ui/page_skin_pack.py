@@ -36,6 +36,13 @@ from ..skinpack import (
     read_skin_pack,
 )
 from ..version import scan_installed_versions
+from ..ui_pack import (
+    UiPackError,
+    apply_ui_pack,
+    export_ui_pack,
+    ui_pack_filename,
+    ui_pack_info,
+)
 from .widgets import Card, ask_skin_model, card_title_row, page_header
 
 # 没有安装版本时也给出常见版本，便于替其他玩家打包
@@ -62,14 +69,77 @@ class SkinPackPage(QWidget):
         outer.setContentsMargins(26, 20, 26, 20)
         outer.setSpacing(16)
         header, _ = page_header(
-            t("SkinPack", "皮肤包"),
+            t("SkinPack", "皮肤包 / UI 材质包"),
             t(
                 "SkinPack",
-                "按目标玩家 + 手臂模型 + 游戏版本打包皮肤，可分享给其他玩家；"
-                "需要 CustomSkinLoader 才能只对指定玩家生效",
+                "上方「一键安装并替换旧包」可直接生成半透明毛玻璃 UI 材质包（自动识别版本）；"
+                "下方按目标玩家 + 手臂模型 + 游戏版本打包皮肤，需要 CustomSkinLoader 才能只对指定玩家生效",
             ),
         )
         outer.addWidget(header)
+
+        ui_card = Card()
+        ui_card.body.addWidget(
+            card_title_row(
+                t("SkinPack", "半透明毛玻璃 UI 材质包"),
+                t("SkinPack", "一键安装并替换旧包 · 自动识别版本，按钮 / 面板 / 快捷栏统一磨砂半透明"),
+            )
+        )
+        ui_row = QHBoxLayout()
+        ui_row.setSpacing(8)
+        ui_row.addWidget(QLabel(t("SkinPack", "适配版本")))
+        self.ui_version_combo = QComboBox()
+        self.ui_version_combo.setEditable(True)
+        self.ui_version_combo.setMinimumWidth(160)
+        self.ui_version_combo.currentTextChanged.connect(self._update_ui_hint)
+        ui_row.addWidget(self.ui_version_combo, 1)
+        self.ui_format_label = QLabel("")
+        self.ui_format_label.setObjectName("Tiny")
+        ui_row.addWidget(self.ui_format_label, 1)
+        ui_card.body.addLayout(ui_row)
+
+        self.ui_enable_check = QCheckBox(
+            t("SkinPack", "安装后自动在游戏内启用（1.6.1+ 资源包）")
+        )
+        self.ui_enable_check.setChecked(True)
+        ui_card.body.addWidget(self.ui_enable_check)
+
+        ui_action_row = QHBoxLayout()
+        ui_action_row.setSpacing(8)
+        ui_install_btn = QPushButton(t("SkinPack", "一键安装并替换旧包"))
+        ui_install_btn.setObjectName("Primary")
+        ui_install_btn.setMinimumHeight(34)
+        ui_install_btn.clicked.connect(self._install_ui_pack)
+        ui_action_row.addWidget(ui_install_btn)
+        ui_all_btn = QPushButton(t("SkinPack", "全部版本一键替换"))
+        ui_all_btn.clicked.connect(self._install_ui_pack_all)
+        ui_action_row.addWidget(ui_all_btn)
+        ui_export_btn = QPushButton(t("SkinPack", "导出 UI 包…"))
+        ui_export_btn.clicked.connect(self._export_ui_pack)
+        ui_action_row.addWidget(ui_export_btn)
+        ui_action_row.addStretch(1)
+        ui_card.body.addLayout(ui_action_row)
+
+        self.ui_status = QLabel("")
+        self.ui_status.setObjectName("Tiny")
+        self.ui_status.setWordWrap(True)
+        ui_card.body.addWidget(self.ui_status)
+
+        ui_hint = QLabel(
+            t(
+                "SkinPack",
+                "材质取自对应版本的客户端 jar 并原位改造：按钮、输入框、滑块、背包/箱子面板与"
+                "快捷栏保留原版尺寸与九宫格切图，统一换成半透明冷色磨砂（菜单按钮最透，"
+                "背包面板稍保守以保证看清物品）；菜单平铺背景换成程序生成的无缝玻璃瓦片。"
+                "重复安装会自动替换旧 UI 包，不会越装越多。"
+                "1.0–1.5.2 生成 texturepacks 纹理包，需要在游戏「材质包」里手动选中；"
+                "1.6.1+ 生成资源包并自动启用。找不到客户端 jar 时只生成玻璃背景层。",
+            )
+        )
+        ui_hint.setObjectName("Tiny")
+        ui_hint.setWordWrap(True)
+        ui_card.body.addWidget(ui_hint)
+        outer.addWidget(ui_card)
 
         make_card = Card()
         make_card.body.addWidget(
@@ -225,13 +295,19 @@ class SkinPackPage(QWidget):
         self._reload_versions()
         self._update_source_label()
         self._update_format_hint()
+        self._update_ui_hint()
 
     def _reload_versions(self) -> None:
         current = self.version_combo.currentText().strip()
+        ui_current = ""
+        if hasattr(self, "ui_version_combo"):
+            ui_current = self.ui_version_combo.currentText().strip()
         versions: list[str] = []
+        installed_ids: list[str] = []
         try:
             installed = scan_installed_versions(Path(self.ctx.config.game_path))
-            versions = [item.id for item in installed]
+            installed_ids = [item.id for item in installed]
+            versions = list(installed_ids)
         except OSError:
             versions = []
         for sample in SAMPLE_VERSIONS:
@@ -247,6 +323,20 @@ class SkinPackPage(QWidget):
             preferred = self.version_combo.findText("1.21.8")
             self.version_combo.setCurrentIndex(preferred if preferred >= 0 else 0)
         self.version_combo.blockSignals(False)
+        # UI 材质包只针对本机真实安装的版本，没装过时退回常见版本列表
+        if hasattr(self, "ui_version_combo"):
+            self.ui_version_combo.blockSignals(True)
+            self.ui_version_combo.clear()
+            for item in installed_ids or versions:
+                self.ui_version_combo.addItem(item)
+            if ui_current:
+                self.ui_version_combo.setEditText(ui_current)
+            elif installed_ids:
+                preferred = self.ui_version_combo.findText(
+                    str(self.ctx.config.default_version_id or "")
+                )
+                self.ui_version_combo.setCurrentIndex(preferred if preferred >= 0 else 0)
+            self.ui_version_combo.blockSignals(False)
 
     def _on_source_changed(self) -> None:
         if str(self.source_combo.currentData()) == "account":
@@ -547,6 +637,101 @@ class SkinPackPage(QWidget):
         self.ctx.bus.log.emit(f"[皮肤包] 已导入 {path} → {', '.join(results)}")
         self.ctx.bus.toast.emit(
             t("SkinPack", "皮肤包已导入：{0}", player)
+        )
+
+    def _ui_version(self) -> str:
+        return self.ui_version_combo.currentText().strip() or "1.21.8"
+
+    def _update_ui_hint(self) -> None:
+        if not hasattr(self, "ui_format_label"):
+            return
+        info = ui_pack_info(self._ui_version())
+        self.ui_format_label.setText(t("SkinPack", "格式：{0}", info["hint"]))
+
+    def _install_ui_pack(self) -> None:
+        version = self._ui_version()
+        try:
+            result = apply_ui_pack(
+                self.ctx.config, version, enable=self.ui_enable_check.isChecked()
+            )
+        except UiPackError as exc:
+            QMessageBox.warning(self, APP_NAME, str(exc))
+            return
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, f"写入 UI 材质包失败：{exc}")
+            return
+        note = ""
+        if not result["has_jar"]:
+            note = t("SkinPack", "\n未找到该版本的客户端 jar，本次只生成了玻璃背景层。")
+        lines = "\n".join(result["paths"])
+        self.ui_status.setText(
+            t("SkinPack", "已安装到 {0} 个目录：{1}{2}", str(len(result["paths"])), lines, note)
+        )
+        self.ctx.bus.log.emit(f"[UI材质包] {version} → {', '.join(result['paths'])}")
+        QMessageBox.information(
+            self,
+            APP_NAME,
+            t(
+                "SkinPack",
+                "UI 材质包已生成：\n{0}\n版本：{1}（{2}）{3}",
+                lines,
+                version,
+                result["label"],
+                note,
+            ),
+        )
+
+    def _install_ui_pack_all(self) -> None:
+        try:
+            versions = [
+                item.id
+                for item in scan_installed_versions(Path(self.ctx.config.game_path))
+            ]
+        except OSError:
+            versions = []
+        if not versions:
+            QMessageBox.information(
+                self, APP_NAME, t("SkinPack", "没有检测到已安装的游戏版本。")
+            )
+            return
+        enable = self.ui_enable_check.isChecked()
+        done = 0
+        failed: list[str] = []
+        for version in versions:
+            try:
+                apply_ui_pack(self.ctx.config, version, enable=enable)
+                done += 1
+            except (UiPackError, OSError):
+                failed.append(version)
+        summary = t(
+            "SkinPack", "已为 {0} 个版本生成 UI 材质包。", str(done)
+        )
+        if failed:
+            summary += t("SkinPack", " 失败：{0}", "、".join(failed))
+        self.ui_status.setText(summary)
+        self.ctx.bus.log.emit(f"[UI材质包] 批量生成完成：{done} 个版本，失败 {len(failed)} 个")
+        QMessageBox.information(self, APP_NAME, summary)
+
+    def _export_ui_pack(self) -> None:
+        version = self._ui_version()
+        target, _ = QFileDialog.getSaveFileName(
+            self,
+            t("SkinPack", "保存 UI 材质包"),
+            str(Path.home() / ui_pack_filename(version)),
+            "UI 材质包 (*.zip)",
+        )
+        if not target:
+            return
+        try:
+            path = export_ui_pack(target, version, game_root=self.ctx.config.game_path)
+        except UiPackError as exc:
+            QMessageBox.warning(self, APP_NAME, str(exc))
+            return
+        self.ctx.bus.log.emit(f"[UI材质包] 已导出 {path}（{version}）")
+        QMessageBox.information(
+            self,
+            APP_NAME,
+            t("SkinPack", "UI 材质包已导出：\n{0}\n适配版本：{1}", str(path), version),
         )
 
     def shutdown(self) -> None:

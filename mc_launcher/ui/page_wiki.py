@@ -252,6 +252,207 @@ NBT（Named Binary Tag）是 Minecraft 的存档数据格式，`level.dat`、`pl
 - 兜底资源包默认不启用，避免把服务器上其他默认皮肤玩家也变成这张皮肤
 - 正版账号不需要这个，直接上传皮肤即可
 """,
+        "09_bedrock.md": """# 基岩版（Bedrock）
+
+## 版本来源
+「基岩版」页按三类列出安装包：历史版本、商店正式版、商店预览版。目录来自 MCAPPX 的离线安装包索引，只做展示与匹配，不内置任何安装包。
+
+## 安装
+1. 打开「基岩版」，选择需要的版本。
+2. 历史版本若无法直接下载（站点有 Cloudflare 校验），点「在浏览器下载」，用内置 Edge 内核打开页面，下载完成的 `.appx` / `.msix` 会被自动归档。
+3. 点「安装」后调用系统 `Add-AppxPackage` 部署。机械硬盘上 800MB+ 的包可能需要十几分钟，进度条会一直显示「正在部署」，请勿重复点击。
+4. 安装完成后，启动菜单会显示基岩版条目，可直接启动或卸载。
+
+## 注意
+- 已安装判断会把包版本号（如 1.8.102.0）归一化后与商店版本匹配，两者版本号写法不同并不代表没装。
+- 商店格式的安装包由微软签名，卸载走系统「应用」列表，不会影响 Java 版存档。
+""",
+        "10_loaders.md": """# 加载器：Forge / NeoForge / Fabric / Quilt / LiteLoader / Forbric
+
+## 一键安装
+1. 打开「下载安装」，选择 Minecraft 版本。
+2. 在「Mod 加载器」中选择加载器与加载器版本。
+3. 点「安装所选版本」：启动器会自动下载对应版本的加载器安装器，并以子进程方式完成安装。
+4. 安装进度条单调递增，不会因为重试而回退。
+
+## 各加载器特点
+- **Forge**：生态最全，老整合包首选，启动较慢。
+- **NeoForge**：Forge 分叉，1.20.2+ 生态主力。
+- **Fabric**：轻量、更新快，优化类 Mod（钠、锂）优先支持。
+- **Quilt**：Fabric 衍生，多数 Fabric Mod 可通用。
+- **LiteLoader**：仅老版本可用，用于小地图等少量 Mod。
+- **Forbric**：实验性三合一引导，仅支持指定版本（当前 26.2）。版本不兼容时安装按钮会禁用并给出提示。
+
+## 单独下载加载器安装包
+「内容中心 → 加载器源文件」可以直接下载各加载器的安装器 / 库文件，适合离线安装或自行排查。
+
+## 常见问题
+- 安装器退出码非 0：多为 Java 主版本不匹配，先在「Java 中心」装对应版本。
+- 找不到生成版本：检查 `versions/<版本ID>/<版本ID>.json`；加载器版本判断按专属前缀匹配，避免把原版目录误认成已安装加载器。
+""",
+        "11_modpack.md": """# 整合包导入、导出与安装
+
+## 导入
+- 把 `.zip` / `.mrpack` 拖进窗口，或到「整合包」页选择文件。
+- 启动器先下载整合包对应的原版版本，再安装加载器，最后刷入 overrides 与 mods。
+- 实例目录使用内容摘要命名，重复导入同一整合包会复用目录并续传，不会重复下载。
+
+## 私有备份格式
+「整合包 → 导出」支持两种格式：
+- **CurseForge 分享格式**：通用，可发给使用其他启动器的朋友。
+- **Mikan 私有备份**：包含实例配置、版本设置与本地附加文件，适合自己迁移或备份。
+
+## 安装失败怎么办
+1. 失败时 traceback 会写入 `data/logs/install_error.log`，安装日志也会自动复制到剪贴板。
+2. 先检查磁盘空间（预检要求 >2GB）与网络；镜像站点可在「设置 → 下载源」切换。
+3. 下载失败会自动重试；仍失败可在「下载中心」取消后重新导入，已完成的文件会保留。
+
+## 安装成功后
+实例会自动写入 `instance.json`、自动选中并刷新主页版本列表；如需隔离，可在「版本设置」中选择 mod 隔离 / 存档隔离 / 全部隔离。
+""",
+        "12_download_center.md": """# 下载中心、加速与任务管理
+
+## 下载中心
+所有下载（游戏版本、加载器、Mod、整合包、Java、基岩版安装包）都会进入「下载中心」，按阶段展示：
+- 需要下载哪些文件、保存到哪里；
+- 当前速度、剩余大小与进度；
+- 排队 / 下载中 / 校验中 / 安装中 / 完成 / 失败。
+
+任务可暂停、继续、取消与重试；未完成的任务会保留 `.part` 临时文件，下次按 Range 断点续传。
+
+## 下载加速
+- 「下载加速」页可切换镜像源（官方 / BMCLAPI 等），并对同一文件的多个源测速。
+- 线程数在「设置 → 下载」中调整；所有下载均使用多线程。
+- 可设置全局限速，避免占满带宽。
+
+## 右下角悬浮按钮
+有下载任务时，窗口右下角会出现圆形悬浮按钮：单击跳转下载中心，右键返回上一页；没有任务时自动隐藏。
+
+## 说明
+版本并发安装上限为 5 个；同一目标文件有写入锁，多个任务不会互相覆盖 `.part`。
+""",
+        "13_java_deps.md": """# Java 中心与依赖补全
+
+## Java 中心
+1. 聚合 Temurin、Microsoft、Azul、Corretto、Dragonwell、Kona 等发行版，并接入国内镜像。
+2. 支持只装轻量 JRE 或完整 JDK，可自动匹配当前 MC 版本所需的 Java 主版本。
+3. 两种安装方式：
+   - **ZIP 便携版**：解压到 `data/runtime`，并自动写入用户 PATH、广播环境变量变更；
+   - **官方安装程序**（EXE / MSI）：走发行版自己的安装向导。
+4. 大文件自动多线程分段下载，可在下载中心暂停或取消。
+
+## 依赖补全
+「依赖补全」页统一列出无法内置的第三方依赖：陶瓦联机、authlib-injector、Java 运行时、各类加载器等，并提供缺失扫描：
+- 扫描 Java、客户端、依赖库、资源文件与日志是否缺失；
+- 询问式静默补全：只补你确认的项，不会静默改动系统。
+
+## 建议
+- 1.12.2 及更早用 Java 8；1.17–1.20.4 用 Java 17；1.20.5+ 用 Java 21。
+- 内存不要超过物理内存的 70%，32 位 Java 不支持大内存。
+""",
+        "14_instances.md": """# 版本目录、实例与导入其他启动器
+
+## 版本目录分区
+「设置 → 数据目录」可以添加多个版本目录，并在顶部下拉栏快速切换。常见用法：一个目录放原版，一个放整合包，一个放测试版本。
+
+## 实例
+- 主页实例列表双击即可启动；可多选多个版本后批量顺序启动。
+- 「版本设置」按实例保存内存、Java、窗口大小、JVM 参数、隔离策略与进程优先级。
+- 「版本设置 → 启动脚本」可以在启动前后执行自定义命令（如同步配置、启动辅助程序）。
+
+## 从 PCL / HMCL 导入
+1. 「设置 → 从其他启动器导入」点「扫描并导入…」，选择 PCL2 / HMCL 的启动器目录（含 `.minecraft` 的那一层）。
+2. 勾选要导入的版本，可选择是否一并导入该版本的隔离、内存与 JVM 参数。
+3. 导入只登记版本，不复制或移动原目录文件；本启动器已有的版本会自动跳过。
+
+## 注意
+- 切换版本目录后，主页与下载中心会按新目录刷新。
+- 实例重复判断基于实际实例列表，导入或新建不会产生重复实例。
+""",
+        "15_skin_factory.md": """# 皮肤工厂：像素编辑与 3D 绘画
+
+## 编辑方式
+1. 「皮肤工厂」打开 64×64 皮肤画布（含第二层遮罩），提供画笔、橡皮、填充、取色、镜像与按部位分区。
+2. 切换到「3D 绘画」后，可在模型上选中头部、身体、手臂、腿等部位直接作画，底层与第二层都可编辑。
+3. 3D 预览支持 360° 双轴旋转（水平 + 垂直）、缩放与平移；画笔与鼠标操作模式通过独立按钮切换。
+4. 画布可滚动并带缩放按钮，矮窗口或高倍率下也能看到脚部。
+
+## 保存与应用
+- 保存为 PNG，存放在本机 `data/skins`，不会上传。
+- 可直接应用到离线账号或外置登录账号；离线皮肤需搭配 CustomSkinLoader。
+- 导入过的皮肤会进入最近皮肤库，点击侧栏头像即可一键切换。
+
+## 皮肤包
+「皮肤包」页把皮肤、玩家名、手臂模型（Steve / Alex）、披风与鞘翅打成一个资源包：
+- 自动按目标 MC 版本选择 `pack_format` 或 `min_format / max_format`（从材质包时代到最新版都适配）；
+- 同时写入新旧两套玩家皮肤纹理路径；
+- 一键覆盖到游戏目录时会先清理旧皮肤包再写入；
+- 新版本安装完成后会自动导入离线皮肤包并生效。
+""",
+        "16_seed_terrain.md": """# 世界种子与 3D 地形预览
+
+## 使用
+1. 打开「种子 / 地形」，输入种子（数字或文本均可）。
+2. 在「游戏版本」中选择一个已下载的版本：1.18+ 使用新版气候噪声 + Xoroshiro128++，1.7–1.17 使用经典 ImprovedNoise。
+3. 点「生成」，启动器调用本机 Java 运行内置高度图程序，渲染出生点附近的 3D 地形。
+
+## 与原版一致的部分
+- 置换表为 256 项并用同一随机源洗牌，梯度表为原版 16 方向；
+- 多 octave 叠加的 persistence 0.5、lacunarity 2 均为原版固定值；
+- 1.18+ 的噪声随机源、频率与振幅与原版气候噪声一致。
+
+## 与原版的差别
+不包含生物群系、地形样条与密度函数，因此高度起伏接近但不等于游戏内实景。预览只用于筛种子，实际地形以 Minecraft 本体为准。
+""",
+        "17_extensions_themes.md": """# 扩展（插件）、主题与皮肤 API
+
+## 扩展
+- 支持 `.zip` / `.mikan-ext` 格式导入：拖进窗口或在「设置 → 扩展」中安装。
+- 启用的扩展会出现在侧边栏；扩展运行在沙箱 iframe 中，只能通过 `postMessage` 与后端通信，不直接访问本机文件。
+- 可随时禁用或删除；禁用后仍保留数据，便于再次启用。
+
+## 主题
+- 内置森林绿、海蓝、暮紫、赤红、琥珀、青碧、樱花粉、极夜蓝等主题，支持浅色 / 深色。
+- 「设置 → 外观」可导入/导出 `data/themes/*.json`，也可调用主题 API 注册自定义皮肤。
+- 导入过的皮肤与主题会自动记录并优先展示。
+
+## 界面
+- 侧边栏为竖排磁贴布局，磁贴与卡片使用毛玻璃；毛玻璃强度与模糊可在设置中连续调节。
+- 窗口支持拖拽缩放（最小 960×600）与双击标题栏最大化，四角为圆角。
+- 动态壁纸支持 MP4 / WebM / GIF / WebP，窗口切到后台自动暂停。
+""",
+        "18_browser_tools.md": """# 内置浏览器、联机与实用工具
+
+## 内置浏览器
+- 使用 Edge WebView2 内核，可直接播放 B 站等站点视频，不要求跳转到外部浏览器。
+- 系统缺少 WebView2 时会自动回退并给出安装提示；也可把固定版本运行时解包到安装目录的 `webview2` 文件夹。
+
+## 多人联机
+1. 「多人联机」添加服务器地址，列表通过 Server List Ping 显示延迟、人数、MOTD 与图标。
+2. 双击服务器即启动游戏并进入；陶瓦（Terracotta）联机可在「依赖补全」中安装后按房间码组网。
+
+## 截图图库
+按实例读取 `screenshots/`，支持预览、打包为 Zip、打开目录与删除，全程不联网。
+
+## 崩溃报告
+读取 `data/logs/crashes`，可查看摘要、复制文本与删除；整合包安装失败时也会把 traceback 写入 `data/logs/install_error.log`。
+
+## NBT 编辑器
+以类型树方式浏览存档与结构文件，可修改叶子节点；保存前会自动生成 `.bak` 备份。
+
+## Mod 关系图
+「内容中心 → Mod 关系图」展示实例内 Mod 的前置依赖与冲突关系，红色标记需要处理的项。
+
+## 半透明毛玻璃 UI 材质包
+1. 打开「皮肤包」页，最下方「半透明毛玻璃 UI 材质包」会自动列出本机已安装版本。
+2. 选择版本后点「生成并安装到本机」：从该版本客户端 jar 取出按钮、输入框、滑块、
+   背包/箱子面板、快捷栏与菜单背景贴图，原位改造成半透明冷色磨砂，
+   写入 resourcepacks/ 并在 options.txt 中自动启用。
+3. 「为全部已安装版本生成」会按每个版本各自的资源包格式（pack_format / min_format）分别打包。
+4. 1.0–1.5.2 生成 texturepacks 纹理包，需要在游戏内「材质包」里手动选中；1.6.1+ 自动启用。
+5. 安装位置遵循版本隔离设置；「导出 UI 包…」可得到可分享的 zip，其他启动器也能直接导入。
+6. 若提示找不到客户端 jar，只会生成玻璃背景层，请先在「下载」页完整安装一次该版本。
+""",
     },
     "en_US": {
         "01_install_forge.md": """# Installing Forge
@@ -405,6 +606,207 @@ The "Skin Pack" tab bundles the skin, target player name and arm model into a `.
 - It only works when CustomSkinLoader is installed
 - The fallback resource pack is not enabled by default, so other default-skin players on a server keep their own skins
 - Official accounts do not need this — just upload the skin
+""",
+        "09_bedrock.md": """# Bedrock Edition
+
+## Where packages come from
+The Bedrock page lists packages in three groups: historical builds, Store release and Store preview. The catalog comes from the MCAPPX offline package index; nothing is bundled with the launcher.
+
+## Installing
+1. Open "Bedrock" and pick a version.
+2. Some historical builds cannot be fetched programmatically; use "Download in browser" and the built-in Edge engine to open the page. Finished `.appx` / `.msix` files are archived automatically.
+3. "Install" deploys the package with `Add-AppxPackage`. An 800 MB+ package on a hard disk can take many minutes; the progress bar shows "Deploying" — do not click again.
+4. After installation a Bedrock entry appears in the launch menu for launching or uninstalling.
+
+## Notes
+- Installed-state detection normalizes the package version (e.g. 1.8.102.0) before matching the Store version; different numbering does not mean it is missing.
+- Store packages are signed by Microsoft; uninstall through Windows "Apps" and your Java saves stay untouched.
+""",
+        "10_loaders.md": """# Loaders: Forge / NeoForge / Fabric / Quilt / LiteLoader / Forbric
+
+## One-click install
+1. Open "Download" and choose a Minecraft version.
+2. Pick the loader and loader version under "Mod loader".
+3. Click "Install selected version": the launcher downloads the matching installer and runs it as a child process.
+4. The progress bar only moves forward, even when retries happen.
+
+## Which one to pick
+- **Forge** — biggest ecosystem, best for older modpacks, slower start.
+- **NeoForge** — Forge fork and the main target for 1.20.2+.
+- **Fabric** — lightweight and fast to update, best for Sodium/Lithium style mods.
+- **Quilt** — Fabric derivative; most Fabric mods work.
+- **LiteLoader** — old versions only, for a handful of mods such as minimaps.
+- **Forbric** — experimental three-in-one bootstrap, only supported on specific versions (currently 26.2). The install button is disabled with a clear warning on unsupported versions.
+
+## Standalone installers
+"Content Center → Loader sources" downloads the raw installer / libraries, useful for offline installs and troubleshooting.
+
+## Troubleshooting
+- Installer exits non-zero: usually a Java major-version mismatch — install the right one from "Java Center".
+- No generated version: check `versions/<version id>/<version id>.json`; loader detection matches loader-specific version prefixes so a vanilla folder is never mistaken for an installed loader.
+""",
+        "11_modpack.md": """# Importing, exporting and installing modpacks
+
+## Importing
+- Drop a `.zip` / `.mrpack` onto the window, or pick a file on the "Modpacks" page.
+- The launcher downloads the matching vanilla version, installs the loader, then applies overrides and mods.
+- Instance folders are named from a content digest, so importing the same pack again resumes instead of re-downloading.
+
+## Backup formats
+"Modpacks → Export" offers two formats:
+- **CurseForge share format** — universal, works with other launchers.
+- **Mikan private backup** — includes instance config, per-version settings and local extra files, ideal for migration or backup.
+
+## If installation fails
+1. The traceback is written to `data/logs/install_error.log` and the install log is copied to the clipboard.
+2. Check free disk space (preflight requires >2 GB) and your network; switch mirrors under "Settings → Download sources".
+3. Failed downloads retry automatically; if it still fails, cancel in the Download Center and re-import — completed files are kept.
+
+## After success
+`instance.json` is written, the instance is selected and the home list refreshes; choose mod / saves / full isolation under "Version settings".
+""",
+        "12_download_center.md": """# Download Center, acceleration and tasks
+
+## Download Center
+Every download (game versions, loaders, mods, modpacks, Java, Bedrock packages) shows up in the Download Center with:
+- which files are needed and where they are saved;
+- current speed, remaining size and progress;
+- queued / downloading / verifying / installing / done / failed.
+
+Tasks can be paused, resumed, cancelled and retried. Unfinished files keep their `.part` file and resume with HTTP Range requests.
+
+## Acceleration
+- The "Download acceleration" page switches mirrors (official / BMCLAPI etc.) and measures each source for the same file.
+- Thread count lives in "Settings → Download"; every download is multi-threaded.
+- A global speed limit keeps your connection usable.
+
+## Floating button
+While tasks are running a round floating button appears in the bottom-right corner: click to open the Download Center, right-click to go back. It hides when idle.
+
+## Notes
+Up to five versions install concurrently, and each target file is locked so tasks never overwrite each other's `.part` file.
+""",
+        "13_java_deps.md": """# Java Center and dependency completion
+
+## Java Center
+1. Aggregates Temurin, Microsoft, Azul, Corretto, Dragonwell and Kona, with mirrors.
+2. Installs a small JRE or a full JDK and matches the Java major version your MC version needs.
+3. Two install modes:
+   - **ZIP portable** — extracted to `data/runtime`, added to the user PATH and environment change broadcast;
+   - **Official installer** (EXE / MSI) — runs the vendor's own wizard.
+4. Large files download in multi-threaded chunks and can be paused or cancelled in the Download Center.
+
+## Dependency completion
+The "Dependencies" page lists third-party pieces that cannot be bundled — Terracotta, authlib-injector, Java runtimes, loaders — and scans for missing pieces:
+- scans Java, the client, libraries, assets and logs;
+- asks before completing anything; nothing is changed silently.
+
+## Rules of thumb
+- Java 8 for 1.12.2 and older, Java 17 for 1.17–1.20.4, Java 21 for 1.20.5+.
+- Keep memory below 70% of physical RAM; 32-bit Java cannot use large heaps.
+""",
+        "14_instances.md": """# Version folders, instances and importing from other launchers
+
+## Multiple version folders
+"Settings → Data folder" lets you register several version folders and switch with the top dropdown — e.g. vanilla, modpacks and snapshots in separate folders.
+
+## Instances
+- Double-click an instance on the home page to launch; select several to launch them one after another.
+- "Version settings" stores memory, Java, window size, JVM args, isolation mode and process priority per instance.
+- "Version settings → Launch script" runs custom commands before and after launch.
+
+## Importing from PCL / HMCL
+1. "Settings → Import from other launchers" → "Scan and import…", then pick the PCL2 / HMCL launcher folder (the one containing `.minecraft`).
+2. Tick the versions to import and optionally bring their isolation, memory and JVM settings.
+3. Import only registers versions; files are never copied or moved, and versions you already have are skipped.
+
+## Notes
+- Switching the version folder refreshes the home page and Download Center.
+- Duplicate detection uses the real instance list, so imports never create duplicates.
+""",
+        "15_skin_factory.md": """# Skin Factory: pixel editing and 3D painting
+
+## Editing
+1. The 64×64 canvas includes the second layer and offers brush, eraser, fill, picker, mirror and per-part selection.
+2. Switch to "3D painting" to paint directly on the model's head, body, arms or legs — both layers are editable.
+3. The 3D preview rotates on both axes (yaw + pitch), zooms and pans; brush and mouse modes have separate buttons.
+4. The canvas scrolls and has zoom buttons so the feet stay reachable in short windows.
+
+## Saving and applying
+- Saved as PNG under `data/skins`; nothing is uploaded.
+- Apply to offline or third-party accounts directly; offline skins need CustomSkinLoader.
+- Previously used skins go to a recent list, switchable from the sidebar avatar.
+
+## Skin packs
+The "Skin pack" page bundles the skin, player name, arm model (Steve / Alex), cape and elytra into a resource pack:
+- picks `pack_format` or `min_format / max_format` for the target MC version (everything from the texture-pack era to the latest release);
+- writes both the old and new player texture paths;
+- clears old packs in the game folder before writing;
+- newly installed versions import the offline skin pack automatically.
+""",
+        "16_seed_terrain.md": """# World seeds and 3D terrain preview
+
+## Usage
+1. Open "Seed / Terrain" and type a seed (numeric or text).
+2. Choose an installed version under "Game version": 1.18+ uses the new climate noise with Xoroshiro128++, 1.7–1.17 uses the classic ImprovedNoise.
+3. Click "Generate": the launcher runs a bundled heightmap program with your local Java and renders a 3D view around spawn.
+
+## What matches vanilla
+- The 256-entry permutation table is shuffled from the same random source and the gradient table is vanilla's 16 directions.
+- Octave layering uses vanilla's fixed persistence 0.5 and lacunarity 2.
+- The 1.18+ random source, frequencies and amplitudes match vanilla climate noise.
+
+## What differs
+Biomes, terrain splines and density functions are not included, so the shape is close but not identical to the in-game world. Use it to filter seeds; the game remains the source of truth.
+""",
+        "17_extensions_themes.md": """# Extensions, themes and the skin API
+
+## Extensions
+- Import `.zip` / `.mikan-ext` by dropping it on the window or via "Settings → Extensions".
+- Enabled extensions appear in the sidebar and run inside a sandboxed iframe; they talk to the backend through `postMessage` and have no direct file access.
+- Disable or remove at any time; data is kept so re-enabling is lossless.
+
+## Themes
+- Built-in themes include forest green, ocean blue, dusk purple, crimson, amber, teal, sakura pink and polar night, in light and dark variants.
+- "Settings → Appearance" imports/exports `data/themes/*.json`, and a theme API registers custom skins.
+- Imported skins and themes are remembered and shown first.
+
+## Interface
+- The sidebar uses a vertical tile layout with frosted-glass tiles and cards; glass strength and blur are continuously adjustable.
+- The window resizes by dragging (min 960×600), maximizes on title-bar double-click and has rounded corners.
+- Animated wallpapers support MP4 / WebM / GIF / WebP and pause when the window goes to the background.
+""",
+        "18_browser_tools.md": """# Built-in browser, multiplayer and utilities
+
+## Built-in browser
+- Uses the Edge WebView2 engine and plays Bilibili and other video sites natively — no need to jump to an external browser.
+- If WebView2 is missing it falls back with an install prompt; you can also unpack a fixed runtime into the `webview2` folder next to the executable.
+
+## Multiplayer
+1. Add servers on the "Multiplayer" page; Server List Ping shows latency, player count, MOTD and icon.
+2. Double-click a server to launch and join; install Terracotta from "Dependencies" to host or join rooms by code.
+
+## Screenshot gallery
+Reads `screenshots/` per instance: preview, zip, open folder and delete, entirely offline.
+
+## Crash reports
+Reads `data/logs/crashes` with summary, copy and delete; failed modpack installs also write a traceback to `data/logs/install_error.log`.
+
+## NBT editor
+Browses save and structure files as a typed tree, edits leaf tags, and writes a `.bak` before saving.
+
+## Mod graph
+"Content Center → Mod graph" shows required dependencies and conflicts inside an instance, with actionable items in red.
+
+## Frosted-glass UI resource pack
+1. Open the "Skin pack" page; the "Frosted-glass UI pack" card lists installed versions automatically.
+2. Pick a version and press "Generate and install": button, text field, slider, inventory/chest panels,
+   hotbar and menu background textures are taken from that version's client jar, converted into translucent
+   frosted styling in place, written to resourcepacks/ and enabled in options.txt.
+3. "Generate for all installed versions" packs each version with its own format (pack_format / min_format).
+4. 1.0–1.5.2 produce texturepacks and must be selected under in-game "Texture Packs"; 1.6.1+ are auto-enabled.
+5. The install folder follows your version isolation setting; "Export UI pack…" produces a shareable zip.
+6. If the client jar is missing only the glass background layer is generated — install that version first.
 """,
     },
     "ru_RU": {

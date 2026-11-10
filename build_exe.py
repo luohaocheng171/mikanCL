@@ -1,7 +1,7 @@
 """一键打包 MikanCL（PyInstaller 版）：python build_exe.py
 
-使用 onedir 模式：美化版 pywebview / WebView2 的运行时文件很多，
-onefile 每次启动都要解压，既慢又容易触发杀软误报。
+默认 onefile 单文件模式：所有依赖打进一个 exe，分发方便；代价是每次启动
+都要先把运行时解压到临时目录，启动比 onedir 慢几秒。
 
 调试：设置环境变量 MIKAN_BUILD_CONSOLE=1 可生成带控制台的版本，方便看报错。
 """
@@ -57,7 +57,8 @@ HIDDEN_IMPORTS = (
     "pythonnet",
 )
 
-COLLECT_ALL = ()
+# 单文件模式下 pywebview 的 JS / WebView2 互操作 DLL 必须一并收进 exe
+COLLECT_ALL = ("webview",)
 
 
 def _app_version() -> str:
@@ -121,7 +122,7 @@ def main() -> int:
         "PyInstaller",
         "--noconfirm",
         "--clean",
-        "--onedir",
+        "--onefile",
         "--name",
         EXE_NAME,
         f"--distpath={DIST}",
@@ -158,20 +159,11 @@ def main() -> int:
         print("打包失败。")
         return result
 
-    app_dir = DIST / EXE_NAME
-    exe = app_dir / f"{EXE_NAME}.exe"
+    exe = DIST / f"{EXE_NAME}.exe"
     if exe.exists():
-        # 可选：把固定版本 WebView2 Runtime 一并复制进安装目录，彻底免联网
-        runtime = ROOT / "webview2"
-        if runtime.is_dir():
-            target = app_dir / "webview2"
-            import shutil
-
-            shutil.copytree(runtime, target, dirs_exist_ok=True)
-            print(f"已内置 WebView2 Runtime：{target}")
-        total = sum(f.stat().st_size for f in app_dir.rglob("*") if f.is_file())
-        print(f"打包完成：{app_dir}（合计 {total / 1024 / 1024:.1f} MB）")
-        print("提示：直接分发整个 MikanCL 目录；首次运行会在 exe 同目录创建 data 目录。")
+        size = exe.stat().st_size / 1024 / 1024
+        print(f"打包完成：{exe}（{size:.1f} MB，单文件）")
+        print("提示：单文件版本首次启动要先解压运行时，会比 onedir 慢几秒；首次运行会在 exe 同目录创建 data 目录。")
     return 0
 
 

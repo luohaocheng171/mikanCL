@@ -1502,6 +1502,12 @@ class HomePage(QWidget):
         download_button = QPushButton(self.tr("安装新版本"))
         download_button.clicked.connect(lambda: self.ctx.bus.navigate.emit("download"))
         action_row.addWidget(download_button)
+        ui_pack_button = QPushButton(self.tr("UI 材质包一键替换"))
+        ui_pack_button.setToolTip(
+            self.tr("为当前选中的版本生成半透明毛玻璃 UI 材质包并自动启用，重复执行会替换旧包")
+        )
+        ui_pack_button.clicked.connect(self._quick_ui_pack)
+        action_row.addWidget(ui_pack_button)
         versions_head.addLayout(head_row)
         versions_head.addLayout(action_row)
 
@@ -2422,6 +2428,31 @@ class HomePage(QWidget):
             self._worker.cancel()
             return
         self._start_launch()
+
+    def _quick_ui_pack(self) -> None:
+        """主页一键：给当前选中版本生成半透明毛玻璃 UI 材质包并替换旧包。"""
+        version_id = self._selected_id
+        if not version_id or version_id == BEDROCK_ID:
+            QMessageBox.information(self, APP_NAME, "请先选择一个 Java 版游戏版本。")
+            return
+        from ..ui_pack import UiPackError, apply_ui_pack
+
+        try:
+            result = apply_ui_pack(self.ctx.config, version_id, enable=True)
+        except UiPackError as exc:
+            QMessageBox.warning(self, APP_NAME, str(exc))
+            return
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, f"生成 UI 材质包失败：{exc}")
+            return
+        note = "" if result["has_jar"] else "\n未找到客户端 jar，本次只生成了玻璃背景层。"
+        self.ctx.bus.toast.emit(f"UI 材质包已安装并替换：{version_id}{note}")
+        self.ctx.bus.log.emit(f"[UI材质包] {version_id} → {', '.join(result['paths'])}")
+        QMessageBox.information(
+            self,
+            APP_NAME,
+            f"已为 {version_id} 生成并安装 UI 材质包，旧包已替换。{note}",
+        )
 
     def _start_launch(self) -> None:
         version_id = self._selected_id

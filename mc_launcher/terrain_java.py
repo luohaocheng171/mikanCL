@@ -326,6 +326,25 @@ class TerrainJavaError(RuntimeError):
     pass
 
 
+def version_tuple(version_id: str) -> tuple[int, int, int] | None:
+    """把版本号解析成 (主, 次, 修订)；快照 / 带后缀的 id 返回 None。"""
+    import re
+
+    match = re.match(r"^(\d+)\.(\d+)(?:\.(\d+))?", (version_id or "").strip())
+    if not match:
+        return None
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3) or 0))
+
+
+def noise_mode_for_version(version_id: str) -> int:
+    """按 Minecraft 版本判断噪声模式：1.18+ 为 1（新版），更早为 0（经典）。"""
+    parsed = version_tuple(version_id)
+    if parsed is None:
+        # 快照与未知版本按最新版处理
+        return 1
+    return 1 if parsed >= (1, 18, 0) else 0
+
+
 def terrain_dir() -> Path:
     return DATA_DIR / "terrain"
 

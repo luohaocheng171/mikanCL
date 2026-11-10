@@ -1,0 +1,205 @@
+﻿python.exe : 2926 INFO: PyInstaller: 6.22.3, contrib hooks: 2026.9
+所在位置 行:15 字符: 778
++ ... M = 'dumb'; & "C:\Users\admin\AppData\Local\Programs\Python\Python315 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (2926 INFO: PyIn...b hooks: 2026.9:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+2944 INFO: Python: 3.15.2
+3186 INFO: Platform: Windows-10-10.0.19045-SP0
+3186 INFO: Python environment: C:\Users\admin\AppData\Local\Programs\Python\Python315
+3189 INFO: wrote C:\Users\admin\Documents\Trae-CN\temp_20261025_01\build\MikanCL.spec
+3217 INFO: Removing temporary files and cleaning cache in C:\Users\admin\AppData\Local\pyinstaller
+2368 WARNING: Failed to collect submodules for 'webview.platforms.android' because importing 'webview.platforms.android
+' raised: ModuleNotFoundError: No module named 'android'
+10925 INFO: Module search paths (PYTHONPATH):
+['C:\\Users\\admin\\Documents\\Trae-CN\\temp_20261025_01',
+ 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Python315\\python315.zip',
+ 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Python315\\DLLs',
+ 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Python315\\Lib',
+ 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Python315',
+ 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Python315\\Lib\\site-packages',
+ 'C:\\Users\\admin\\Documents\\Trae-CN\\temp_20261025_01']
+11900 INFO: Appending 'binaries' from .spec
+11903 INFO: Appending 'datas' from .spec
+11941 INFO: checking Analysis
+11941 INFO: Building Analysis because Analysis-00.toc is non existent
+11941 INFO: Looking for Python shared library...
+11941 INFO: Using Python shared library: C:\Users\admin\AppData\Local\Programs\Python\Python315\python315.dll
+11941 INFO: Running Analysis Analysis-00.toc
+11941 INFO: Target bytecode optimization level: 0
+11941 INFO: Initializing module dependency graph...
+11952 INFO: Initializing module graph hook caches...
+12206 INFO: Analyzing modules for base_library.zip ...
+15734 INFO: Processing standard module hook 'hook-encodings.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Pytho
+n\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+17234 INFO: Processing standard module hook 'hook-math.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Py
+thon315\\Lib\\site-packages\\PyInstaller\\hooks'
+20981 INFO: Processing standard module hook 'hook-difflib.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\
+\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+21063 INFO: Processing standard module hook 'hook-heapq.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\P
+ython315\\Lib\\site-packages\\PyInstaller\\hooks'
+24280 INFO: Processing standard module hook 'hook-pickle.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\
+Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+28329 INFO: Caching module dependency graph...
+28373 INFO: Analyzing C:\Users\admin\Documents\Trae-CN\temp_20261025_01\run.py
+28811 INFO: Processing standard module hook 'hook-platform.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python
+\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+28918 INFO: Processing standard module hook 'hook-sysconfig.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Pytho
+n\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+28948 INFO: Processing standard module hook 'hook-_ctypes.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\
+\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+29518 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from 'C:\\Users\\admin\\AppData\\Local\\Prog
+rams\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+29748 INFO: Processing standard module hook 'hook-xml.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Pyt
+hon315\\Lib\\site-packages\\PyInstaller\\hooks'
+30971 INFO: Processing standard module hook 'hook-PySide6.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\
+\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+31962 INFO: Processing standard module hook 'hook-shiboken6.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Pytho
+n\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+32577 INFO: Processing standard module hook 'hook-PySide6.QtNetwork.py' from 'C:\\Users\\admin\\AppData\\Local\\Program
+s\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+40986 INFO: Processing standard module hook 'hook-PySide6.QtCore.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\
+Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+52770 INFO: Processing standard module hook 'hook-PySide6.QtWidgets.py' from 'C:\\Users\\admin\\AppData\\Local\\Program
+s\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+66818 INFO: Processing standard module hook 'hook-PySide6.QtGui.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\P
+ython\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+120814 INFO: Processing standard module hook 'hook-webview.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python
+\\Python315\\Lib\\site-packages\\webview\\__pyinstaller'
+121894 INFO: Processing standard module hook 'hook-webbrowser.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Pyt
+hon\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+124313 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from 'C:\\Users\\admin\\AppData\\Local\
+\Programs\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+124351 INFO: SetuptoolsInfo: initializing cached setuptools info...
+130345 INFO: Processing pre-safe-import-module hook 'hook-gi.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Pyth
+on\\Python315\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+130728 INFO: Processing standard module hook 'hook-clr.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Py
+thon315\\Lib\\site-packages\\pythonnet\\_pyinstaller'
+130887 INFO: Processing standard module hook 'hook-clr_loader.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Pyt
+hon\\Python315\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+131378 INFO: Processing standard module hook 'hook-pycparser.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Pyth
+on\\Python315\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+132062 INFO: Processing standard module hook 'hook-setuptools.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Pyt
+hon\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+132165 INFO: Processing pre-safe-import-module hook 'hook-distutils.py' from 'C:\\Users\\admin\\AppData\\Local\\Program
+s\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+132272 INFO: Processing pre-safe-import-module hook 'hook-jaraco.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\
+Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+132273 INFO: Setuptools: 'jaraco' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor
+.jaraco'!
+132315 INFO: Processing pre-safe-import-module hook 'hook-more_itertools.py' from 'C:\\Users\\admin\\AppData\\Local\\Pr
+ograms\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+132317 INFO: Setuptools: 'more_itertools' appears to be a setuptools-vendored copy - creating alias to 'setuptools._ven
+dor.more_itertools'!
+132879 INFO: Processing standard module hook 'hook-_osx_support.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\P
+ython\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+133006 INFO: Processing pre-safe-import-module hook 'hook-packaging.py' from 'C:\\Users\\admin\\AppData\\Local\\Program
+s\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+133958 INFO: Processing standard module hook 'hook-setuptools._vendor.jaraco.text.py' from 'C:\\Users\\admin\\AppData\\
+Local\\Programs\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+133983 INFO: Processing pre-safe-import-module hook 'hook-importlib_resources.py' from 'C:\\Users\\admin\\AppData\\Loca
+l\\Programs\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+134036 INFO: Processing pre-safe-import-module hook 'hook-backports.py' from 'C:\\Users\\admin\\AppData\\Local\\Program
+s\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+134038 INFO: Setuptools: 'backports' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._ven
+dor.backports'!
+136274 INFO: Processing pre-safe-import-module hook 'hook-tomli.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\P
+ython\\Python315\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+136276 INFO: Setuptools: 'tomli' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.tomli
+'!
+139909 INFO: Processing pre-safe-import-module hook 'hook-wheel.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\P
+ython\\Python315\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+139910 INFO: Setuptools: 'wheel' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.wheel
+'!
+142267 INFO: Processing standard module hook 'hook-xml.etree.cElementTree.py' from 'C:\\Users\\admin\\AppData\\Local\\P
+rograms\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+144693 INFO: Processing standard module hook 'hook-PySide6.QtWebEngineWidgets.py' from 'C:\\Users\\admin\\AppData\\Loca
+l\\Programs\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+146527 INFO: Processing standard module hook 'hook-PySide6.QtPrintSupport.py' from 'C:\\Users\\admin\\AppData\\Local\\P
+rograms\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+150359 INFO: Processing standard module hook 'hook-PySide6.QtWebEngineCore.py' from 'C:\\Users\\admin\\AppData\\Local\\
+Programs\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+158328 INFO: Processing standard module hook 'hook-PySide6.QtWebChannel.py' from 'C:\\Users\\admin\\AppData\\Local\\Pro
+grams\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+162456 INFO: Analyzing hidden import 'webview.__pyinstaller'
+162458 INFO: Analyzing hidden import 'webview.__pyinstaller.hook-webview'
+162541 INFO: Processing pre-safe-import-module hook 'hook-importlib_metadata.py' from 'C:\\Users\\admin\\AppData\\Local
+\\Programs\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+162542 INFO: Setuptools: 'importlib_metadata' appears to be a setuptools-vendored copy - creating alias to 'setuptools.
+_vendor.importlib_metadata'!
+162596 INFO: Processing standard module hook 'hook-setuptools._vendor.importlib_metadata.py' from 'C:\\Users\\admin\\Ap
+pData\\Local\\Programs\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+162749 INFO: Processing pre-safe-import-module hook 'hook-zipp.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Py
+thon\\Python315\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+162750 INFO: Setuptools: 'zipp' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.zipp'!
+162937 INFO: Processing standard module hook 'hook-win32ctypes.core.py' from 'C:\\Users\\admin\\AppData\\Local\\Program
+s\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+166027 INFO: Analyzing hidden import 'webview._version'
+166030 INFO: Processing module hooks (post-graph stage)...
+166031 WARNING: Hidden import "pycparser.lextab" not found!
+166032 WARNING: Hidden import "pycparser.yacctab" not found!
+166325 INFO: Processing standard module hook 'hook-PySide6.QtPositioning.py' from 'C:\\Users\\admin\\AppData\\Local\\Pr
+ograms\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+169044 INFO: Processing standard module hook 'hook-PySide6.QtQuick.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs
+\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+179439 INFO: Processing standard module hook 'hook-PySide6.QtOpenGL.py' from 'C:\\Users\\admin\\AppData\\Local\\Program
+s\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+185812 INFO: Processing standard module hook 'hook-PySide6.QtQml.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\
+Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+196052 WARNING: QtLibraryInfo(PySide6): QML plugin binary 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Python31
+5\\Lib\\site-packages\\PySide6\\qml\\Qt\\labs\\assetdownloader\\qmlassetdownloaderprivateplugin.dll' does not exist!
+256771 INFO: Processing standard module hook 'hook-PySide6.QtQuickWidgets.py' from 'C:\\Users\\admin\\AppData\\Local\\P
+rograms\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+258719 INFO: Performing binary vs. data reclassification (2985 entries)
+274179 INFO: Looking for ctypes DLLs
+274593 INFO: Analyzing run-time hooks ...
+274602 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Pyt
+hon315\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+274618 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Pyt
+hon\\Python315\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+274622 INFO: Including run-time hook 'pyi_rth_inspect.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Pyt
+hon315\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+274637 INFO: Including run-time hook 'pyi_rth_setuptools.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\
+Python315\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+274651 INFO: Including run-time hook 'pyi_rth_pyside6.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Pyt
+hon315\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+274665 INFO: Processing pre-find-module-path hook 'hook-_pyi_rth_utils.py' from 'C:\\Users\\admin\\AppData\\Local\\Prog
+rams\\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks\\pre_find_module_path'
+274697 INFO: Processing standard module hook 'hook-_pyi_rth_utils.py' from 'C:\\Users\\admin\\AppData\\Local\\Programs\
+\Python\\Python315\\Lib\\site-packages\\PyInstaller\\hooks'
+274815 INFO: Creating base_library.zip...
+274904 INFO: Looking for dynamic libraries
+277806 INFO: Extra DLL search directories (AddDllDirectory): ['C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Pyth
+on315\\Lib\\site-packages\\shiboken6']
+277807 INFO: Extra DLL search directories (PATH): ['C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Python315\\Lib\
+\site-packages\\PySide6']
+297139 INFO: Warnings written to C:\Users\admin\Documents\Trae-CN\temp_20261025_01\build\MikanCL\warn-MikanCL.txt
+297232 INFO: Graph cross-reference written to C:\Users\admin\Documents\Trae-CN\temp_20261025_01\build\MikanCL\xref-Mika
+nCL.html
+297458 INFO: checking PYZ
+297458 INFO: Building PYZ because PYZ-00.toc is non existent
+297458 INFO: Building PYZ (ZlibArchive) C:\Users\admin\Documents\Trae-CN\temp_20261025_01\build\MikanCL\PYZ-00.pyz
+298050 INFO: Building PYZ (ZlibArchive) C:\Users\admin\Documents\Trae-CN\temp_20261025_01\build\MikanCL\PYZ-00.pyz comp
+leted successfully.
+298218 INFO: checking PKG
+298220 INFO: Building PKG because PKG-00.toc is non existent
+298221 INFO: Building PKG (CArchive) MikanCL.pkg
+340892 INFO: Building PKG (CArchive) MikanCL.pkg completed successfully.
+341055 INFO: Bootloader C:\Users\admin\AppData\Local\Programs\Python\Python315\Lib\site-packages\PyInstaller\bootloader
+\Windows-64bit-intel\runw.exe
+341056 INFO: checking EXE
+341056 INFO: Building EXE because EXE-00.toc is non existent
+341056 INFO: Building EXE from EXE-00.toc
+341057 INFO: Copying bootloader EXE to C:\Users\admin\Documents\Trae-CN\temp_20261025_01\dist\MikanCL.exe
+341094 INFO: Copying icon to EXE
+341154 INFO: Copying version information to EXE
+341194 INFO: Copying 0 resources to EXE
+341194 INFO: Embedding manifest in EXE
+341209 INFO: Appending PKG archive to EXE
+341637 INFO: Fixing EXE headers
+345378 INFO: Building EXE from EXE-00.toc completed successfully.
+345494 INFO: Build complete! The results are available in: C:\Users\admin\Documents\Trae-CN\temp_20261025_01\dist
+执行： C:\Users\admin\AppData\Local\Programs\Python\Python315\python.exe -m PyInstaller --noconfirm --clean --onefile --name MikanCL --distpath=C:\Users\admin\Documents\Trae-CN\temp_20261025_01\dist --workpath=C:\Users\admin\Documents\Trae-CN\temp_20261025_01\build --specpath=C:\Users\admin\Documents\Trae-CN\temp_20261025_01\build --windowed --version-file=C:\Users\admin\Documents\Trae-CN\temp_20261025_01\build\version_info.txt --exclude-module PySide6.Qt3DAnimation --exclude-module PySide6.Qt3DCore --exclude-module PySide6.Qt3DExtras --exclude-module PySide6.Qt3DInput --exclude-module PySide6.Qt3DLogic --exclude-module PySide6.Qt3DRender --exclude-module PySide6.QtCharts --exclude-module PySide6.QtDataVisualization --exclude-module PySide6.QtGraphs --exclude-module PySide6.QtQuick3D --exclude-module PySide6.QtSerialPort --exclude-module PySide6.QtTest --exclude-module PySide6.QtWebEngineQuick --exclude-module tkinter --exclude-module unittest --exclude-module pydoc --hidden-import webview.platforms.edgechromium --hidden-import webview.platforms.winforms --hidden-import clr --hidden-import clr_loader --hidden-import clr_loader.util --hidden-import pythonnet --collect-all webview --icon C:\Users\admin\Documents\Trae-CN\temp_20261025_01\assets\mikan.ico --add-data C:\Users\admin\Documents\Trae-CN\temp_20261025_01\mc_launcher\translations;mc_launcher/translations --add-data C:\Users\admin\Documents\Trae-CN\temp_20261025_01\mc_launcher\data;mc_launcher/data --add-data C:\Users\admin\Documents\Trae-CN\temp_20261025_01\mc_launcher\resources;mc_launcher/resources --add-data C:\Users\admin\Documents\Trae-CN\temp_20261025_01\mc_launcher\ui_web\web;mc_launcher/ui_web/web C:\Users\admin\Documents\Trae-CN\temp_20261025_01\run.py
+打包完成：C:\Users\admin\Documents\Trae-CN\temp_20261025_01\dist\MikanCL.exe（218.0 MB，单文件）
+提示：单文件版本首次启动要先解压运行时，会比 onedir 慢几秒；首次运行会在 exe 同目录创建 data 目录。

@@ -28,7 +28,13 @@ SKIN_PACK_FORMAT = "MikanCL-SkinPack"
 SKIN_PACK_VERSION = 1
 MODEL_LABELS = {"classic": "Steve（经典）", "slim": "Alex（纤细）"}
 
-# (起始版本, pack_format)：按版本升序查找，取不大于目标版本的最后一档
+# (起始版本, pack_format)：按版本升序查找，取不大于目标版本的最后一档。
+# 对照 Java 版资源包格式表：
+#   1.6.1–1.8.9=1  1.9–1.10.2=2  1.11–1.12.2=3  1.13–1.14.4=4  1.15–1.16.1=5
+#   1.16.2–1.16.5=6  1.17–1.17.1=7  1.18–1.18.2=8  1.19–1.19.2=9  1.19.3=12
+#   1.19.4=13  1.20–1.20.1=15  1.20.2=18  1.20.3–1.20.4=22  1.20.5–1.20.6=32
+#   1.21–1.21.1=34  1.21.2–1.21.3=42  1.21.4=46  1.21.5=55  1.21.6=63
+#   1.21.7–1.21.8=64  1.21.9–1.21.10=69  1.21.11=75  26.1=84  26.2=88  26.3+=97
 _PACK_FORMATS: tuple[tuple[tuple[int, int, int], int], ...] = (
     ((1, 6, 1), 1),
     ((1, 9, 0), 2),
@@ -146,6 +152,9 @@ def texture_paths(version_id: str, model: str) -> list[str]:
 def _mcmeta(description: str, info: dict) -> dict:
     pack: dict = {"description": description}
     if info["kind"] == "range":
+        # 1.21.9+ 用 min_format / max_format（可以是整数或 [主, 次] 列表）；
+        # 同时保留 pack_format，让被误判成快照的旧版本仍能加载。
+        pack["pack_format"] = int(info["pack_format"])
         pack["min_format"] = [int(info["pack_format"]), 0]
         pack["max_format"] = [999, 0]
     else:
@@ -159,18 +168,40 @@ def _mcmeta(description: str, info: dict) -> dict:
     return {"pack": pack}
 
 
-def resourcepack_bytes(image: bytes, version_id: str, model: str, description: str) -> bytes:
-    """生成适用于指定版本的资源包 / 纹理包 zip 内容。"""
+def resourcepack_bytes(
+    image: bytes,
+    version_id: str,
+    model: str,
+    description: str,
+    cape: bytes | None = None,
+    elytra: bytes | None = None,
+) -> bytes:
+    """生成适用于指定版本的资源包 / 纹理包 zip 内容。
+
+    覆盖从 1.0 纹理包到最新版的写法：
+    * ≤1.5.2：pack.txt + textures/entity/*.png（贴图仍在根目录）
+    * 1.6.1+：pack.mcmeta + assets/minecraft/textures/entity/*
+    * 1.19.4+：额外写入 player/wide|slim/<9 套默认皮肤>
+    * 披风/鞘翅：写入 cape_invisible.png（1.9+）与 elytra.png，没有则不写
+    """
     info = pack_info(version_id)
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         if info["kind"] == "legacy":
             archive.writestr("pack.txt", description)
+            if cape:
+                archive.writestr("textures/entity/cape_invisible.png", cape)
+            if elytra:
+                archive.writestr("textures/entity/elytra.png", elytra)
         else:
             archive.writestr(
                 "pack.mcmeta", json.dumps(_mcmeta(description, info), ensure_ascii=False, indent=2)
             )
             archive.writestr("pack.png", image)
+            if cape:
+                archive.writestr("assets/minecraft/textures/entity/cape_invisible.png", cape)
+            if elytra:
+                archive.writestr("assets/minecraft/textures/entity/elytra.png", elytra)
         for name in texture_paths(version_id, model):
             archive.writestr(name, image)
     return buffer.getvalue()
@@ -239,7 +270,11 @@ def export_skin_pack(
             archive.writestr("README.txt", readme)
             # 与安装到游戏目录的兜底包完全一致，导出文件可直接当资源包加载
             pack_bytes = resourcepack_bytes(
-                image, version_id, model or "classic", f"MikanCL 皮肤包 · {name}"
+                image,
+                version_id,
+                model or "classic",
+                f"MikanCL 皮肤包 · {name}",
+                cape=cape_bytes or None,
             )
             with zipfile.ZipFile(io.BytesIO(pack_bytes)) as inner:
                 for entry in inner.infolist():
@@ -498,13 +533,23 @@ def _write_state(root: Path, players: dict) -> None:
         pass
 
 
-def skin_signature(version_id: str, image: bytes, model: str) -> str:
-    """皮肤内容 + 手臂模型 + 目标包格式的指纹，用于判断已有皮肤包是否过期。"""
+def skin_signature(
+    version_id: str,
+    image: bytes,
+    model: str,
+    cape: bytes | None = None,
+    elytra: bytes | None = None,
+) -> str:
+    """皮肤内容 + 披风/鞘翅 + 手臂模型 + 目标包格式的指纹，用于判断已有皮肤包是否过期。"""
     info = pack_info(version_id)
     raw = (
         hashlib.sha1(image).hexdigest()
         + "|"
         + ("slim" if (model or "").lower() == "slim" else "classic")
+        + "|"
+        + (hashlib.sha1(cape).hexdigest() if cape else "")
+        + "|"
+        + (hashlib.sha1(elytra).hexdigest() if elytra else "")
         + f"|{info['kind']}|{info['pack_format']}|{len(texture_paths(version_id, model))}"
     )
     return hashlib.sha1(raw.encode()).hexdigest()
@@ -518,7 +563,13 @@ def expected_pack(game_dir: str | Path, version_id: str, player: str) -> Path:
 
 
 def pack_is_current(
-    game_dir: str | Path, version_id: str, player: str, image: bytes, model: str
+    game_dir: str | Path,
+    version_id: str,
+    player: str,
+    image: bytes,
+    model: str,
+    cape: bytes | None = None,
+    elytra: bytes | None = None,
 ) -> bool:
     """判断游戏目录里已有的皮肤包是否与当前皮肤、版本格式一致。
 
@@ -532,7 +583,7 @@ def pack_is_current(
     state = _read_state(root).get(name)
     if not isinstance(state, dict):
         return False
-    if state.get("signature") != skin_signature(version_id, image, model):
+    if state.get("signature") != skin_signature(version_id, image, model, cape, elytra):
         return False
     pack = expected_pack(root, version_id, name)
     return pack.is_file()
@@ -617,10 +668,17 @@ def apply_player_skin_bytes(
         folder_pack = root / "resourcepacks"
     folder_pack.mkdir(parents=True, exist_ok=True)
     pack_path = folder_pack / filename
-    signature = skin_signature(version_id, image, model)
+    signature = skin_signature(version_id, image, model, cape, elytra)
     try:
         pack_path.write_bytes(
-            resourcepack_bytes(image, version_id, model, f"MikanCL 皮肤包 · {name}")
+            resourcepack_bytes(
+                image,
+                version_id,
+                model,
+                f"MikanCL 皮肤包 · {name}",
+                cape=cape,
+                elytra=elytra,
+            )
         )
         paths.append(str(pack_path))
     except OSError as exc:

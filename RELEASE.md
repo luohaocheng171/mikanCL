@@ -1,5 +1,7 @@
 # MikanCL v5.1.0 发布说明
 
+[中文](RELEASE.md) · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · [Français](RELEASE.fr.md) · [日本語](RELEASE.ja.md)
+
 发布日期：2026-11-08
 
 ## 本轮修复与新增（补丁更新）
@@ -22,6 +24,10 @@
 - **材质包与资源包分离**：搜索类型与文案彻底区分资源包（resourcepack）、材质包（texturepack）与光影包（shader），不再把三者混为一谈
 - **陶瓦联机分享码**：美化版联机页新增创建房间、加入房间、结束联机与「复制分享码」，创建后自动轮询房间状态并在卡片中展示房间码；加入前会自动规范化房间码格式
 - **数据目录自动检测**：添加数据目录时自动识别 `.minecraft` 根目录、`versions` 目录或单个版本文件夹层级，并切换到该目录；版本文件夹即使缺少版本 JSON，只要目录里存在游戏 Jar，也会按文件夹名出现在「已安装版本」中（经典版与美化版同步生效）
+
+## 打包方式（本轮）
+
+- **单文件 exe**：`python build_exe.py` 改为 PyInstaller onefile，PySide6、pywebview、toolbelt 与前端资源全部打进一个 `MikanCL.exe`，分发时只需一个文件；首次启动会先解压运行时，比 onedir 慢几秒
 
 ## 界面框架
 

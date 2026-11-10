@@ -34,7 +34,13 @@ from PySide6.QtWidgets import (
 
 from .. import APP_NAME
 from ..config import DATA_DIR
-from ..terrain_java import terrain_dir, generate_heightmap_java
+from ..terrain_java import (
+    terrain_dir,
+    generate_heightmap_java,
+    noise_mode_for_version,
+    version_tuple,
+)
+from ..version import scan_installed_versions
 from .widgets import page_header
 
 try:  # WebEngine 在部分精简环境下可能缺失，提供回退
@@ -225,19 +231,19 @@ class TerrainWorker(QThread):
     done = Signal(bytes, int)
     failed = Signal(str)
 
-    def __init__(self, ctx, seed: int, size: int, mode: int, parent=None):
+    def __init__(self, ctx, seed: int, size: int, version_id: str, parent=None):
         super().__init__(parent)
         self.ctx = ctx
         self.seed = seed
         self.size = size
-        self.mode = mode
+        self.version_id = version_id
 
     def run(self) -> None:  # noqa: D401
         try:
             data = generate_heightmap_java(
                 self.seed,
                 size=self.size,
-                mode=self.mode,
+                mode=noise_mode_for_version(self.version_id),
                 ctx=self.ctx,
                 java_path=str(getattr(self.ctx.config, "java_path", "") or ""),
             )
@@ -266,8 +272,8 @@ class SeedTerrainPage(QWidget):
         outer.setSpacing(16)
         header, _ = page_header(
             self.tr("世界种子"),
-            self.tr("输入种子，启动器调用本机 Java（与 Minecraft 相同的柏林噪声算法与参数）"
-                   "生成出生点附近的 3D 地形，无需进入游戏"),
+            self.tr("选择已安装的版本并输入种子，启动器调用本机 Java 用与官方一致的柏林噪声"
+                   "生成出生点附近的地形，无需进入游戏"),
         )
         outer.addWidget(header)
 
@@ -288,11 +294,14 @@ class SeedTerrainPage(QWidget):
         self.size_spin.setValue(256)
         self.size_spin.setToolTip(self.tr("尺寸越大，生成越久"))
         ctrl.addWidget(self.size_spin)
-        ctrl.addWidget(QLabel(self.tr("噪声版本")))
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItem(self.tr("经典（1.7–1.17）"), 0)
-        self.mode_combo.addItem(self.tr("新版（1.18+）"), 1)
-        ctrl.addWidget(self.mode_combo)
+        ctrl.addWidget(QLabel(self.tr("游戏版本")))
+        self.version_combo = QComboBox()
+        self.version_combo.setMinimumWidth(200)
+        ctrl.addWidget(self.version_combo)
+        refresh_btn = QPushButton(self.tr("刷新"))
+        refresh_btn.setObjectName("GhostCompact")
+        refresh_btn.clicked.connect(self._reload_versions)
+        ctrl.addWidget(refresh_btn)
         self.gen_btn = QPushButton(self.tr("生成地形"))
         self.gen_btn.setObjectName("Primary")
         self.gen_btn.clicked.connect(self._generate)
@@ -319,13 +328,11 @@ class SeedTerrainPage(QWidget):
 
         tip = QLabel(
             self.tr(
-                "说明：高度图由启动器调用本机 Java 运行时（内嵌 TerrainGen 程序）计算。"
-                "「经典」使用 1.7–1.17 的 ImprovedNoise（256 置换表 + 16 向梯度表）"
-                "与 8 层 octave 叠加（频率 ×2、振幅 ×0.5）；「新版」使用 1.18 起的 "
-                "Xoroshiro128++ 随机源与气候噪声（大陆性 / 侵蚀度 / 奇异度）。"
-                "两种模式的噪声参数均为原版固定值，不提供起伏等可调项；但不含生物群系、"
-                "地形样条与密度函数，仍属非官方地形示意，仅供挑选种子时参考，"
-                "与游戏内实际地形可能存在差异。"
+                "说明：选择已安装的版本后生成地形，噪声实现按版本自动切换——"
+                "1.18 以前使用 ImprovedNoise（256 置换表 + 16 向梯度表，与官方 NoiseGeneratorImproved "
+                "逐行一致）叠加 8 层 octave（频率 ×2、振幅 ×0.5）；1.18 起改用官方 Xoroshiro128++ "
+                "随机源与大陆性 / 侵蚀度 / 奇异度气候噪声。柏林噪声核心与官方一致，但不含生物群系、"
+                "地形样条与密度函数，仍属示意高度图，仅供挑选种子时参考。"
             )
         )
         tip.setObjectName("Tiny")
@@ -333,6 +340,36 @@ class SeedTerrainPage(QWidget):
         body.addWidget(tip)
 
         outer.addLayout(body, 1)
+        self._reload_versions()
+
+    def _reload_versions(self) -> None:
+        """扫描已安装版本；选中的版本决定使用哪一代官方噪声实现。"""
+        current = self.version_combo.currentData() if self.version_combo.count() else None
+        self.version_combo.blockSignals(True)
+        self.version_combo.clear()
+        try:
+            versions = scan_installed_versions(self.ctx.config.game_path)
+        except Exception:  # noqa: BLE001
+            versions = []
+        items: list[tuple[tuple[int, int, int], str]] = []
+        for item in versions:
+            vid = str(getattr(item, "id", "") or "")
+            if not vid:
+                continue
+            parsed = version_tuple(vid)
+            items.append((parsed or (0, 0, 0), vid))
+        items.sort(key=lambda pair: (pair[0], pair[1]), reverse=True)
+        for _parsed, vid in items:
+            mode = noise_mode_for_version(vid)
+            label = f"{vid} · " + (self.tr("新版噪声") if mode else self.tr("经典噪声"))
+            self.version_combo.addItem(label, vid)
+        if not items:
+            self.version_combo.addItem(self.tr("未找到已安装版本（按最新版噪声）"), "")
+        else:
+            index = self.version_combo.findData(current) if current else -1
+            if index >= 0:
+                self.version_combo.setCurrentIndex(index)
+        self.version_combo.blockSignals(False)
 
     # ------------------------------------------------------------------
     def _build_view_bar(self) -> QHBoxLayout:
@@ -422,7 +459,11 @@ class SeedTerrainPage(QWidget):
         self.gen_btn.setEnabled(False)
 
         worker = TerrainWorker(
-            self.ctx, seed, size, int(self.mode_combo.currentData()), self
+            self.ctx,
+            seed,
+            size,
+            str(self.version_combo.currentData() or ""),
+            self,
         )
         worker.done.connect(self._on_terrain_ready)
         worker.failed.connect(self._on_terrain_failed)

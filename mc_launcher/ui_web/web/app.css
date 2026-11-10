@@ -24,6 +24,12 @@
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
+/* 无边框窗口圆角：窗口透明，圆角外直接透出桌面；最大化时恢复直角 */
+html { border-radius: 14px; }
+body { border-radius: 14px; clip-path: inset(0 round 14px); }
+body.maximized { border-radius: 0; clip-path: none; }
+body::before, body::after { border-radius: 14px; }
+body.maximized::before, body.maximized::after { border-radius: 0; }
 body {
   font-family: "Microsoft YaHei UI", "Segoe UI Variable Text", "Segoe UI", "PingFang SC", sans-serif;
   font-size: 13.5px;

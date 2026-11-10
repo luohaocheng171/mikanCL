@@ -508,8 +508,8 @@ class Config:
     ui_animations: bool = True   # 页面切换淡入淡出等动画（关闭可降低 GPU 占用）
     glass_effect: bool = True     # 美化版半透明毛玻璃（低配显卡可关闭，退化为不透明底色）
     glass_see_through: bool = False  # 毛玻璃透视桌面：窗口背景透明 + DWM 模糊，开启时忽略背景图与动态壁纸
-    glass_strength: int = 62     # 毛玻璃强度 0~100（控制模糊半径与染色浓度）
-    glass_blur: int = 20         # 毛玻璃模糊半径（px），与强度分开可调
+    glass_strength: int = 62     # 毛玻璃强度 0~100（0 几乎全透明，100 几乎不透明）
+    glass_blur: int = 20         # 毛玻璃模糊半径（px，0~64），0 几乎不模糊，64 几乎看不到背景
     ui_acrylic: bool = False     # 毛玻璃背景（依赖 Windows DWM 合成，GPU 加速、低 CPU）
     ui_mode: str = "classic"     # 界面运行模式：classic（经典稳定）/ visual（视觉增强）
     ui_mode_asked: bool = False  # 是否已在首次启动时询问过界面模式
@@ -1131,7 +1131,7 @@ class Config:
         except (TypeError, ValueError):
             cfg.glass_strength = 62
         try:
-            cfg.glass_blur = max(0, min(40, int(data.get("glass_blur", 20))))
+            cfg.glass_blur = max(0, min(64, int(data.get("glass_blur", 20))))
         except (TypeError, ValueError):
             cfg.glass_blur = 20
         cfg.ui_acrylic = bool(data.get("ui_acrylic", False))

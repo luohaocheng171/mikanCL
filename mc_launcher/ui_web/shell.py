@@ -2518,7 +2518,7 @@ class WebApi:
                 changed = True
             elif key == "glass_blur":
                 try:
-                    cfg.glass_blur = max(0, min(40, int(value)))
+                    cfg.glass_blur = max(0, min(64, int(value)))
                 except (TypeError, ValueError):
                     continue
                 changed = True
@@ -3118,6 +3118,87 @@ class WebApi:
             return {"ok": False, "message": f"保存失败：{exc}"}
         self._refresh()
         return {"ok": True, "path": path, "versions": self.scan_versions()}
+
+    def memory_auto(self) -> dict:
+        """按本机物理内存推荐游戏内存（与经典版同一套 25% 规则）。"""
+        from ..hardware import memory_summary, recommend_memory_mb
+
+        recommended = max(512, int(recommend_memory_mb()))
+        self.config.memory_mb = recommended
+        try:
+            self.config.save()
+        except OSError:
+            pass
+        return {"ok": True, "memory": recommended, "summary": memory_summary()}
+
+    def import_scan(self, path: str = "") -> dict:
+        """扫描 PCL / HMCL 目录，返回可导入的版本清单（与经典版导入对话框同一套解析）。"""
+        from ..launcher_import import scan_profile
+
+        if not path:
+            path = self._pick_dir("选择 PCL / HMCL 配置目录") or ""
+        if not path:
+            return {"ok": False, "message": "未选择目录"}
+        profile = scan_profile(path)
+        if profile is None:
+            return {"ok": False, "message": "未识别到 PCL / HMCL 配置：目录里没有 .minecraft 或 versions"}
+        local_ids: set[str] = set()
+        for game_dir in self.config.game_dirs:
+            versions_dir = Path(game_dir.path) / "versions"
+            try:
+                local_ids.update(item.name for item in versions_dir.iterdir() if item.is_dir())
+            except OSError:
+                continue
+        items = []
+        for version in profile.versions:
+            items.append(
+                {
+                    "id": version.version_id,
+                    "label": str(getattr(version, "label", "") or version.version_id),
+                    "path": str(Path(version.path).parent),
+                    "exists": version.version_id in local_ids,
+                }
+            )
+        return {
+            "ok": True,
+            "path": str(path),
+            "kind": profile.kind,
+            "gameDir": str(profile.game_dir),
+            "warnings": list(profile.warnings),
+            "versions": items,
+        }
+
+    def import_apply(
+        self,
+        path: str = "",
+        ids: list[str] | None = None,
+        settings: bool = True,
+        global_config: bool = False,
+    ) -> dict:
+        """把选中的外部版本导入为本启动器的实例，并同步启动设置。"""
+        from ..launcher_import import import_profile, scan_profile
+
+        if not path:
+            return {"ok": False, "message": "缺少目录"}
+        profile = scan_profile(path)
+        if profile is None:
+            return {"ok": False, "message": "未识别到 PCL / HMCL 配置"}
+        selected = [str(item) for item in (ids or []) if str(item).strip()]
+        if not selected:
+            selected = [version.version_id for version in profile.versions]
+        stats = import_profile(
+            self.config,
+            profile,
+            selected,
+            import_settings=bool(settings),
+            import_global=bool(global_config),
+        )
+        try:
+            self.config.save()
+        except OSError:
+            pass
+        self._refresh()
+        return {"ok": True, "stats": stats}
 
     def add_game_dir(self, name: str, path: str = "") -> dict:
         if not path:
@@ -4068,7 +4149,81 @@ class WebApi:
             "skipped": skipped,
         }
 
-    def seed_preview(self, seed: str = "", mode: str = "classic", size: int = 256) -> dict:
+    # ------------------------------------------------------------------
+    # 半透明毛玻璃 UI 材质包（按版本生成资源包 / 纹理包）
+    def ui_pack_versions(self) -> dict:
+        """UI 材质包可选版本：只列本机已安装版本（没装过时退回常见版本）。"""
+        installed = [item["id"] for item in self.scan_versions()]
+        versions = installed or [
+            "1.5.2", "1.8.9", "1.12.2", "1.16.5", "1.20.1",
+            "1.20.4", "1.21.8", "1.21.9", "1.21.11", "26.1", "26.3",
+        ]
+        return {"ok": True, "versions": versions, "installed": installed}
+
+    def _ui_pack_payload(self, version: str, enable: bool) -> dict:
+        from ..ui_pack import UiPackError, apply_ui_pack
+
+        try:
+            result = apply_ui_pack(self.config, version, enable=bool(enable))
+        except UiPackError as exc:
+            return {"ok": False, "message": str(exc)}
+        except OSError as exc:
+            return {"ok": False, "message": f"写入 UI 材质包失败：{exc}"}
+        note = "" if result["has_jar"] else "（未找到客户端 jar，只生成了玻璃背景层）"
+        return {
+            "ok": True,
+            "message": f"UI 材质包已生成：{version} {result['label']}{note}",
+            "paths": result["paths"],
+            "legacy": result["legacy"],
+            "has_jar": result["has_jar"],
+        }
+
+    def ui_pack_install(self, version_id: str = "", enable: bool = True) -> dict:
+        version = str(version_id or "").strip()
+        if not version:
+            installed = self.scan_versions()
+            version = installed[0]["id"] if installed else "1.21.8"
+        return self._ui_pack_payload(version, enable)
+
+    def ui_pack_install_all(self, enable: bool = True) -> dict:
+        installed = [item["id"] for item in self.scan_versions()]
+        if not installed:
+            return {"ok": False, "message": "没有检测到已安装的游戏版本"}
+        done: list[str] = []
+        failed: list[str] = []
+        for version in installed:
+            result = self._ui_pack_payload(version, enable)
+            if result["ok"]:
+                done.append(version)
+            else:
+                failed.append(version)
+        message = f"已为 {len(done)} 个版本生成 UI 材质包"
+        if failed:
+            message += f"，失败 {len(failed)} 个：{'、'.join(failed)}"
+        return {"ok": bool(done), "message": message, "done": done, "failed": failed}
+
+    def ui_pack_export(self, version_id: str = "") -> dict:
+        from ..ui_pack import UiPackError, export_ui_pack, ui_pack_filename
+
+        version = str(version_id or "").strip()
+        if not version:
+            installed = self.scan_versions()
+            version = installed[0]["id"] if installed else "1.21.8"
+        target = self._pick_save(ui_pack_filename(version), ("UI 材质包 (*.zip)",))
+        if not target:
+            return {"ok": False, "message": "未选择保存位置"}
+        try:
+            path = export_ui_pack(
+                target, version, game_root=self.config.game_path
+            )
+        except UiPackError as exc:
+            return {"ok": False, "message": str(exc)}
+        except OSError as exc:
+            return {"ok": False, "message": f"导出失败：{exc}"}
+        return {"ok": True, "message": f"UI 材质包已导出：{path}", "path": str(path)}
+
+    def seed_preview(self, seed: str = "", mode: str = "classic", size: int = 256,
+                     version: str = "") -> dict:
         """生成地形高度图：复用 Java 噪声程序，结果放到后台任务里跑。"""
         text = str(seed or "").strip()
         if text:
@@ -4086,7 +4241,13 @@ class WebApi:
             size = max(64, min(512, int(size)))
         except (TypeError, ValueError):
             size = 256
-        mode_int = 0 if str(mode).lower() in ("classic", "0", "old") else 1
+        if str(version or "").strip():
+            # 与经典版一致：按所选游戏版本决定用经典还是新版柏林噪声
+            from ..terrain_java import noise_mode_for_version
+
+            mode_int = noise_mode_for_version(str(version).strip())
+        else:
+            mode_int = 0 if str(mode).lower() in ("classic", "0", "old") else 1
         job = _spawn(
             "terrain",
             f"生成地形 {value}",
@@ -4644,7 +4805,12 @@ class WebApi:
         return {"ok": True}
 
     def _fast_close(self) -> None:
-        """关闭窗口时先落盘再直接结束进程，跳过 WebView2 环境回收（否则会卡 1~2 秒）。"""
+        """关闭窗口时先隐藏再直接结束进程，跳过 WebView2 环境回收（否则会卡 1~2 秒）。"""
+        try:
+            if self.window is not None:
+                self.window.hide()
+        except Exception:  # noqa: BLE001 - 隐藏失败也要继续退出
+            pass
         try:
             self.config.cancel_debounced_save()
             self.config.save()
@@ -4652,16 +4818,17 @@ class WebApi:
             pass
         os._exit(0)
 
-    def window_action(self, action: str) -> None:
+    def window_action(self, action: str) -> dict:
         if self.window is None:
-            return
+            return {"ok": False}
         if action == "close":
             self._fast_close()
-            return
+            return {"ok": True}
         elif action == "minimize":
             self.window.minimize()
         elif action == "toggle_max":
             self.window_restore() if self._window_maximized() else self.window_maximize()
+        return {"ok": True, "maximized": self._window_maximized()}
 
     # ---------- 无边框窗口缩放 ----------
     def _native_view(self):
@@ -4801,8 +4968,11 @@ class WebApi:
         base = (244, 248, 253) if light else (11, 21, 18)
         if mode == "alpha":
             color = Color.FromArgb(255, base[0], base[1], base[2])
-            # 强度越高内容越实；模糊（磨砂厚度）越大也越实，0 时为最通透状态
-            opacity = max(0.76, min(0.97, 0.88 + strength * 0.001 + blur * 0.0008))
+            # 强度/模糊覆盖完整区间：都为 0 时窗口几乎全透明，拉满时几乎不透明
+            opacity = max(
+                0.20,
+                min(0.995, 0.20 + strength / 100 * 0.66 + blur / 64 * 0.14),
+            )
         else:
             color = Color.FromArgb(255, base[0], base[1], base[2])
             opacity = 1.0
@@ -4829,7 +4999,7 @@ class WebApi:
             return {"ok": False, "message": "仅支持 Windows"}
         enabled = bool(getattr(self.config, "glass_see_through", False))
         strength = max(0, min(100, int(getattr(self.config, "glass_strength", 62) or 62)))
-        blur = max(0, min(40, int(getattr(self.config, "glass_blur", 20) or 0)))
+        blur = max(0, min(64, int(getattr(self.config, "glass_blur", 20) or 0)))
         hwnd = self._hwnd()
         if not hwnd:
             return {"ok": False, "message": "窗口尚未就绪"}
@@ -4962,12 +5132,14 @@ def run(config) -> int:
             pass
 
     def _guard_close() -> bool:
-        if not bool(getattr(config, "close_to_tray", False)):
-            return True
-        try:
-            window.minimize()
-        except Exception:  # noqa: BLE001 - 最小化失败时允许正常退出
-            return True
+        if bool(getattr(config, "close_to_tray", False)):
+            try:
+                window.minimize()
+            except Exception:  # noqa: BLE001 - 最小化失败时允许正常退出
+                return True
+            return False
+        # 未开启「关闭到托盘」时直接快速退出，跳过 WebView2 销毁带来的 1~2 秒卡顿
+        api._fast_close()
         return False
 
     try:

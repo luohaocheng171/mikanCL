@@ -10,7 +10,7 @@ import socket
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QSize, QThread, QTimer, QUrl, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, QThread, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -19,7 +19,9 @@ from PySide6.QtGui import (
     QIcon,
     QMovie,
     QPainter,
+    QPainterPath,
     QPixmap,
+    QRegion,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -260,6 +262,46 @@ class RootWidget(QWidget):
         # 窗口底色（毛玻璃模式下带透明度）。必须用 Source 方式整块填充，
         # 否则半透明底色会与上一帧内容叠加：滚轮滚动 / 局部重绘时旧文字会残留成重影。
         self._base_color = QColor("#0c1310")
+        # 圆角：DWM 圆角偏好可用时只做绘制裁剪；不可用时用遮罩裁剪整棵控件树
+        self._corner_radius = 0
+        self._mask_enabled = False
+
+    def set_corner_radius(self, radius: int) -> None:
+        radius = max(0, int(radius))
+        if radius == self._corner_radius:
+            return
+        self._corner_radius = radius
+        self._update_corner_mask()
+        self.update()
+
+    def set_mask_fallback(self, enabled: bool) -> None:
+        """DWM 不支持圆角偏好时，用窗口遮罩把四角裁成透明。"""
+        if bool(enabled) == self._mask_enabled:
+            return
+        self._mask_enabled = bool(enabled)
+        self._update_corner_mask()
+
+    def _corner_path(self) -> QPainterPath | None:
+        if self._corner_radius <= 0 or self.width() <= 0 or self.height() <= 0:
+            return None
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), self._corner_radius, self._corner_radius)
+        return path
+
+    def _update_corner_mask(self) -> None:
+        if not self._mask_enabled:
+            if not self.mask().isEmpty():
+                self.clearMask()
+            return
+        path = self._corner_path()
+        if path is None:
+            self.clearMask()
+            return
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._update_corner_mask()
 
     def set_base_color(self, color: QColor) -> None:
         if color != self._base_color:
@@ -302,11 +344,19 @@ class RootWidget(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        path = self._corner_path()
+        if path is not None:
+            # 先把脏区刷成透明，再用圆角路径裁剪：窗口四角透出桌面而不是残留上一帧像素
+            painter.setCompositionMode(QPainter.CompositionMode_Source)
+            painter.fillRect(event.rect(), Qt.transparent)
+            painter.setClipPath(path)
         if self._source is None or self.width() <= 0 or self.height() <= 0:
             # Source 组合模式：直接用底色覆盖脏区，彻底清掉上一帧的残留像素
             painter.setCompositionMode(QPainter.CompositionMode_Source)
             painter.fillRect(event.rect(), self._base_color)
             return
+        painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
         if self._cache is None or self._cache_size != self.size():
             self._cache = self._source.scaled(
                 self.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
@@ -440,6 +490,7 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange:
             self._sync_window_buttons()
+            self._apply_rounded_corners()
 
     # ---------- 拖拽导入 ----------
     def dragEnterEvent(self, event) -> None:  # noqa: N802
@@ -561,7 +612,7 @@ class MainWindow(QMainWindow):
             ("wiki", self.tr("教程中心"), self.tr("教程")),
             ("bedrock", self.tr("基岩版"), self.tr("基岩版")),
             ("skin_factory", self.tr("皮肤工厂"), self.tr("皮肤厂")),
-            ("skin_pack", self.tr("皮肤包"), self.tr("皮肤包")),
+            ("skin_pack", self.tr("皮肤包 / UI 材质包"), self.tr("UI 包")),
             ("seed_terrain", self.tr("世界种子"), self.tr("种子")),
             ("gallery", self.tr("截图图库"), self.tr("截图")),
             ("crash", self.tr("崩溃报告"), self.tr("崩溃")),
@@ -962,7 +1013,7 @@ class MainWindow(QMainWindow):
         enabled = bool(self.ctx.config.ui_acrylic)
         strength = max(0, min(100, int(getattr(self.ctx.config, "glass_strength", 62) or 62)))
         # 强度决定染色深浅：0 近乎全透明，100 才接近实心；默认 62 仍能看到桌面
-        alpha = max(12, min(150, 12 + int(strength * 0.9)))
+        alpha = max(4, min(246, 4 + int(strength * 2.42)))
         self.root.set_base_color(
             QColor(12, 19, 16, alpha) if enabled else QColor("#0c1310")
         )
@@ -978,6 +1029,38 @@ class MainWindow(QMainWindow):
         else:
             self._set_win11_backdrop(hwnd, 1)
             self._set_legacy_accent(hwnd, 0, strength)
+
+    # ---------- 窗口圆角 ----------
+    _CORNER_RADIUS = 14
+
+    def _apply_rounded_corners(self) -> None:
+        """无边框窗口圆角：优先用 DWM 圆角偏好，不支持时退回窗口遮罩裁剪。"""
+        if not hasattr(self, "root"):
+            return
+        rounded = not self.isMaximized()
+        self.root.set_corner_radius(self._CORNER_RADIUS if rounded else 0)
+        if sys.platform != "win32":
+            self.root.set_mask_fallback(False)
+            return
+        try:
+            hwnd = int(self.winId())
+        except Exception:  # noqa: BLE001 - 取不到句柄时只做绘制裁剪
+            self.root.set_mask_fallback(rounded)
+            return
+        supported = self._set_win11_corner(hwnd, rounded)
+        self.root.set_mask_fallback(rounded and not supported)
+
+    @staticmethod
+    def _set_win11_corner(hwnd: int, rounded: bool) -> bool:
+        """DWMWA_WINDOW_CORNER_PREFERENCE：1 直角 / 2 圆角（Win11 22000+）。"""
+        try:
+            pref = ctypes.c_int(2 if rounded else 1)
+            result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                ctypes.wintypes.HWND(hwnd), 33, ctypes.byref(pref), ctypes.sizeof(pref)
+            )
+            return result == 0
+        except Exception:  # noqa: BLE001 - 老系统没有该属性
+            return False
 
     @staticmethod
     def _set_win11_backdrop(hwnd: int, value: int) -> bool:
@@ -1001,7 +1084,8 @@ class MainWindow(QMainWindow):
         """Win10 回退方案：SetWindowCompositionAttribute，强度控制染色浓度。"""
         try:
             # 0xAABBGGRR，与主题底色 #0c1310 同色调，低 alpha 让 DWM 模糊透出
-            alpha = max(6, min(90, 6 + int(strength * 0.45)))
+            alpha = max(4, min(200, 4 + int(strength * 1.96)))
+            gradient_color = (alpha << 24) | 0x0010130C
 
             class AccentPolicy(ctypes.Structure):
                 _fields_ = [
@@ -1309,6 +1393,7 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
+        self._apply_rounded_corners()
         self._place_download_fab()
         self._update_download_fab()
 
@@ -1457,7 +1542,13 @@ class MainWindow(QMainWindow):
     def _fast_quit(self) -> None:
         """直接截断进程：不等待线程池 / 页面析构，保存配置后立即退出。"""
         self._force_quit = True
+        # 先隐藏窗口让关闭动作立刻可见，再同步落盘，避免用户看到窗口滞留
         try:
+            self.hide()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self.ctx.config.cancel_debounced_save()
             self.ctx.config.save()
         except Exception:  # noqa: BLE001
             pass

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-AGREEMENT_VERSION = "1.7"
+AGREEMENT_VERSION = "1.8"
 
 # 每种语言：标题、确认文案、按钮文案、条款标签页（标签名 + 正文）
 _TEXTS: dict[str, dict] = {
@@ -132,6 +132,38 @@ _TEXTS: dict[str, dict] = {
                 "MikanCL 作者概不负责。\n"
                 "第三方模块适用其自身的开源许可（如 AGPL-3.0），请自行确认来源、版本与许可后再使用；"
                 "如不需要，可忽略该页面而完全不影响启动器其余功能。",
+            ),
+            (
+                "十二、基岩版与商店安装包",
+                "「基岩版」页展示 MCAPPX 提供的离线安装包索引，本软件只做展示与版本匹配，"
+                "不随软件分发任何游戏安装包。\n"
+                "安装通过 Windows 的 Add-AppxPackage 接口部署由微软签名的 .appx / .msix，"
+                "需要系统允许旁加载；部署耗时取决于磁盘性能与包体积，进度长时间停留在部署阶段属正常现象。\n"
+                "部分历史版本需通过内置浏览器自行下载，下载站点的可用性与内容不由本软件控制；"
+                "安装、更新与卸载遵循 Microsoft Store 与 Windows 的规则，"
+                "本软件不对安装失败、系统策略拦截或卸载后的残留负责。",
+            ),
+            (
+                "十三、扩展、主题与界面定制",
+                "「扩展」支持导入 .zip / .mikan-ext，启用后显示在侧边栏，并运行在沙箱 iframe 中，"
+                "仅能通过 postMessage 与后端通信。扩展由第三方作者提供，可能包含任意前端代码，"
+                "请在确认来源可信后再启用；本软件不对扩展造成的数据或安全问题负责。\n"
+                "主题、皮肤与动态壁纸均可自定义：主题与皮肤以 JSON 保存在本机 data/themes，"
+                "壁纸支持 MP4 / WebM / GIF / WebP；自定义资源可能包含大文件或特殊编码，"
+                "可能导致界面卡顿或内存占用升高。\n"
+                "毛玻璃强度、模糊半径、窗口圆角与界面动画均可在「设置」中调整或关闭。",
+            ),
+            (
+                "十四、版本管理与其他功能",
+                "版本目录分区、从 PCL / HMCL 导入、多版本批量启动、启动脚本、Java 中心、教程中心、"
+                "截图图库、崩溃报告、NBT 编辑器、Mod 关系图与多人联机均为本机功能。\n"
+                "「从其他启动器导入」只登记版本，不复制或移动原目录中的文件；"
+                "但导入的设置会写入本启动器配置，实际行为可能与原启动器不同。\n"
+                "启动脚本与自定义 JVM 参数会以当前用户权限执行您填写的命令，请只运行可信内容，"
+                "由此产生的后果由您承担。\n"
+                "多人联机与内置浏览器访问的服务器、房间与网页均由第三方提供，"
+                "其内容、可用性与安全性不由本软件控制。\n"
+                "教程内容随版本更新，可能与当前系统或游戏版本存在差异，仅供操作参考。",
             ),
         ],
     },
@@ -270,6 +302,45 @@ _TEXTS: dict[str, dict] = {
                 "Verify the source, version and licence before use; ignoring this page does not affect "
                 "any other feature of the launcher.",
             ),
+            (
+                "12. Bedrock and Store packages",
+                "The Bedrock page shows the offline package index provided by MCAPPX. The launcher only "
+                "displays and matches entries and never redistributes game packages.\n"
+                "Installation deploys a Microsoft-signed .appx / .msix through the Windows Add-AppxPackage "
+                "interface and requires sideloading to be allowed. Deployment time depends on disk speed and "
+                "package size; a long “Deploying” phase is normal.\n"
+                "Some historical builds must be downloaded manually through the built-in browser, and the "
+                "availability and content of those sites are outside our control. Installation, updates and "
+                "uninstall follow Microsoft Store and Windows rules; we are not liable for failed installs, "
+                "policy blocks or leftovers after uninstall.",
+            ),
+            (
+                "13. Extensions, themes and interface customisation",
+                "Extensions import .zip / .mikan-ext files, appear in the sidebar and run inside a sandboxed "
+                "iframe that can only talk to the backend through postMessage. Extensions are supplied by "
+                "third parties and may contain arbitrary front-end code; enable them only from sources you "
+                "trust, and we accept no liability for data or security issues they cause.\n"
+                "Themes, skins and animated wallpapers are customisable: themes and skins are stored as JSON "
+                "under data/themes on this machine, and wallpapers support MP4 / WebM / GIF / WebP. Custom "
+                "assets may be large or use unusual encodings and can slow the interface or raise memory use.\n"
+                "Glass strength, blur radius, window corner radius and UI animations can all be adjusted or "
+                "disabled in Settings.",
+            ),
+            (
+                "14. Version management and other features",
+                "Version-folder partitions, importing from PCL / HMCL, batch launching, launch scripts, the "
+                "Java Center, the tutorial center, screenshot gallery, crash reports, NBT editor, mod graph "
+                "and multiplayer all run locally.\n"
+                "“Import from other launchers” only registers versions and never copies or moves files in the "
+                "original folder, but imported settings are written into this launcher's configuration and may "
+                "behave differently from the source launcher.\n"
+                "Launch scripts and custom JVM arguments execute the commands you enter with your user "
+                "privileges; only run trusted content and accept the consequences.\n"
+                "Servers, rooms and web pages reached through multiplayer or the built-in browser are provided "
+                "by third parties; we do not control their content, availability or safety.\n"
+                "Tutorials are updated with releases and may differ from your system or game version; treat "
+                "them as operational guidance only.",
+            ),
         ],
     },
     "ru_RU": {
@@ -407,6 +478,48 @@ _TEXTS: dict[str, dict] = {
                 "(например, AGPL-3.0). Перед использованием проверьте источник, версию и лицензию; "
                 "если они не нужны, страницу можно просто игнорировать — остальные функции лаунчера "
                 "работают как обычно.",
+            ),
+            (
+                "12. Bedrock и пакеты из Store",
+                "Страница «Bedrock» показывает каталог офлайн-пакетов, предоставленный MCAPPX. Лаунчер "
+                "только отображает и сопоставляет записи и не распространяет игровые пакеты.\n"
+                "Установка разворачивает подписанный Microsoft пакет .appx / .msix через системный "
+                "Add-AppxPackage и требует разрешённой боковой загрузки. Время развёртывания зависит от "
+                "скорости диска и размера пакета; долгая фаза «Развёртывание» — это нормально.\n"
+                "Некоторые исторические версии приходится скачивать вручную через встроенный браузер; "
+                "доступность и содержимое таких сайтов от нас не зависят. Установка, обновление и удаление "
+                "подчиняются правилам Microsoft Store и Windows; мы не отвечаем за неудачную установку, "
+                "блокировку политиками или остатки после удаления.",
+            ),
+            (
+                "13. Расширения, темы и оформление интерфейса",
+                "Расширения импортируются в формате .zip / .mikan-ext, отображаются в боковой панели и "
+                "работают в изолированном iframe, общаясь с бэкендом только через postMessage. Расширения "
+                "предоставляют третьи авторы, они могут содержать произвольный внешний код; включайте "
+                "только доверенные источники, и мы не несём ответственности за проблемы с данными или "
+                "безопасностью, вызванные расширениями.\n"
+                "Темы, скины и анимированные обои настраиваются: темы и скины хранятся в JSON в "
+                "data/themes на этом компьютере, обои поддерживают MP4 / WebM / GIF / WebP. Большие или "
+                "необычные ресурсы могут замедлить интерфейс или увеличить потребление памяти.\n"
+                "Сила стекла, радиус размытия, скругление углов окна и анимации интерфейса настраиваются "
+                "или отключаются в настройках.",
+            ),
+            (
+                "14. Управление версиями и другие функции",
+                "Разделы папок версий, импорт из PCL / HMCL, пакетный запуск, скрипты запуска, Java-центр, "
+                "центр обучения, галерея скриншотов, отчёты о сбоях, редактор NBT, граф модов и сетевая "
+                "игра работают локально.\n"
+                "«Импорт из других лаунчеров» только регистрирует версии и не копирует и не перемещает "
+                "файлы исходной папки, но импортированные настройки записываются в конфигурацию этого "
+                "лаунчера и могут вести себя иначе, чем в исходном.\n"
+                "Скрипты запуска и пользовательские аргументы JVM выполняют введённые вами команды с "
+                "правами вашей учётной записи; запускайте только доверенное содержимое и принимайте "
+                "последствия.\n"
+                "Серверы, комнаты и веб-страницы, доступные через сетевую игру или встроенный браузер, "
+                "предоставляются третьими сторонами; мы не контролируем их содержимое, доступность и "
+                "безопасность.\n"
+                "Учебные материалы обновляются вместе с релизами и могут отличаться от вашей системы или "
+                "версии игры; используйте их только как руководство.",
             ),
         ],
     },
@@ -552,6 +665,51 @@ _TEXTS: dict[str, dict] = {
                 "Vérifiez la source, la version et la licence avant utilisation ; ignorer cette page "
                 "n'affecte aucune autre fonction du lanceur.",
             ),
+            (
+                "12. Bedrock et paquets du Store",
+                "La page « Bedrock » affiche le catalogue de paquets hors ligne fourni par MCAPPX. Le lanceur "
+                "ne fait qu'afficher et associer des entrées et ne redistribue jamais de paquets de jeu.\n"
+                "L'installation déploie un .appx / .msix signé par Microsoft via l'interface Windows "
+                "Add-AppxPackage et exige que le chargement latéral soit autorisé. La durée dépend du disque "
+                "et de la taille du paquet ; une phase « Déploiement » prolongée est normale.\n"
+                "Certaines versions historiques doivent être téléchargées manuellement via le navigateur "
+                "intégré ; la disponibilité et le contenu de ces sites échappent à notre contrôle. "
+                "L'installation, les mises à jour et la désinstallation suivent les règles du Microsoft Store "
+                "et de Windows ; nous déclinons toute responsabilité en cas d'échec, de blocage par une "
+                "stratégie ou de résidus après désinstallation.",
+            ),
+            (
+                "13. Extensions, thèmes et personnalisation de l'interface",
+                "Les extensions s'importent au format .zip / .mikan-ext, apparaissent dans la barre latérale "
+                "et s'exécutent dans une iframe isolée qui ne communique avec le backend que par postMessage. "
+                "Elles sont fournies par des tiers et peuvent contenir du code front-end arbitraire ; "
+                "n'activez que des sources de confiance et nous n'assumons aucune responsabilité pour les "
+                "problèmes de données ou de sécurité qu'elles causent.\n"
+                "Thèmes, skins et fonds d'écran animés sont personnalisables : thèmes et skins sont stockés "
+                "en JSON dans data/themes sur cette machine, les fonds d'écran acceptent MP4 / WebM / GIF / "
+                "WebP. Des ressources volumineuses ou inhabituelles peuvent ralentir l'interface ou "
+                "augmenter la mémoire utilisée.\n"
+                "L'intensité du verre, le rayon de flou, l'arrondi des coins de fenêtre et les animations "
+                "peuvent être ajustés ou désactivés dans les paramètres.",
+            ),
+            (
+                "14. Gestion des versions et autres fonctions",
+                "Les partitions de dossiers de versions, l'import depuis PCL / HMCL, le lancement par lots, "
+                "les scripts de lancement, le Java Center, le centre de tutoriels, la galerie de captures, "
+                "les rapports de plantage, l'éditeur NBT, le graphe de mods et le multijoueur s'exécutent "
+                "localement.\n"
+                "« Importer depuis d'autres lanceurs » ne fait qu'enregistrer des versions et ne copie ni ne "
+                "déplace aucun fichier du dossier d'origine, mais les réglages importés sont écrits dans la "
+                "configuration de ce lanceur et peuvent se comporter différemment de ceux du lanceur source.\n"
+                "Les scripts de lancement et les arguments JVM personnalisés exécutent les commandes saisies "
+                "avec les privilèges de votre compte ; n'exécutez que du contenu de confiance et assumez les "
+                "conséquences.\n"
+                "Les serveurs, salons et pages web atteints via le multijoueur ou le navigateur intégré sont "
+                "fournis par des tiers ; nous ne contrôlons ni leur contenu, ni leur disponibilité, ni leur "
+                "sécurité.\n"
+                "Les tutoriels évoluent avec les versions et peuvent différer de votre système ou version du "
+                "jeu ; considérez-les comme une aide opérationnelle.",
+            ),
         ],
     },
     "ja_JP": {
@@ -682,6 +840,46 @@ _TEXTS: dict[str, dict] = {
                 "第三者モジュールには各々のオープンソースライセンス（AGPL-3.0 など）が適用されます。"
                 "使用前に提供元・バージョン・ライセンスを確認してください。不要な場合はこのページを"
                 "無視してもランチャーの他の機能には影響しません。",
+            ),
+            (
+                "十二、Bedrock とストアのインストールパッケージ",
+                "「Bedrock」ページは MCAPPX が提供するオフラインインストールパッケージの索引を表示する"
+                "だけで、本ソフトがゲームのパッケージを再配布することはありません。\n"
+                "インストールは Microsoft 署名済みの .appx / .msix を Windows の Add-AppxPackage で"
+                "展開するため、サイドロードが許可されている必要があります。所要時間はディスク性能と"
+                "パッケージサイズに依存し、「展開中」が長時間続くのは正常です。\n"
+                "一部の過去バージョンは内蔵ブラウザから手動でダウンロードする必要があり、"
+                "そのサイトの可用性や内容は本ソフトの管理外です。インストール・更新・アンインストールは"
+                "Microsoft Store と Windows の規則に従い、失敗・ポリシーによるブロック・"
+                "アンインストール後の残存について本ソフトは責任を負いません。",
+            ),
+            (
+                "十三、拡張機能・テーマ・画面のカスタマイズ",
+                "拡張機能は .zip / .mikan-ext を読み込め、有効にするとサイドバーに表示され、"
+                "サンドボックス化された iframe 内で動作して postMessage 経由でのみバックエンドと"
+                "通信します。拡張機能は第三者が提供し、任意のフロントエンドコードを含む可能性があるため、"
+                "信頼できる提供元のみ有効にしてください。拡張機能によるデータやセキュリティの問題について"
+                "本ソフトは責任を負いません。\n"
+                "テーマ・スキン・動く壁紙はカスタマイズ可能です。テーマとスキンは本機の data/themes に"
+                "JSON で保存され、壁紙は MP4 / WebM / GIF / WebP に対応します。大きなファイルや特殊な"
+                "エンコードの素材は画面の重さやメモリ使用量の増加につながることがあります。\n"
+                "すりガラスの強度・ぼかし半径・ウィンドウの角の丸み・画面アニメーションは設定で"
+                "調整または無効化できます。",
+            ),
+            (
+                "十四、バージョン管理とその他の機能",
+                "バージョンフォルダの分割、PCL / HMCL からのインポート、複数バージョンの一括起動、"
+                "起動スクリプト、Java センター、チュートリアルセンター、スクリーンショットギャラリー、"
+                "クラッシュレポート、NBT エディター、Mod グラフ、マルチプレイはすべて本機で動作します。\n"
+                "「他のランチャーからインポート」はバージョンを登録するだけで、元のフォルダのファイルを"
+                "コピーも移動もしませんが、取り込んだ設定は本ランチャーの設定に書き込まれ、"
+                "元のランチャーと動作が異なる場合があります。\n"
+                "起動スクリプトと独自の JVM 引数は、入力したコマンドを現在のユーザー権限で実行します。"
+                "信頼できる内容のみを実行し、結果についてはご自身で負担してください。\n"
+                "マルチプレイや内蔵ブラウザで接続するサーバー・ルーム・Web ページは第三者が提供するもので、"
+                "その内容・可用性・安全性を本ソフトは管理しません。\n"
+                "チュートリアルはリリースに合わせて更新されるため、お使いのシステムやゲームバージョンと"
+                "異なる場合があります。操作の参考としてご利用ください。",
             ),
         ],
     },

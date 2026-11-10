@@ -51,6 +51,7 @@ from ..content import (
 )
 from ..context import AppContext, wait_thread
 from ..net import Cancelled, Candidate, Http
+from ..ui_pack import UiPackError, apply_ui_pack
 from ..version import scan_installed_versions
 from .covers import CoverLoader, make_placeholder
 from .widgets import Badge, Card, page_header
@@ -1121,6 +1122,32 @@ class ContentPage(QWidget):
         )
         layout.addWidget(header)
 
+        # 半透明毛玻璃 UI 材质包：放在内容中心顶部，和资源包/材质包同一入口
+        ui_card = Card(margins=14, spacing=8)
+        ui_row = QHBoxLayout()
+        ui_row.setSpacing(10)
+        ui_title = QLabel("半透明毛玻璃 UI 材质包")
+        ui_title.setStyleSheet("font-weight:600;")
+        ui_row.addWidget(ui_title)
+        ui_hint = QLabel("自动识别版本 · 按钮 / 面板 / 快捷栏磨砂 · 重复执行自动替换旧包")
+        ui_hint.setObjectName("Muted")
+        ui_row.addWidget(ui_hint)
+        ui_row.addStretch(1)
+        self.ui_pack_version = QComboBox()
+        self.ui_pack_version.setEditable(True)
+        self.ui_pack_version.setMinimumWidth(140)
+        ui_row.addWidget(self.ui_pack_version)
+        ui_install_btn = QPushButton("一键安装并替换")
+        ui_install_btn.setObjectName("Primary")
+        ui_install_btn.clicked.connect(self._install_ui_pack)
+        ui_row.addWidget(ui_install_btn)
+        ui_all_btn = QPushButton("全部版本一键替换")
+        ui_all_btn.clicked.connect(self._install_ui_pack_all)
+        ui_row.addWidget(ui_all_btn)
+        ui_card.body.addLayout(ui_row)
+        layout.addWidget(ui_card)
+        self._fill_ui_pack_versions()
+
         self.source_combo = QComboBox()
         for key, label in SOURCE_LABELS.items():
             self.source_combo.addItem(label, key)
@@ -1260,6 +1287,63 @@ class ContentPage(QWidget):
         self.version_combo.currentIndexChanged.connect(lambda _i: self._search(reset=True))
         self.loader_combo.currentIndexChanged.connect(lambda _i: self._search(reset=True))
         return page
+
+    # ------------------------------------------------------------------
+    # 半透明毛玻璃 UI 材质包
+    def _fill_ui_pack_versions(self) -> None:
+        versions: list[str] = []
+        try:
+            versions = [item.id for item in scan_installed_versions(Path(self.ctx.config.game_path))]
+        except OSError:
+            versions = []
+        current = self.ctx.config.default_version_id or ""
+        self.ui_pack_version.blockSignals(True)
+        self.ui_pack_version.clear()
+        for version in versions:
+            self.ui_pack_version.addItem(version)
+        self.ui_pack_version.setCurrentText(
+            current if current in versions else (versions[0] if versions else "")
+        )
+        self.ui_pack_version.blockSignals(False)
+
+    def _install_ui_pack(self) -> None:
+        version = self.ui_pack_version.currentText().strip()
+        if not version:
+            QMessageBox.information(self, APP_NAME, "还没有检测到已安装的游戏版本。")
+            return
+        try:
+            result = apply_ui_pack(self.ctx.config, version, enable=True)
+        except (UiPackError, OSError) as exc:
+            QMessageBox.warning(self, APP_NAME, f"生成 UI 材质包失败：{exc}")
+            return
+        note = "" if result["has_jar"] else "（未找到客户端 jar，只生成了玻璃背景层）"
+        QMessageBox.information(
+            self,
+            APP_NAME,
+            f"已为 {version} 安装 {result['label']} UI 材质包{note}。\n"
+            "重复执行会自动替换旧包。",
+        )
+
+    def _install_ui_pack_all(self) -> None:
+        try:
+            versions = [item.id for item in scan_installed_versions(Path(self.ctx.config.game_path))]
+        except OSError:
+            versions = []
+        if not versions:
+            QMessageBox.information(self, APP_NAME, "还没有检测到已安装的游戏版本。")
+            return
+        done = 0
+        failed: list[str] = []
+        for version in versions:
+            try:
+                apply_ui_pack(self.ctx.config, version, enable=True)
+                done += 1
+            except (UiPackError, OSError):
+                failed.append(version)
+        message = f"已为 {done} 个版本安装 UI 材质包"
+        if failed:
+            message += f"，失败 {len(failed)} 个：{'、'.join(failed)}"
+        QMessageBox.information(self, APP_NAME, message)
 
     def _build_detail_page(self) -> QWidget:
         page = QWidget()

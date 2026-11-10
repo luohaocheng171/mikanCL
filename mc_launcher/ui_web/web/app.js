@@ -308,6 +308,7 @@ function boot() {
     startTaskPolling();
     hydrateAvatar();
     setGlassMode(data.glass_see_through, data.glass_strength);
+    call('window_rect').then((rect) => { if (rect && rect.ok) syncMaximized(rect.maximized); }).catch(() => {});
     applyBackground(data.background_image);
     applyDynamicWallpaper(data.dynamic_wallpaper);
     setTimeout(loadExtensions, 500);
@@ -451,6 +452,7 @@ function renderHome() {
           '<button class="btn small ghost" data-act="go-content">内容中心</button>' +
           '<button class="btn small ghost" data-act="go-download" data-arg="bedrock">基岩版</button>' +
           '<button class="btn small ghost" data-act="open-path" data-arg="instance">打开实例目录</button>' +
+          '<button class="btn small primary" data-act="home-ui-pack" title="为当前选中版本生成并替换半透明毛玻璃 UI 材质包">UI 材质包一键替换</button>' +
         '</div>' +
         '<div class="hero-hint" id="heroHint">' + heroHint(current) + '</div>' +
       '</div>' +
@@ -1418,6 +1420,14 @@ function renderContent() {
   const cats = contentCats || [];
   h('view').innerHTML =
     '<div class="page">' +
+      '<div class="card" style="flex:none;margin-bottom:10px"><div class="card-body" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">' +
+        '<b style="font-size:14px">半透明毛玻璃 UI 材质包</b>' +
+        '<span class="hint">按钮 / 面板 / 快捷栏统一磨砂 · 自动识别版本 · 重复执行自动替换旧包</span>' +
+        '<span class="spacer"></span>' +
+        '<select id="contentUiVersion" style="width:150px"><option value="">选择已安装版本…</option></select>' +
+        '<button class="btn small primary" data-act="content-ui-pack">一键安装并替换</button>' +
+        '<button class="btn small ghost" data-act="content-ui-pack-all">全部版本一键替换</button>' +
+      '</div></div>' +
       '<div class="toolbar">' +
         '<div class="tabs">' + CONTENT_KINDS.map(([id, name]) =>
           '<button class="tab' + (c.kind === id ? ' active' : '') + '" data-act="content-kind" data-arg="' + id + '">' + name + '</button>'
@@ -1453,7 +1463,22 @@ function renderContent() {
     doContentSearch(false);
   });
   if (contentCats === null) loadContentCats().then(() => { if (S.page === 'content') renderContent(); });
+  fillContentUiVersions();
   if (!c.searched && !c.loading) doContentSearch(false);
+}
+
+async function fillContentUiVersions() {
+  const select = h('contentUiVersion');
+  if (!select) return;
+  try {
+    const res = await call('ui_pack_versions');
+    if (!res || !res.ok) return;
+    const list = res.versions || [];
+    select.innerHTML = '<option value="">选择已安装版本…</option>' +
+      list.map((version) => '<option value="' + esc(version) + '">' + esc(version) + '</option>').join('');
+    const preferred = list.includes(S.selectedVersion) ? S.selectedVersion : (list[0] || '');
+    if (preferred) select.value = preferred;
+  } catch (_) { /* 版本列表失败不影响内容搜索 */ }
 }
 function contentTarget() {
   const instance = selectedInstance();
@@ -2085,6 +2110,17 @@ function renderAccount() {
             ).join('') : '<div class="empty">还没有导入过皮肤。点击左侧「导入皮肤」开始。</div>') +
           '</div></div></div>' +
       '</div>' +
+      (feats.skin_pack === false ? '' : '<div class="card" style="flex:none"><div class="card-head"><h2>半透明毛玻璃 UI 材质包</h2><span class="hint">一键安装并替换旧包 · 自动识别版本</span></div>' +
+        '<div class="card-body" style="display:flex;flex-direction:column;gap:10px">' +
+          '<div class="field-row"><span class="hint" style="flex:none">适配版本</span>' +
+            '<select id="uiPackVersion" style="flex:1"><option value="">选择已安装版本…</option></select>' +
+            '<button class="btn small primary" data-act="ui-pack-install">一键安装并替换</button></div>' +
+          '<div class="field-row">' +
+            '<label class="hint" style="display:flex;align-items:center;gap:6px;flex:1"><input type="checkbox" id="uiPackEnable" checked />安装后自动启用（1.6.1+），重复执行自动替换旧包</label>' +
+            '<button class="btn small ghost" data-act="ui-pack-all" title="为全部已安装版本生成">全部版本一键替换</button>' +
+            '<button class="btn small ghost" data-act="ui-pack-export">导出 UI 包…</button></div>' +
+          '<div class="hint">按钮 / 输入框 / 滑块 / 背包与箱子面板 / 快捷栏都会原位改造成半透明磨砂，菜单背景换成无缝玻璃瓦片；1.0–1.5.2 生成纹理包，需在游戏内「材质包」手动选中。</div>' +
+        '</div></div>') +
       (feats.skin_pack === false ? '' : '<div class="card" style="flex:none"><div class="card-head"><h2>皮肤包</h2><span class="hint">分享给其他玩家 · 可指定版本与手臂模型</span></div>' +
         '<div class="card-body" style="display:flex;flex-direction:column;gap:10px">' +
           '<div class="field-row"><input type="text" id="packPlayer" placeholder="目标玩家名（对方游戏内名字）" style="flex:1" />' +
@@ -2140,19 +2176,32 @@ async function hydrateSkins() {
 
 async function loadSkinPackVersions() {
   const select = h('packVersion');
-  if (!select) return;
   try {
     const res = await call('skin_pack_versions');
-    if (!res.ok) return;
-    select.innerHTML = '<option value="">自动 / 不限版本</option>' +
-      (res.versions || []).map((version) => '<option value="' + esc(version) + '">' + esc(version) + '</option>').join('');
-    const target = h('packImportVersion');
-    if (target) {
-      const installed = (res.installed && res.installed.length) ? res.installed : (res.versions || []);
-      target.innerHTML = '<option value="">选择已安装版本…</option>' +
-        installed.map((version) => '<option value="' + esc(version) + '">' + esc(version) + '</option>').join('');
+    if (select && res.ok) {
+      select.innerHTML = '<option value="">自动 / 不限版本</option>' +
+        (res.versions || []).map((version) => '<option value="' + esc(version) + '">' + esc(version) + '</option>').join('');
+      const target = h('packImportVersion');
+      if (target) {
+        const installed = (res.installed && res.installed.length) ? res.installed : (res.versions || []);
+        target.innerHTML = '<option value="">选择已安装版本…</option>' +
+          installed.map((version) => '<option value="' + esc(version) + '">' + esc(version) + '</option>').join('');
+      }
     }
   } catch (_) { /* 版本列表失败不影响其它功能 */ }
+  try {
+    const uiSelect = h('uiPackVersion');
+    if (uiSelect) {
+      const res = await call('ui_pack_versions');
+      if (res.ok) {
+        const list = res.versions || [];
+        uiSelect.innerHTML = '<option value="">选择已安装版本…</option>' +
+          list.map((version) => '<option value="' + esc(version) + '">' + esc(version) + '</option>').join('');
+        const preferred = list.includes(S.selectedVersion) ? S.selectedVersion : (list[0] || '');
+        if (preferred) uiSelect.value = preferred;
+      }
+    }
+  } catch (_) { /* UI 材质包版本列表失败不影响其它功能 */ }
 }
 
 async function loadAccounts() {
@@ -2363,6 +2412,40 @@ ACT['skin-pack-fill'] = async () => {
     !!(h('packEnable') && h('packEnable').checked),
     false);
   toast(res.message || (res.ok ? '已补齐' : '补齐失败'), res.ok ? 'ok' : 'error');
+};
+
+/* ---------- 半透明毛玻璃 UI 材质包 ---------- */
+ACT['home-ui-pack'] = async () => {
+  const version = S.selectedVersion || '';
+  if (!version) return toast('请先选择游戏版本', 'error');
+  const res = await call('ui_pack_install', version, true);
+  toast(res.message, res.ok ? 'ok' : 'error');
+};
+ACT['ui-pack-install'] = async () => {
+  const version = (h('uiPackVersion') && h('uiPackVersion').value) || '';
+  if (!version) return toast('请先选择游戏版本', 'error');
+  const res = await call('ui_pack_install', version, !!(h('uiPackEnable') && h('uiPackEnable').checked));
+  toast(res.message, res.ok ? 'ok' : 'error');
+};
+ACT['ui-pack-all'] = async () => {
+  const res = await call('ui_pack_install_all', !!(h('uiPackEnable') && h('uiPackEnable').checked));
+  toast(res.message, res.ok ? 'ok' : 'error');
+};
+ACT['ui-pack-export'] = async () => {
+  const version = (h('uiPackVersion') && h('uiPackVersion').value) || '';
+  if (!version) return toast('请先选择游戏版本', 'error');
+  const res = await call('ui_pack_export', version);
+  toast(res.message, res.ok ? 'ok' : 'error');
+};
+ACT['content-ui-pack'] = async () => {
+  const version = (h('contentUiVersion') && h('contentUiVersion').value) || '';
+  if (!version) return toast('请先选择游戏版本', 'error');
+  const res = await call('ui_pack_install', version, true);
+  toast(res.message, res.ok ? 'ok' : 'error');
+};
+ACT['content-ui-pack-all'] = async () => {
+  const res = await call('ui_pack_install_all', true);
+  toast(res.message, res.ok ? 'ok' : 'error');
 };
 
 /* ---------- 皮肤工坊（像素画布 + CSS 3D 预览） ---------- */
@@ -3059,6 +3142,24 @@ function toolVersionSelect() {
     (versions.length ? versions.map((v) => '<option value="' + esc(v.id) + '"' + (v.id === current ? ' selected' : '') + '>' + esc(v.id) + '</option>').join('')
       : '<option value="">暂无版本</option>') + '</select>';
 }
+function noiseModeOf(versionId) {
+  const m = /^(\d+)\.(\d+)/.exec(String(versionId || ''));
+  if (!m) return 'modern';
+  const major = Number(m[1]);
+  const minor = Number(m[2]);
+  return (major > 1 || (major === 1 && minor >= 18)) ? 'modern' : 'classic';
+}
+function terrainVersionSelect() {
+  const versions = (S.data && S.data.versions) || [];
+  if (!versions.length) {
+    return '<select id="terrainVersion"><option value="">暂无已安装版本（按最新版噪声）</option></select>';
+  }
+  const current = S.selectedVersion || versions[0].id;
+  return '<select id="terrainVersion">' + versions.map((v) => (
+    '<option value="' + esc(v.id) + '"' + (v.id === current ? ' selected' : '') + '>' +
+    esc(v.id) + ' · ' + (noiseModeOf(v.id) === 'modern' ? '新版噪声' : '经典噪声') + '</option>'
+  )).join('') + '</select>';
+}
 function renderTools() {
   const feats = (S.data && S.data.features) || {};
   const F = (key) => feats[key] !== false;
@@ -3089,10 +3190,10 @@ function renderTools() {
       (F('seed_terrain') ? '<div class="card"><div class="card-head"><h2>种子地形预览</h2><span class="hint">复用原版柏林噪声 · Java 计算</span></div>' +
         '<div class="card-body" style="display:flex;flex-direction:column;gap:10px">' +
           '<div class="field-row"><input type="text" id="terrainSeed" placeholder="种子（留空随机）" style="flex:1" />' +
-          '<select id="terrainMode"><option value="classic">经典（1.7–1.17）</option><option value="modern">新版（1.18+）</option></select>' +
+          terrainVersionSelect() +
           '<select id="terrainSize"><option value="128">128</option><option value="256" selected>256</option><option value="512">512</option></select>' +
           '<button class="btn primary" data-act="terrain-run">生成</button></div>' +
-          '<div id="terrainBox" class="hint">输入种子后生成高度图。生成过程交给 Java 计算，界面不会卡顿。</div>' +
+          '<div id="terrainBox" class="hint">选择已下载的游戏版本后生成高度图：1.18+ 用新版气候噪声，1.7–1.17 用经典 ImprovedNoise；生成交给 Java 计算，界面不会卡顿。</div>' +
         '</div></div>' : '') +
       '<div class="card"><div class="card-head"><h2>NBT 编辑器</h2><div class="head-actions">' +
         '<button class="btn small primary" data-act="nbt-open">打开文件</button></div></div>' +
@@ -3332,7 +3433,8 @@ ACT['terrain-run'] = async () => {
   if (!box) return;
   box.innerHTML = '<div class="loading"><span class="spinner"></span>正在生成高度图…（首次会编译 Java 程序，可能需要多等一会）</div>';
   const res = await call('seed_preview', (h('terrainSeed') && h('terrainSeed').value.trim()) || '',
-    (h('terrainMode') && h('terrainMode').value) || 'classic', Number((h('terrainSize') && h('terrainSize').value) || 256));
+    '', Number((h('terrainSize') && h('terrainSize').value) || 256),
+    (h('terrainVersion') && h('terrainVersion').value) || '');
   if (!res.ok) { box.innerHTML = '<div class="empty">' + esc(res.message) + '</div>'; return; }
   const job = await watchJob(res.job);
   if (job && job.state === 'ok') {
@@ -3522,6 +3624,9 @@ function settingsGeneral(cfg) {
         ((cfg.game_dirs || []).length > 1 ? '<button class="btn small danger" data-act="dir-remove" data-arg="' + A(d.id) + '">移除</button>' : '') +
         '</div></div>').join('')) + '</div>' +
       '<div class="toolbar" style="margin-top:8px"><button class="btn small ghost" data-act="dir-add">添加目录</button></div></div>' +
+    '<div class="section"><h3>从其他启动器导入</h3>' +
+      '<div class="hint" style="margin-bottom:8px">扫描 PCL / HMCL 的配置目录，把已有版本、内存与启动设置一并搬过来；本启动器已存在的版本会自动跳过。</div>' +
+      '<div class="toolbar"><button class="btn small ghost" data-act="import-launcher">扫描并导入…</button></div></div>' +
     '<div class="section"><h3>Java 运行时</h3>' +
       '<div class="list">' + (javas.length ? javas.map((j) =>
         '<div class="row"><div class="row-main"><b>Java ' + esc(String(j.major)) + ' <span class="tag">' + esc(j.vendor || '') + '</span></b>' +
@@ -3535,6 +3640,7 @@ function settingsGeneral(cfg) {
       '<div class="field-row"><input type="range" min="512" max="16384" step="512" value="' + esc(String(cfg.memory_mb)) + '" data-set="memory_mb" data-number="1" data-live="memValue" data-suffix=" MB" style="flex:1" />' +
         '<b class="mono" id="memValue" style="min-width:74px;text-align:right">' + esc(String(cfg.memory_mb)) + ' MB</b></div>' +
       '<div class="hint">建议不超过物理内存的 70%。低配机器推荐 2~4 GB。</div>' +
+      '<div class="toolbar" style="margin-top:8px"><button class="btn small ghost" data-act="mem-auto">按本机配置自动分配</button></div>' +
     '</div>' +
     '<div class="section"><h3>隔离模式</h3><div class="chips">' +
       Object.entries(cfg.isolation_options || {}).map(([key, label]) =>
@@ -3568,6 +3674,44 @@ ACT['set-game-dir'] = async () => {
   const res = await call('set_game_dir', '');
   if (!res.ok) return toast(res.message, 'error');
   await refreshBootstrap(); renderSettings(); toast('游戏目录已更新', 'ok');
+};
+ACT['mem-auto'] = async () => {
+  const res = await call('memory_auto');
+  if (!res.ok) return toast(res.message || '检测失败', 'error');
+  if (S.data) S.data.memory_mb = res.memory;
+  const range = document.querySelector('[data-set="memory_mb"]');
+  if (range) range.value = String(res.memory);
+  const label = h('memValue');
+  if (label) label.textContent = res.memory + ' MB';
+  toast('已按本机配置分配 ' + res.memory + ' MB' + (res.summary ? '（' + res.summary + '）' : ''), 'ok');
+};
+ACT['import-launcher'] = async () => {
+  const res = await call('import_scan', '');
+  if (!res.ok) return toast(res.message || '未识别到配置', 'error');
+  const items = res.versions || [];
+  const body = '<div class="hint">识别为 ' + esc(res.kind) + ' · ' + esc(res.gameDir) + ' · 共 ' + items.length + ' 个版本</div>' +
+    '<div class="list" style="margin-top:8px">' + items.map((v) =>
+      '<label class="row" style="cursor:pointer"><input type="checkbox" class="imp-item" value="' + esc(v.id) + '"' +
+      (v.exists ? ' disabled' : ' checked') + ' />' +
+      '<div class="row-main"><b>' + esc(v.label) + '</b><small class="mono">' + esc(v.id) +
+      (v.exists ? ' · 已存在，跳过' : '') + '</small></div></label>').join('') + '</div>' +
+    '<label class="hint" style="display:block;margin-top:10px"><input type="checkbox" id="impSettings" checked /> 同时导入内存 / JVM / 启动设置</label>' +
+    ((res.warnings || []).length ? '<div class="hint" style="margin-top:6px">' + esc(res.warnings.join('；')) + '</div>' : '');
+  openSheet('从 ' + res.kind + ' 导入版本', body,
+    '<button class="btn ghost" id="sheetCancel">取消</button><button class="btn primary" id="impGo">导入所选</button>');
+  h('impGo').onclick = async () => {
+    const ids = Array.from(document.querySelectorAll('.imp-item:checked')).map((n) => n.value);
+    if (!ids.length) return toast('请至少选择一个版本', 'error');
+    const keep = h('impSettings') ? h('impSettings').checked : true;
+    const out = await call('import_apply', res.path, ids, keep, false);
+    if (!out.ok) return toast(out.message || '导入失败', 'error');
+    closeSheet();
+    const stats = out.stats || {};
+    const imported = (stats.imported || []).length;
+    const skipped = (stats.skipped || []).length;
+    toast('已导入 ' + imported + ' 个版本' + (skipped ? '，跳过 ' + skipped + ' 个' : ''), 'ok');
+    await refreshBootstrap(); renderSettings();
+  };
 };
 function accentPicker(cfg, themes) {
   const current = String(cfg.accent_color || '#65d46e').toLowerCase();
@@ -3631,12 +3775,12 @@ function settingsAppearance(cfg) {
     '<div class="section"><h3>桌面毛玻璃</h3>' +
       sw('glass_see_through', '透视桌面（真·毛玻璃）', '窗口背景真正透明，毛玻璃后面直接显示桌面内容；开启后忽略背景图与动态壁纸，需 Windows 10/11', cfg.glass_see_through) +
       '<div class="field-row" style="margin-top:8px"><label class="hint" style="flex:none">模糊</label>' +
-        '<input type="range" min="0" max="40" step="1" value="' + esc(String(cfg.glass_blur == null ? 20 : cfg.glass_blur)) + '" data-set="glass_blur" data-number="1" data-live="glassBlurValue" data-glass-blur-preview="1" style="flex:1" />' +
+        '<input type="range" min="0" max="64" step="1" value="' + esc(String(cfg.glass_blur == null ? 20 : cfg.glass_blur)) + '" data-set="glass_blur" data-number="1" data-live="glassBlurValue" data-glass-blur-preview="1" style="flex:1" />' +
         '<span class="hint" id="glassBlurValue" style="width:48px;text-align:right">' + esc(String(cfg.glass_blur == null ? 20 : cfg.glass_blur)) + 'px</span></div>' +
       '<div class="field-row" style="margin-top:6px"><label class="hint" style="flex:none">强度</label>' +
         '<input type="range" min="0" max="100" step="1" value="' + esc(String(cfg.glass_strength == null ? 62 : cfg.glass_strength)) + '" data-set="glass_strength" data-number="1" data-live="glassValue" data-glass-preview="1" data-suffix="%" style="flex:1" />' +
         '<span class="hint" id="glassValue" style="width:48px;text-align:right">' + esc(String(cfg.glass_strength == null ? 62 : cfg.glass_strength)) + '%</span></div>' +
-      '<div class="hint" style="margin-top:6px">模糊控制磨砂厚度（0 最通透、40 最厚实），强度控制卡片实心度；两个数值都会直接改变桌面透视的通透感，低配机器建议模糊 12px、强度 40% 左右。</div></div>' +
+      '<div class="hint" style="margin-top:6px">模糊 0 几乎不模糊、64 几乎看不清背景；强度 0 几乎全透明、100 几乎不透明。两者会同时作用在窗口与卡片上，低配机器建议模糊 12px、强度 55% 左右。</div></div>' +
     '<div class="section"><h3>视觉</h3>' +
       sw('glass_effect', '半透明毛玻璃', '主题色会作为淡色叠加在毛玻璃上；低配显卡可关闭以降低渲染开销', cfg.glass_effect) +
       sw('ui_animations', '界面动画', '关闭后可进一步降低低配机器的渲染开销', cfg.ui_animations) + '</div>';
@@ -4090,19 +4234,21 @@ ACT['browser-open'] = async (url) => {
 
 /* ---------- 背景与窗口 ---------- */
 function applyGlassBlur(value) {
-  const b = Math.max(0, Math.min(40, Number(value) || 0));
-  document.documentElement.style.setProperty('--glass-blur', 'blur(' + b + 'px) saturate(' + Math.round(112 + b * 0.2) + '%)');
+  const b = Math.max(0, Math.min(64, Number(value) || 0));
+  document.documentElement.style.setProperty('--glass-blur', 'blur(' + b + 'px) saturate(' + Math.round(100 + b * 0.4) + '%)');
   const label = h('glassBlurValue');
   if (label) label.textContent = Math.round(b) + 'px';
 }
 function applyGlassStrength(value) {
   const s = Math.max(0, Math.min(100, Number(value) || 0));
-  const blur = (S.data && S.data.glass_blur != null) ? S.data.glass_blur : Math.round(8 + s * 0.17);
+  const blur = (S.data && S.data.glass_blur != null) ? S.data.glass_blur : Math.round(8 + s * 0.5);
   applyGlassBlur(blur);
-  const b = Math.max(0, Math.min(40, Number(blur) || 0));
-  // 强度控制卡片实心度；模糊（磨砂厚度）越大卡片也越实，两档都有肉眼可见的变化
-  document.body.style.setProperty('--glass-a', (0.015 + s * 0.0008 + b * 0.0015).toFixed(3));
-  document.body.style.setProperty('--glass-a2', (0.360 + s * 0.0050 + b * 0.0060).toFixed(3));
+  const b = Math.max(0, Math.min(64, Number(blur) || 0));
+  // 覆盖完整区间：都为 0 时卡片几乎全透明，强度拉满时几乎不透明；模糊再补一点实心度
+  const a = Math.min(0.97, 0.02 + s * 0.0092 + b * 0.0008);
+  const a2 = Math.min(0.99, 0.03 + s * 0.0094 + b * 0.0008);
+  document.body.style.setProperty('--glass-a', a.toFixed(3));
+  document.body.style.setProperty('--glass-a2', a2.toFixed(3));
   const label = h('glassValue');
   if (label) label.textContent = Math.round(s) + '%';
 }
@@ -4181,8 +4327,19 @@ document.addEventListener('visibilitychange', () => {
   else _wallpaperEl.play().catch(() => {});
 });
 
+/* 最大化时取消窗口圆角（body.maximized），还原后恢复圆角 */
+function syncMaximized(flag) {
+  document.body.classList.toggle('maximized', !!flag);
+}
+async function toggleMaximized() {
+  try {
+    const result = await call('window_action', 'toggle_max');
+    if (result && result.maximized != null) syncMaximized(result.maximized);
+  } catch (_) { /* 忽略 */ }
+}
+
 h('minBtn').onclick = () => { call('window_action', 'minimize').catch(() => {}); };
-h('maxBtn').onclick = () => { call('window_action', 'toggle_max').catch(() => {}); };
+h('maxBtn').onclick = () => { toggleMaximized(); };
 h('closeBtn').onclick = () => { call('window_action', 'close').catch(() => {}); };
 h('brandBtn').onclick = () => setPage('home');
 h('railAvatar').onclick = () => setPage('account');
@@ -4199,6 +4356,7 @@ h('railAvatar').onclick = () => setPage('account');
       if (!rect || !rect.ok) return;
       if (rect.maximized) {
         await call('window_restore');
+        syncMaximized(false);
         rect = await call('window_rect');
         if (!rect || !rect.ok) return;
       }
@@ -4230,7 +4388,7 @@ h('railAvatar').onclick = () => setPage('account');
   const bar = h('titlebar');
   if (bar) bar.addEventListener('dblclick', (event) => {
     if (event.target.closest('.winbtns, button, input, .task-pill')) return;
-    call('window_action', 'toggle_max').catch(() => {});
+    toggleMaximized();
   });
 })();
 
