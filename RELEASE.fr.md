@@ -1,8 +1,24 @@
-# MikanCL v5.1.0 — Notes de version
+# MikanCL v5.2.0 — Notes de version
 
-[中文](RELEASE.md) · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · [Français](RELEASE.fr.md) · [日本語](RELEASE.ja.md)
+[中文](RELEASE.md) · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · **Français** · [日本語](RELEASE.ja.md)
 
-Date de publication : 2026-11-08
+Date de publication : 2026-11-13
+
+## Nouveautés de la v5.2.0
+
+- **Page « Paramètres de version » autonome dans la version embellie** : reprise complète des 7 onglets de la version classique (Aperçu, Paramètres de jeu, Mods, Packs de ressources, Packs de shaders, Modpacks, Gestion des versions), y compris l'export de script de lancement, le bilan de santé et la réparation par lot, l'export de configuration par lot, les sauvegardes, ainsi que les outils graine de monde / captures / rapports de crash / graphe de mods / dépendances ; les instances et versions se changent en haut
+- **Conversion de format de sauvegarde et import d'anciens mondes** : conversion multithread de 2009 Classic / Indev / Alpha / McRegion → Anvil → version cible, avec remappage des ID de blocs et sauvegarde automatique ; les anciens noms (`server_level.dat`, `*.mine`, un `level.dat` unique dans une archive Classic) sont détectés, convertis et importés en un clic
+- **Choix du paquet Java** : le centre Java prend en charge les installateurs ZIP / MSI / EXE ; la variante ZIP est extraite automatiquement et son dossier `bin` est ajouté au PATH
+- **Guidage des états vides** : sans version sur l'accueil, sans recherche dans le centre de contenu ou sans tâche dans le centre de téléchargement, un bouton « Que faire ensuite » propose un mini-tutoriel et un accès direct au téléchargement d'une version ou à l'installation d'un modpack, au lieu d'un simple « Rien »
+- **Effet de verre réglable** : Paramètres → Apparence ajoute des réglages de luminosité du verre, d'arrondi, de taille des boutons et de couleur du texte, avec réinitialisation en un clic
+- **Glisser-déposer global** : déposez un mod ou un dossier de mods pour choisir la version de destination ; pour un modpack, choisissez « ajouter à une version existante » ou « télécharger d'abord une version vanilla »
+- **Vues « Courant / Avancé » des paramètres** : seuls les paramètres courants sont affichés par défaut, avec un bouton « Tout afficher »
+- **Filet de sécurité** : « Revenir à la dernière configuration démarrable » et export de la configuration JVM / modpack actuelle en extrait `.mikan` partageable
+- **Navigation facilitée** : entrée « Récemment utilisé », suggestions de fonctions associées en bas des pages et palette de commandes `Ctrl+K`
+- **Résumé de lancement plus clair** : après le lancement, le launcher explique les paramètres appliqués automatiquement (G1GC, mémoire, options GC ignorées) au lieu de les cacher dans le journal
+- **Outils de métadonnées de sauvegarde** : éditeur pour le nom du monde, le mode de jeu, la difficulté, la météo, l'heure, le point d'apparition et les règles courantes, ainsi que le réétiquetage du `level.dat` vers une version cible (la conversion complète de format est décrite dans « Conversion de format de sauvegarde et import d'anciens mondes » ci-dessus) ; `level.dat` est sauvegardé automatiquement avant écriture (5 dernières copies conservées)
+- **Test d'adresse multijoueur** : l'adresse générée par Terracotta est testée automatiquement (disponibilité et latence), avec une relance manuelle, dans les deux éditions
+- **Dossiers au choix** : les dossiers de sauvegarde, de téléchargement, d'importation de mondes et d'installation de modpacks sont choisis par l'utilisateur, plus de chemins imposés
 
 ## Correctifs et ajouts de ce cycle (mise à jour corrective)
 
@@ -28,6 +44,7 @@ Date de publication : 2026-11-08
 ## Mode d'empaquetage (ce cycle)
 
 - **exe monofichier** : `python build_exe.py` passe à PyInstaller onefile ; PySide6, pywebview, toolbelt et les ressources front-end sont tous intégrés dans un seul `MikanCL.exe`, un seul fichier suffit à la distribution ; au premier lancement, le runtime est d'abord décompressé, ce qui prend quelques secondes de plus qu'en onedir
+- **Pourquoi PyInstaller (pyi)** : Nuitka n'est pas encore adapté à Python 3.15 et ne peut pas compiler dans cet environnement ; PyInstaller prend déjà en charge Python 3.15, la v5.2.0 est donc empaquetée avec PyInstaller, sans impact sur les fonctionnalités ni le comportement d'exécution
 
 ## Framework d'interface
 
