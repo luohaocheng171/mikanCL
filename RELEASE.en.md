@@ -1,8 +1,23 @@
-# MikanCL v5.3.1 Release Notes
+# MikanCL v5.4.0 Release Notes
 
 [中文](RELEASE.md) · **English** · [Русский](RELEASE.ru.md) · [Français](RELEASE.fr.md) · [日本語](RELEASE.ja.md)
 
 Release date: 2026-11-14
+
+## New in v5.4.0: Save Creator (cross-era deep save editing)
+
+- **New page**: the sidebar gains "Save Creator" with Status, Inventory, Ability, World and Tools tabs that read and write `level.dat`, `playerdata/<UUID>.dat`, `advancements/<UUID>.json`, server `ops.json` and region files directly.
+- **Status**: position, hunger and saturation, health, XP level, game mode, dimension and attributes. "Safe teleport" scans region files for the surface at the target X/Z on save and keeps the original Y with a warning when the chunk is not loaded.
+- **Inventory**: 27+9, armor, offhand and ender chest. "Scan item IDs" reads language files from local version and mod jars, then you can freely set count, damage, enchantments, attribute modifiers (attack damage / armor / movement speed / attack speed / max health) and raw NBT; untouched display names, lore and container contents are preserved.
+- **Ability**: attributes support per-entry modifiers (add / multiply); effects expose ID, amplifier, duration and particle visibility.
+- **World**: time, weather, 11 common game rules (including randomTickSpeed), world border size and center, spawn point.
+- **Tools**: tick individual advancements, edit `ops.json` (levels 0-4), global block replacement, legacy-format conversion entry, list and restore backups.
+- **Cross-era**: saves from `rd-132211` (2009) onward are converted to Anvil first; flattened IDs (1.13+) and item components (1.20.5+) are detected automatically and written with era-correct NBT types; saves that cannot be migrated safely open read-only.
+- **Vanilla caps**: health 1024, enchantment 255, XP level 21863, random tick speed 4000, with no bypass.
+- **Safety**: exclusive `session.lock` check, full forced backup with SHA-256 manifest, transactional writes with rollback; a failed rollback keeps the journal for manual recovery.
+- **All three UIs**: Classic (Qt), Enhanced (pywebview) and Standalone (Electron) share the same `creator_service`.
+- **Agreement**: bumped to 1.10 with player, advancement, OP and chunk editing, type migration, locking and rollback terms.
+- **Trimmed build**: only components actually referenced by the code are shipped — translations are `.qm` only, unreferenced Qt modules (QtSvg / QtDBus / QtOpenGL and others) are excluded, Electron locales keep only zh-CN / en-US, and bytecode uses `--optimize 2`. The single exe is about 328 MB; the Electron bundle is about 149 MB.
 
 ## New and fixed in v5.3.1
 

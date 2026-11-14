@@ -54,11 +54,23 @@ EXCLUDES = [
     "PySide6.QtWebEngineQuick",    "tkinter",
     "unittest",
     "pydoc",
+    # 下面这些模块本项目完全没用到，排除后能少收一批 Qt 插件
+    "PySide6.QtDBus",
+    "PySide6.QtOpenGL",
+    "PySide6.QtOpenGLWidgets",
+    "PySide6.QtSvg",
+    "PySide6.QtSvgWidgets",
+    "PySide6.QtSerialBus",
+    "PySide6.QtTextToSpeech",
+    "PySide6.QtWebSockets",
+    "PySide6.QtNetworkAuth",
+    "PySide6.QtHttpServer",
+    "PySide6.QtSpatialAudio",
 ]
 
-# 运行时资源：翻译、内置数据、浏览器 DLL、美化版前端、插件
+# 运行时资源：内置数据、浏览器 DLL、美化版前端、插件
+# translations 只带编译后的 .qm；.ts 是 Qt Linguist 源文件，运行时不读取
 DATA_DIRS = (
-    ("mc_launcher/translations", "mc_launcher/translations"),
     ("mc_launcher/data", "mc_launcher/data"),
     ("mc_launcher/resources", "mc_launcher/resources"),
     ("mc_launcher/ui_web/web", "mc_launcher/ui_web/web"),
@@ -149,6 +161,8 @@ def main() -> int:
         f"--workpath={BUILD}",
         f"--specpath={BUILD}",
         "--console" if console else "--windowed",
+        "--optimize",
+        "2",
         f"--version-file={_version_file(version)}",
     ]
     for module in EXCLUDES:
@@ -168,6 +182,10 @@ def main() -> int:
         source = ROOT / folder
         if source.is_dir():
             command += ["--add-data", f"{source};{target}"]
+
+    # 翻译只收 .qm（运行时 i18n 只加载 .qm）
+    for qm in sorted((ROOT / "mc_launcher" / "translations").glob("*.qm")):
+        command += ["--add-data", f"{qm};mc_launcher/translations"]
 
     # Electron 独立版内置包：第一次切到独立版时释放到 data/electron/app
     electron_bundle = ROOT / "electron_bundle"

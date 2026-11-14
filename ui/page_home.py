@@ -1,0 +1,3032 @@
+"""主页：账号、启动配置、版本列表与运行日志。"""
+
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import socket
+import threading
+import time
+from datetime import datetime
+from pathlib import Path
+
+from PySide6.QtCore import (
+    QEvent,
+    QPoint,
+    QPropertyAnimation,
+    QRect,
+    QRectF,
+    QSize,
+    QThread,
+    QTimer,
+    Qt,
+    QUrl,
+    Signal,
+)
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QGuiApplication,
+    QIcon,
+    QPainter,
+    QPixmap,
+    QSyntaxHighlighter,
+    QTextCharFormat,
+)
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QFrame,
+    QGraphicsOpacityEffect,
+    QGridLayout,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QMenu,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSlider,
+    QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .. import APP_NAME
+from .. import bedrock
+from ..auth import AuthError, MicrosoftAuth, apply_local_skin, ensure_authlib_injector
+from ..config import DATA_DIR, ISOLATION_LABELS, ServerEntry
+from ..context import AppContext, wait_thread
+from ..i18n import t
+from ..installer import GameInstaller, Progress
+from ..java import pick_java, probe_java
+from ..jvm import jvm_summary, version_jvm_args
+from ..launcher import (
+    LaunchOptions,
+    archive_crash_log,
+    build_launch_plan,
+    crash_hint,
+    has_game_window,
+    post_launch,
+    prepare_isolated_dir,
+    process_cpu_seconds,
+    split_server,
+    start_game,
+    wait_early_exit,
+)
+from ..net import Cancelled, Http
+from ..version import (
+    InstalledVersion,
+    VersionError,
+    load_version,
+    scan_installed_versions,
+    version_category,
+)
+from .covers import CoverLoader
+from .theme import (
+    draw_block_pixel_progress,
+    make_avatar,
+    make_skin_avatar,
+    make_version_pixmap,
+    resolve_account_avatar,
+)
+from .widgets import Badge, Card, page_header
+
+
+def _total_physical_memory_mb() -> int:
+    """读取物理内存总量（MB）；非 Windows 或失败返回 0。"""
+    if os.name != "nt":
+        return 0
+    try:
+        import ctypes
+
+        class _MemoryStatusEx(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        stat = _MemoryStatusEx()
+        stat.dwLength = ctypes.sizeof(_MemoryStatusEx)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+            return int(stat.ullTotalPhys // (1024 * 1024))
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
+
+def _integrated_gpu_name() -> str:
+    """从注册表读取显卡描述；含集成显卡字样（Intel / AMD APU / 集成）时返回名称，否则空串。"""
+    if os.name != "nt":
+        return ""
+    try:
+        import winreg  # type: ignore
+    except ImportError:
+        return ""
+    keywords = ("集成", "intel", "uhd graphics", "iris", "radeon(tm) graphics", "amd radeon graphics")
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Video") as root:
+            count, _, _ = winreg.QueryInfoKey(root)
+            for i in range(count):
+                sub = winreg.EnumKey(root, i)
+                try:
+                    with winreg.OpenKey(root, sub) as key:
+                        try:
+                            name, _ = winreg.QueryValueEx(key, "Device Description")
+                        except OSError:
+                            try:
+                                name, _ = winreg.QueryValueEx(key, "DriverDesc")
+                            except OSError:
+                                continue
+                        lowered = str(name).lower()
+                        if any(k in lowered for k in keywords):
+                            return str(name)
+                except OSError:
+                    continue
+    except OSError:
+        return ""
+    return ""
+
+
+def _scan_mod_conflicts(game_dir: Path) -> list[str]:
+    """防御式调用 content 的 Mod 冲突检测；返回冲突详情列表，空表示无冲突。"""
+    try:
+        from ..content import detect_mod_conflicts, scan_mod_metadata
+    except ImportError:
+        return []
+    mods_dir = Path(game_dir) / "mods"
+    if not mods_dir.is_dir():
+        return []
+    try:
+        metadata = scan_mod_metadata(mods_dir)
+        return [str(c.get("detail") or c.get("modid") or c.get("type") or "") for c in detect_mod_conflicts(metadata)]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _preflight(
+    ctx: AppContext,
+    version_id: str,
+    game_dir: Path,
+    memory_mb: int,
+    log: Callable[[str], None],
+) -> dict:
+    """启动前 checklist 预检。返回 {"blocked": [...], "warnings": [...], "mod_conflicts": [...]}。
+
+    blocked 为红标阻止项（由页面弹框让用户选择是否继续）；warnings 为黄标警告仅提示。
+    """
+    blocked: list[str] = []
+    warnings: list[str] = []
+    log("[预检] 开始启动前检查…")
+
+    # 1) 内存 ≤ 物理内存 70%（仅警告）
+    total_mb = _total_physical_memory_mb()
+    used_mb = int(memory_mb or 0)
+    if total_mb > 0:
+        if used_mb > int(total_mb * 0.7):
+            msg = f"[预检][警告] 分配内存 {used_mb} MB 超过物理内存 70%（共 {total_mb} MB），可能出现内存不足或卡顿。"
+            warnings.append(msg)
+            log(msg)
+        else:
+            log(f"[预检] 内存分配 {used_mb} MB，物理内存 {total_mb} MB（未超 70%）。")
+    else:
+        log("[预检] 无法读取物理内存信息，跳过内存检查。")
+
+    # 2) 磁盘剩余 > 2GB（阻止）
+    try:
+        usage = shutil.disk_usage(game_dir)
+        free_gb = usage.free / (1024**3)
+        if free_gb <= 2.0:
+            msg = f"[预检][阻止] 磁盘剩余空间不足：仅剩 {free_gb:.1f} GB（需大于 2 GB）。"
+            blocked.append(msg)
+            log(msg)
+        else:
+            log(f"[预检] 磁盘剩余 {free_gb:.1f} GB（OK）。")
+    except OSError as exc:
+        log(f"[预检] 无法读取磁盘空间：{exc}")
+
+    # 3) Mods 冲突（阻止）
+    mod_conflicts = _scan_mod_conflicts(game_dir)
+    if mod_conflicts:
+        msg = f"[预检][阻止] 检测到 {len(mod_conflicts)} 个 Mod 冲突：\n" + "\n".join(
+            f"  - {text}" for text in mod_conflicts[:3]
+        )
+        blocked.append(msg)
+        log(msg)
+    else:
+        log("[预检] Mod 冲突检查通过。")
+
+    # 4) 显卡：集成显卡 + 开启光影（仅警告；读不到就跳过）
+    shader_dir = Path(game_dir) / "shaderpacks"
+    has_shaders = shader_dir.is_dir() and any(shader_dir.iterdir())
+    gpu_name = _integrated_gpu_name()
+    if gpu_name and has_shaders:
+        msg = f"[预检][警告] 检测到集成显卡（{gpu_name}）且已启用光影包，游戏性能可能不足。"
+        warnings.append(msg)
+        log(msg)
+    elif gpu_name:
+        log(f"[预检] 显卡：{gpu_name}")
+
+    log(f"[预检] 检查完成：{len(warnings)} 项警告，{len(blocked)} 项阻止。")
+    return {"blocked": blocked, "warnings": warnings, "mod_conflicts": mod_conflicts}
+
+
+# 启动动画下方轮播的随机启动词池（每次启动随机抽取，不重复演示顺序）
+START_TIPS = [
+    "正在唤醒草方块…", "正在给苦力怕充能…", "正在校准红石信号…",
+    "正在加载 42 个 Mod…", "正在和末影人对视…", "正在给钻石剑抛光…",
+    "正在数羊（不是）…", "正在编译下界传送门…", "正在给村民涨价…",
+    "马上就好，真的…", "正在说服僵尸不要敲门…", "正在给史莱姆量体重…",
+    "正在给铁傀儡上发条…", "正在整理物品栏…", "正在给猪灵递金锭…",
+    "正在编译区块…", "正在给末影箱贴标签…", "正在给熔炉添煤…",
+    "正在给附魔台擦灰…", "正在给信标调频…", "正在给海龟修壳…",
+    "正在给恶魂递纸巾…", "正在给凋灵系蝴蝶结…", "正在给羊驼梳毛…",
+    "正在给蝙蝠调音量…", "正在给女巫换扫帚…", "正在给鱿鱼配墨汁…",
+    "正在给兔子计时…", "正在给熊猫找竹子…", "正在给狐狸偷鸡蛋…",
+    "正在给蜜蜂排班…", "正在给青蛙换荷叶…", "正在给蝾螈洗澡…",
+    "正在给监守者戴耳塞…", "正在给悦灵发糖果…", "正在给循声守卫关警报…",
+    "正在给潜影贝叠被子…", "正在给守卫者擦眼镜…", "正在给远古守卫者补牙…",
+    "正在给幻翼定闹钟…", "正在给疣猪兽剪指甲…", "正在给猪灵蛮兵放假…",
+    "正在给烈焰人开空调…", "正在给岩浆怪降温…", "正在给恶魂擦眼泪…",
+    "正在给凋灵骷髅补钙…", "正在给骷髅马钉掌…", "正在给蜘蛛织网…",
+    "正在给洞穴蜘蛛量腿长…", "正在给蠹虫排队…", "正在给末影螨找家…",
+    "正在给潜影贝编程序…", "正在给海豚指路…", "正在给鳕鱼发泳帽…",
+    "正在给鲑鱼分组…", "正在给河豚打气…", "正在给热带鱼调色…",
+    "正在给美西螈换水…", "正在给山羊练嗓…", "正在给铁傀儡充电…",
+    "正在给雪傀儡加雪…", "正在给哞菇挤蘑菇汤…", "正在给棕色哞菇换色…",
+    "正在给马配鞍…", "正在给驴驮货…", "正在给骡子算账…",
+    "正在给羊驼吐口水（不是）…", "正在给猫挠下巴…", "正在给豹猫喂鱼…",
+    "正在给鹦鹉学舌…", "正在给鸡下蛋…", "正在给牛反刍…",
+    "正在给猪打滚…", "正在给羊剪毛…", "正在给兔子跳高…",
+    "正在给狼摇尾巴…", "正在给狐狸骗食物…", "正在给熊猫啃竹子…",
+    "正在给北极熊划水…", "正在给海龟晒背…", "正在给海龟蛋保温…",
+    "正在给鱿鱼喷墨…", "正在给发光鱿鱼开灯…", "正在给蝾螈摆姿势…",
+    "正在给青蛙唱情歌…", "正在给蜜蜂开会…", "正在给铁傀儡系围裙…",
+    "正在给雪傀儡戴帽子…", "正在给村民开班…", "正在给流浪商人牵羊驼…",
+    "正在给卫道士磨斧头…", "正在给唤魔者练咒语…", "正在给幻术师隐身（不是）…",
+    "正在给掠夺者擦弩…", "正在给女巫煮药水…", "正在给岩浆怪切块…",
+    "正在给烈焰人添柴…", "正在给恶魂递纸巾（又是你）…", "正在给僵尸找假发…",
+    "正在给骷髅补钙…", "正在给苦力怕换引信…", "正在给末影人递方块…",
+    "正在给末影龙梳头…", "正在给凋灵递牛奶…", "正在给凋灵骷髅擦剑…",
+    "正在给猪灵换金装…", "正在给猪灵蛮兵换金斧…", "正在给监守者递耳塞（又是你）…",
+    "正在给悦灵发任务…", "正在给潜影贝补壳…", "正在给末影螨找拖鞋…",
+    "正在给蠹虫发工资…", "正在给蜘蛛擦网…", "正在给洞穴蜘蛛补牙…",
+    "正在给骷髅马钉新掌…", "正在给僵尸马喂草…", "正在给鱿鱼发墨水瓶…",
+    "正在给海豚开派对…", "正在给海龟算年龄…", "正在给美西螈叠被子…",
+    "正在给青蛙排节目…", "正在给熊猫找自拍角度…", "正在给蜜蜂修蜂巢…",
+    "正在给铁傀儡补铁…", "正在给雪傀儡补雪…", "正在给羊驼梳毛（又是你）…",
+    "正在给马刷鬃毛…", "正在给驴打包…", "正在给猫挠痒…",
+    "正在给鹦鹉戴帽子…", "正在给鸡配饲料…", "正在给牛挤奶…",
+    "正在给猪加餐…", "正在给羊配铃铛…", "正在给兔子修剪…",
+    "正在给狼配项圈…", "正在给狐狸偷鸡蛋（成功）…", "正在给末地石铺路…",
+    "正在给下界岩降温…", "正在给灵魂沙排队…", "正在给岩浆块加湿…",
+    "正在给黑曜石抛光…", "正在给钻石剑开刃…", "正在给铁剑磨边…",
+    "正在给金剑配鞘…", "正在给木剑打蜡…", "正在给石剑补缝…",
+    "正在给弓上弦…", "正在给弩装弹…", "正在给三叉戟擦锈…",
+    "正在给盾牌刷漆…", "正在给盔甲抛光…", "正在给头盔开孔…",
+    "正在给胸甲系带…", "正在给护腿调松紧…", "正在给靴子钉掌…",
+    "正在给鞘翅补翼…", "正在给烟花填药…", "正在给火箭调轨迹…",
+    "正在给末影珍珠擦亮…", "正在给末影之眼校准…", "正在给附魔书盖章…",
+    "正在给附魔台调频…", "正在给书架排队…", "正在给钻石附魔（不是）…",
+    "正在给经验球称重…", "正在给等级条充电…", "正在给创造模式开锁…",
+    "正在给生存模式递面包…", "正在给极限模式祈祷…", "正在给旁观者模式发眼镜…",
+    "正在给冒险模式发地图…", "正在给和平模式关音效…", "正在给简单模式加面包…",
+    "正在给普通模式调难度…", "正在给困难模式递护甲…", "正在给服务器加端口…",
+    "正在给局域网广播…", "正在给玩家发邀请…", "正在给世界存档备份…",
+    "正在给区块生成地形…", "正在给生物群系调色…", "正在给结构生成器校准…",
+    "正在给战利品表洗牌…", "正在给进度树浇水…", "正在给合成表排序…",
+    "正在给熔炉添煤（又是你）…", "正在给烟熏炉换木炭…", "正在给高炉加热…",
+    "正在给营火加柴…", "正在给信标充能…", "正在给潮涌核心找海洋…",
+    "正在给哭泣的黑曜石擦眼泪…", "正在给重生锚充能…", "正在给磁石定位…",
+    "正在给地图标记路径点…", "正在给指南针校准…", "正在给时钟上发条…",
+    "正在给望远镜擦镜片…", "正在给钓鱼竿挂鱼饵…", "正在给桶装水…",
+    "正在给桶装岩浆…", "正在给桶装牛奶…", "正在给桶装鱼（不是）…",
+    "正在给末影箱贴标签（又是你）…", "正在给潜影盒叠放…", "正在给潜影壳抛光…",
+    "正在给箱子分类…", "正在给漏斗对齐…", "正在给投掷器装货…",
+    "正在给发射器上膛…", "正在给活塞调行程…", "正在给粘性活塞涂胶…",
+    "正在给观察者开眼…", "正在给侦测器装电池…", "正在给红石粉通电…",
+    "正在给红石火把点火…", "正在给中继器调延迟…", "正在给比较器称重…",
+    "正在给阳光传感器晒太阳…", "正在给铁轨铺路…", "正在给矿车装轮…",
+    "正在给船装桨…", "正在给漏斗矿车装货…", "正在给TNT拆引线（不是）…",
+    "正在给末地传送门摆方块…", "正在给下界传送门调色…", "正在给远古城市关警报…",
+    "正在给海底神殿换水…", "正在给林地府邸贴墙纸…", "正在给沙漠神殿扫沙…",
+    "正在给丛林神庙擦藤蔓…", "正在给要塞铺砖…", "正在给矿井装灯…",
+    "正在给村庄修路…", "正在给掠夺者塔调角度…", "正在给海底废墟整理…",
+    "正在给沉船排水…", "正在给宝藏填箱…", "正在给废弃矿井通风…",
+    "正在给雪屋开暖气…", "正在给女巫小屋换锅…", "正在给冰屋补冰…",
+    "正在给沙漠水井打水…", "马上就好，真的（第 N 次）…",
+    "正在给苦力怕贴创可贴…", "正在给村民发工作牌…", "正在给末影龙修翅膀…",
+    "正在给岩浆怪找一个不烫的家…", "正在给史莱姆解释什么是重力…",
+    "正在给骷髅借一副弓…", "正在给羊驼讲冷笑话…", "正在给北极熊开泳池…",
+    "正在给恶魂量血压…", "正在给幻翼发夜班费…",
+]
+
+
+class StartAnimationWidget(QWidget):
+    """启动游戏时覆盖在主页上的半透明遮罩，像素草方块按进度逐格填充。"""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.setAutoFillBackground(False)
+        self._progress = 0.0
+        self._stage = ""
+        self._tip = ""
+        self._fade_anim: QPropertyAnimation | None = None
+        self._effect = QGraphicsOpacityEffect(self)
+        self._effect.setOpacity(0.0)
+        self.setGraphicsEffect(self._effect)
+        self._effect.setEnabled(False)
+        self.hide()
+
+    # ------------------------------------------------------------------
+    def start(self) -> None:
+        """开始显示：每次启动随机抽一条启动词并固定显示，不再轮播。"""
+        self._progress = 0.0
+        self._stage = ""
+        self._tip = self._pick_tip()
+        self._effect.setEnabled(True)
+        self._effect.setOpacity(0.0)
+        self.show()
+        self.raise_()
+        self._animate_fade(1.0, 300)
+        self.update()
+
+    def set_progress(self, percent: float, stage: str = "") -> None:
+        self._progress = max(0.0, min(1.0, float(percent)))
+        if stage:
+            self._stage = stage
+        self.update()
+
+    def finish(self) -> None:
+        if not self.isVisible():
+            return
+        self._progress = 1.0
+        self.update()
+        self._animate_fade(0.0, 400, on_finished=self._on_faded_out)
+
+    def _on_faded_out(self) -> None:
+        self.hide()
+        self._effect.setEnabled(False)
+
+    def _pick_tip(self) -> str:
+        import random
+
+        return random.choice(START_TIPS)
+
+    def _animate_fade(self, target: float, duration: int, on_finished=None) -> None:
+        if self._fade_anim is not None:
+            self._fade_anim.stop()
+        anim = QPropertyAnimation(self._effect, b"opacity", self)
+        anim.setDuration(duration)
+        anim.setStartValue(self._effect.opacity())
+        anim.setEndValue(target)
+        if on_finished is not None:
+            anim.finished.connect(on_finished)
+        anim.start()
+        self._fade_anim = anim
+
+    # ------------------------------------------------------------------
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        painter.fillRect(self.rect(), QColor(12, 19, 16, 220))
+
+        block_size = 256
+        x = (self.width() - block_size) // 2
+        y = (self.height() - block_size) // 2 - 60
+        if y < 16:
+            y = 16
+        painter.save()
+        painter.translate(x, y)
+        draw_block_pixel_progress(painter, block_size, self._progress)
+        painter.restore()
+
+        # 进度百分比
+        font = painter.font()
+        font.setPointSize(14)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QColor("#8fe89b"))
+        painter.drawText(
+            QRect(x, y + block_size + 20, block_size, 30),
+            Qt.AlignCenter,
+            f"{int(self._progress * 100)}%",
+        )
+
+        # 阶段文字
+        font.setPointSize(11)
+        font.setBold(False)
+        painter.setFont(font)
+        painter.setPen(QColor("#b3c8b9"))
+        painter.drawText(
+            QRect(x, y + block_size + 55, block_size, 24),
+            Qt.AlignCenter,
+            self._stage,
+        )
+
+        # 随机启动词
+        font.setPointSize(10)
+        painter.setFont(font)
+        painter.setPen(QColor("#8aa192"))
+        painter.drawText(
+            QRect(x - 140, y + block_size + 90, block_size + 280, 24),
+            Qt.AlignCenter,
+            self._tip,
+        )
+        painter.end()
+
+
+class VersionRow(QFrame):
+    selected = Signal(str)
+    activated = Signal(str)
+    settings_requested = Signal(str)
+    # 拖拽排序：鼠标移动时报告版本 id 与全局坐标，松手时通知页面持久化顺序
+    drag_moved = Signal(str, QPoint)
+    drag_released = Signal()
+
+    def __init__(
+        self,
+        version: InstalledVersion,
+        ctx: AppContext | None = None,
+        game_dir: str = "",
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.version = version
+        self.ctx = ctx
+        self.game_dir = game_dir
+        self._drag_origin: QPoint | None = None
+        self._dragging = False
+        self.setObjectName("VersionRow")
+        self.setProperty("selected", False)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(72)
+        self.setToolTip(str(version.path))
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 10, 12, 10)
+        layout.setSpacing(10)
+
+        icon_label = QLabel()
+        icon_label.setPixmap(
+            make_version_pixmap(
+                version_category(version.base_version or version.id, version.type), 32
+            )
+        )
+        icon_label.setFixedSize(32, 32)
+        layout.addWidget(icon_label)
+
+        texts = QVBoxLayout()
+        texts.setSpacing(4)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        name_label = QLabel(version.id)
+        name_label.setStyleSheet("font-size: 14px; font-weight: 600; color: #e6f1e9;")
+        title_row.addWidget(name_label)
+
+        loader_badge = Badge(version.loader, _loader_kind(version.loader))
+        title_row.addWidget(loader_badge)
+        if version.error:
+            broken = Badge(t("HomePage", "损坏"), "orange")
+            broken.setToolTip(version.error)
+            title_row.addWidget(broken)
+        title_row.addStretch(1)
+        texts.addLayout(title_row)
+
+        date = (
+            datetime.fromtimestamp(version.modified).strftime("%Y-%m-%d %H:%M")
+            if version.modified
+            else t("HomePage", "未知时间")
+        )
+        meta_text = f"{version.display_type} · {date}"
+        if version.base_version:
+            meta_text += t("HomePage", "· 基于 {0}", version.base_version)
+        meta = QLabel(meta_text)
+        meta.setObjectName("Tiny")
+        texts.addWidget(meta)
+        layout.addLayout(texts, 1)
+
+        launch_button = QPushButton(t("HomePage", "启动"))
+        launch_button.setFixedWidth(66)
+        launch_button.setEnabled(not version.error)
+        launch_button.clicked.connect(lambda: self.activated.emit(self.version.id))
+        layout.addWidget(launch_button)
+
+    def set_selected(self, value: bool) -> None:
+        self.setProperty("selected", value)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag_origin = event.globalPosition().toPoint()
+            self.selected.emit(self.version.id)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_origin is None or not (event.buttons() & Qt.LeftButton):
+            return super().mouseMoveEvent(event)
+        point = event.globalPosition().toPoint()
+        if not self._dragging:
+            # 超过系统拖拽阈值才进入拖拽，避免普通点击被误判成拖动
+            if (point - self._drag_origin).manhattanLength() < QApplication.startDragDistance():
+                return super().mouseMoveEvent(event)
+            self._dragging = True
+            self.setCursor(Qt.ClosedHandCursor)
+            self.setProperty("dragging", True)
+            self.style().unpolish(self)
+            self.style().polish(self)
+        self.drag_moved.emit(self.version.id, point)
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._dragging:
+            self._dragging = False
+            self._drag_origin = None
+            self.setCursor(Qt.PointingHandCursor)
+            self.setProperty("dragging", False)
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.drag_released.emit()
+            event.accept()
+            return
+        self._drag_origin = None
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and not self.version.error:
+            self.activated.emit(self.version.id)
+        super().mouseDoubleClickEvent(event)
+
+    # ------------------------------------------------------------------
+    def _mods_dir(self) -> Path:
+        root = Path(self.game_dir or (self.ctx.config.game_path if self.ctx else "."))
+        mode = self.ctx.config.isolation_for(self.version.id) if self.ctx else "none"
+        if mode in ("mods", "all"):
+            return root / "versions" / self.version.id / "game" / "mods"
+        return root / "mods"
+
+    def contextMenuEvent(self, event) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        launch = menu.addAction("启动游戏")
+        launch.setEnabled(not self.version.error)
+        launch.triggered.connect(lambda: self.activated.emit(self.version.id))
+        menu.addSeparator()
+        open_version = menu.addAction("打开版本文件夹")
+        open_version.triggered.connect(self._open_version_dir)
+        open_mods = menu.addAction("打开模组目录")
+        open_mods.triggered.connect(self._open_mods_dir)
+        settings = menu.addAction("编辑版本设置")
+        settings.triggered.connect(lambda: self.settings_requested.emit(self.version.id))
+        copy_id = menu.addAction("复制版本 ID")
+        copy_id.triggered.connect(
+            lambda: QGuiApplication.clipboard().setText(self.version.id)
+        )
+        menu.addSeparator()
+        remove = menu.addAction("删除此版本")
+        remove.triggered.connect(self._delete_version)
+        menu.exec(event.globalPos())
+
+    def _open_version_dir(self) -> None:
+        folder = Path(self.version.path).parent
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def _open_mods_dir(self) -> None:
+        folder = self._mods_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def _delete_version(self) -> None:
+        if QMessageBox.question(
+            self,
+            APP_NAME,
+            f"确定删除版本「{self.version.id}」吗？\n版本目录会一并删除，且不可恢复。",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        ) != QMessageBox.Yes:
+            return
+        folder = Path(self.version.path).parent
+        try:
+            shutil.rmtree(folder)
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, f"删除失败：{exc}")
+            return
+        if self.ctx is not None:
+            self.ctx.bus.versions_changed.emit()
+            self.ctx.bus.toast.emit(f"已删除版本 {self.version.id}")
+
+
+BEDROCK_ID = "__bedrock__"
+
+
+class BedrockRow(QFrame):
+    """版本列表中的基岩版条目：与 Java 版一起管理，并标注「基岩版」。"""
+
+    selected = Signal()
+    activated = Signal()
+
+    def __init__(self, info: dict, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.info = dict(info or {})
+        self.setObjectName("VersionRow")
+        self.setProperty("selected", False)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(72)
+        version = str(self.info.get("Version") or "")
+        family = str(self.info.get("PackageFamilyName") or "")
+        self.setToolTip(f"Microsoft.MinecraftUWP {version}\n{family}")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 10, 12, 10)
+        layout.setSpacing(10)
+
+        icon_label = QLabel()
+        icon_label.setPixmap(make_version_pixmap("release", 32))
+        icon_label.setFixedSize(32, 32)
+        layout.addWidget(icon_label)
+
+        texts = QVBoxLayout()
+        texts.setSpacing(4)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        name_label = QLabel(t("HomePage", "基岩版 {0}", version))
+        name_label.setStyleSheet("font-size: 14px; font-weight: 600; color: #e6f1e9;")
+        title_row.addWidget(name_label)
+        title_row.addWidget(Badge(t("HomePage", "基岩版"), "green"))
+        title_row.addStretch(1)
+        texts.addLayout(title_row)
+        meta = QLabel(t("HomePage", "微软商店安装包 · Appx 版"))
+        meta.setObjectName("Tiny")
+        texts.addWidget(meta)
+        layout.addLayout(texts, 1)
+
+        launch_button = QPushButton(t("HomePage", "启动"))
+        launch_button.setFixedWidth(66)
+        launch_button.clicked.connect(self.activated.emit)
+        layout.addWidget(launch_button)
+
+    def set_selected(self, value: bool) -> None:
+        self.setProperty("selected", value)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self.selected.emit()
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self.activated.emit()
+        super().mouseDoubleClickEvent(event)
+
+
+class BedrockProbeWorker(QThread):
+    """后台查询已安装的基岩版（PowerShell 约 1.6s，放到线程里避免卡界面）。"""
+
+    done = Signal(object)
+
+    def run(self) -> None:
+        try:
+            self.done.emit(bedrock.installed_package())
+        except Exception:  # noqa: BLE001 - 查询失败按未安装处理
+            self.done.emit(None)
+
+
+class BedrockLaunchWorker(QThread):
+    """后台启动基岩版，避免 shell 调用阻塞界面。"""
+
+    done = Signal(bool, str)
+
+    def run(self) -> None:
+        try:
+            ok, message = bedrock.launch_installed()
+        except Exception as exc:  # noqa: BLE001
+            ok, message = False, str(exc)
+        self.done.emit(ok, message)
+
+
+def _loader_kind(loader: str) -> str:
+    return {
+        "原版": "gray",
+        "Forge": "orange",
+        "NeoForge": "green",
+        "Fabric": "blue",
+        "Quilt": "orange",
+        "OptiFine": "blue",
+        "损坏": "orange",
+    }.get(loader, "gray")
+
+
+class ServerPingWorker(QThread):
+    """按 Minecraft Server List Ping 协议读取延迟、MOTD、图标与在线人数。"""
+
+    result = Signal(str, object)
+
+    def __init__(self, servers: list[ServerEntry], parent=None):
+        super().__init__(parent)
+        self.servers = list(servers)
+
+    def run(self) -> None:
+        from ..serverping import ping_server
+
+        for entry in self.servers:
+            self.result.emit(entry.id, ping_server(entry.host, int(entry.port), 4.0))
+
+
+class ServerDialog(QDialog):
+    """服务器库：添加、删除与延迟测试。"""
+
+    def __init__(self, ctx: AppContext, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.ctx = ctx
+        self._ping_worker: ServerPingWorker | None = None
+        self._icons: dict[str, QIcon] = {}
+        self.setWindowTitle(t("HomePage", "服务器列表"))
+        self.resize(780, 460)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(
+            [
+                t("HomePage", "名称"),
+                t("HomePage", "地址"),
+                t("HomePage", "状态"),
+                t("HomePage", "在线"),
+                t("HomePage", "MOTD / 版本"),
+            ]
+        )
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setColumnWidth(0, 160)
+        self.table.setColumnWidth(1, 190)
+        self.table.setColumnWidth(2, 110)
+        self.table.setColumnWidth(3, 80)
+        self.table.setIconSize(QSize(32, 32))
+        self.table.verticalHeader().setDefaultSectionSize(42)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        layout.addWidget(self.table, 1)
+
+        form = QHBoxLayout()
+        form.setSpacing(8)
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText(t("HomePage", "名称（可留空）"))
+        self.host_edit = QLineEdit()
+        self.host_edit.setPlaceholderText(t("HomePage", "服务器地址，例如 play.example.com"))
+        self.port_spin = QSpinBox()
+        self.port_spin.setRange(1, 65535)
+        self.port_spin.setValue(25565)
+        add_button = QPushButton(t("HomePage", "添加"))
+        add_button.setObjectName("Primary")
+        add_button.clicked.connect(self._add_server)
+        form.addWidget(self.name_edit)
+        form.addWidget(self.host_edit, 1)
+        form.addWidget(self.port_spin)
+        form.addWidget(add_button)
+        layout.addLayout(form)
+
+        buttons = QHBoxLayout()
+        ping_button = QPushButton(t("HomePage", "测试延迟"))
+        ping_button.clicked.connect(self._ping_all)
+        remove_button = QPushButton(t("HomePage", "删除选中"))
+        remove_button.setObjectName("Danger")
+        remove_button.clicked.connect(self._remove_selected)
+        close_button = QPushButton(t("HomePage", "关闭"))
+        close_button.clicked.connect(self.accept)
+        buttons.addWidget(ping_button)
+        buttons.addWidget(remove_button)
+        buttons.addStretch(1)
+        buttons.addWidget(close_button)
+        layout.addLayout(buttons)
+
+        self._reload()
+
+    def _reload(self) -> None:
+        entries = self.ctx.config.servers
+        self.table.setRowCount(len(entries))
+        for row, entry in enumerate(entries):
+            name_item = QTableWidgetItem(entry.name)
+            name_item.setData(Qt.UserRole, entry.id)
+            if entry.id in self._icons:
+                name_item.setIcon(self._icons[entry.id])
+            name_item.setToolTip(entry.note or entry.name)
+            self.table.setItem(row, 0, name_item)
+            self.table.setItem(row, 1, QTableWidgetItem(f"{entry.host}:{entry.port}"))
+            self.table.setItem(row, 2, QTableWidgetItem("未测试"))
+            self.table.setItem(row, 3, QTableWidgetItem("—"))
+            self.table.setItem(row, 4, QTableWidgetItem(entry.note))
+
+    def _add_server(self) -> None:
+        host = self.host_edit.text().strip()
+        if not host:
+            QMessageBox.information(self, APP_NAME, "请输入服务器地址。")
+            return
+        parsed_host, parsed_port = split_server(host, self.port_spin.value())
+        for entry in self.ctx.config.servers:
+            if entry.host.lower() == parsed_host.lower() and int(entry.port) == int(parsed_port):
+                QMessageBox.information(self, APP_NAME, "该服务器已在列表中。")
+                return
+        self.ctx.config.add_server(
+            self.name_edit.text().strip() or parsed_host, parsed_host, parsed_port
+        )
+        self.name_edit.clear()
+        self.host_edit.clear()
+        self._reload()
+        self.ctx.bus.config_changed.emit()
+
+    def _remove_selected(self) -> None:
+        row = self.table.currentRow()
+        if row < 0:
+            return
+        item = self.table.item(row, 0)
+        server_id = item.data(Qt.UserRole) if item else ""
+        if self.ctx.config.remove_server(str(server_id)):
+            self._reload()
+            self.ctx.bus.config_changed.emit()
+
+    def _ping_all(self) -> None:
+        if self._ping_worker is not None and self._ping_worker.isRunning():
+            return
+        entries = list(self.ctx.config.servers)
+        if not entries:
+            return
+        for row in range(self.table.rowCount()):
+            self.table.setItem(row, 2, QTableWidgetItem("测试中…"))
+        self._ping_worker = ServerPingWorker(entries, self)
+        self._ping_worker.result.connect(self._on_ping_result)
+        self._ping_worker.finished.connect(self._on_ping_done)
+        self._ping_worker.start()
+
+    def _on_ping_result(self, server_id: str, result) -> None:
+        latency = getattr(result, "latency", -1)
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item is None or item.data(Qt.UserRole) != server_id:
+                continue
+            if latency >= 0 and getattr(result, "online", False):
+                status = f"{latency} ms"
+            elif latency >= 0:
+                status = f"{latency} ms · 仅端口"
+            else:
+                status = t("HomePage", "无法连接")
+            self.table.setItem(row, 2, QTableWidgetItem(status))
+            self.table.setItem(
+                row, 3, QTableWidgetItem(getattr(result, "players_text", "") or "—")
+            )
+            motd = getattr(result, "motd", "") or getattr(result, "error", "")
+            version = getattr(result, "version", "")
+            detail = f"{motd} · {version}" if version else motd
+            motd_item = QTableWidgetItem(detail)
+            motd_item.setToolTip(detail)
+            self.table.setItem(row, 4, motd_item)
+            icon_png = getattr(result, "icon_png", b"")
+            if icon_png:
+                pixmap = QPixmap()
+                if pixmap.loadFromData(icon_png, "PNG"):
+                    icon = QIcon(pixmap)
+                    self._icons[server_id] = icon
+                    item.setIcon(icon)
+            break
+
+    def _on_ping_done(self) -> None:
+        worker, self._ping_worker = self._ping_worker, None
+        if worker is not None:
+            worker.deleteLater()
+
+    def shutdown(self) -> None:
+        wait_thread(self._ping_worker)
+        self._ping_worker = None
+
+
+class LaunchWorker(QThread):
+    progress = Signal(object)
+    log = Signal(str)
+    started = Signal(object)
+    failed = Signal(str)
+    stalled = Signal(str)  # 启动看门狗：进程存活但迟迟没有窗口
+    preflight_blocked = Signal(list)  # 预检阻止项列表，由页面弹框决定是否继续
+
+    def __init__(
+        self,
+        ctx: AppContext,
+        version_id: str,
+        player_name: str,
+        java,
+        memory_mb: int,
+        width: int,
+        height: int,
+        extra_jvm_args: str,
+        extra_game_args: str = "",
+        game_dir: Path | None = None,
+        account=None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.ctx = ctx
+        self.version_id = version_id
+        self.player_name = player_name
+        self.java = java
+        self.memory_mb = memory_mb
+        self.width = width
+        self.height = height
+        self.extra_jvm_args = extra_jvm_args
+        self.extra_game_args = extra_game_args
+        self.game_dir = game_dir
+        self.account = account
+        self.cancel_event = threading.Event()
+        # 预检阻塞项等待用户确认：事件与结果在构造时声明，避免运行时临时挂属性
+        self._preflight_wait = threading.Event()
+        self._preflight_continue = False
+        self.installer: GameInstaller | None = None
+        self.session = None
+
+    def run(self) -> None:  # noqa: D401
+        # ---- 启动前 checklist 预检：日志输出全部检查项；阻止项由页面弹框决定 ----
+        root_dir = Path(self.game_dir or self.ctx.config.game_path)
+        preflight = _preflight(
+            self.ctx, self.version_id, root_dir, int(self.memory_mb), self.log.emit
+        )
+        if preflight["blocked"]:
+            self._preflight_wait.clear()
+            self._preflight_continue = False
+            self.preflight_blocked.emit(preflight["blocked"])
+            if not self._preflight_wait.wait(120):
+                self.log.emit("[预检] 等待用户确认超时，已中止启动。")
+                return
+            if not self._preflight_continue:
+                return
+        try:
+            cfg = self.ctx.config
+            root_dir = Path(self.game_dir or cfg.game_path)
+            setting = cfg.version_setting(self.version_id)
+            isolation = cfg.isolation_for(self.version_id)
+            game_dir = prepare_isolated_dir(root_dir, self.version_id, isolation)
+            if isolation != "none":
+                self.log.emit(f"[隔离] 模式：{ISOLATION_LABELS.get(isolation, isolation)} → {game_dir}")
+            if cfg.auto_backup_saves:
+                try:
+                    from ..saves import auto_backup_saves
+
+                    auto_backup_saves(
+                        game_dir,
+                        cfg.backup_root,
+                        self.version_id,
+                        log=self.log.emit,
+                    )
+                except Exception as exc:  # noqa: BLE001 - 备份失败不应阻塞启动
+                    self.log.emit(f"[备份] 启动前自动备份失败：{exc}")
+            account = self.account
+            authlib_jar = ""
+            auth_server = ""
+            uuid = ""
+            access_token = ""
+            user_type = "legacy"
+            if account is not None:
+                self.player_name = account.name
+                uuid = account.uuid
+                access_token = account.access_token
+                if account.type == "microsoft":
+                    user_type = "msa"
+                    if account.token_expired and account.refresh_token:
+                        self.log.emit("[登录] 微软令牌已过期，正在自动刷新…")
+                        try:
+                            fresh = MicrosoftAuth(
+                                self.ctx.config.microsoft_client_id
+                            ).refresh(account, log=self.log.emit)
+                            self.ctx.accounts.update(fresh)
+                            account = fresh
+                            self.account = fresh
+                            uuid = fresh.uuid
+                            access_token = fresh.access_token
+                            self.ctx.bus.accounts_changed.emit()
+                            self.log.emit("[登录] 令牌刷新完成。")
+                        except AuthError as exc:
+                            self.log.emit(f"[登录] {exc}")
+                            raise AuthError(
+                                f"{exc}\n请到账号页重新登录微软账号后再启动。"
+                            ) from exc
+                    elif not account.access_token:
+                        raise AuthError("当前微软账号尚未登录，请到账号页完成登录。")
+                elif account.type == "authlib":
+                    auth_server = account.auth_server
+                    try:
+                        authlib_jar = str(
+                            ensure_authlib_injector(self.ctx.config, log=self.log.emit)
+                        )
+                    except AuthError as exc:
+                        self.log.emit(f"[外置登录] {exc}")
+                        raise
+                if account.type == "offline" and not access_token:
+                    access_token = ""
+                    uuid = account.uuid
+
+            self.installer = GameInstaller(
+                self.ctx.config,
+                self.ctx.sources,
+                progress_cb=self.progress.emit,
+                log_cb=self.log.emit,
+                cancel=self.cancel_event,
+            )
+            self.installer.config = self.ctx.config.with_game_dir(root_dir)
+            merged = self.installer.ensure_version(self.version_id)
+            if setting.auto_connect and setting.server.strip():
+                server, port = split_server(setting.server, int(setting.port or 25565))
+            elif cfg.active_server() is not None:
+                active = cfg.active_server()
+                server, port = split_server(active.host, int(active.port or 25565))
+            else:
+                server, port = split_server(
+                    cfg.auto_connect_server if cfg.auto_connect_enabled else "",
+                    int(cfg.auto_connect_port or 25565),
+                )
+            extra_jvm = " ".join(
+                part for part in (self.extra_jvm_args, setting.extra_jvm_args) if part.strip()
+            )
+            extra_game = " ".join(
+                part for part in (self.extra_game_args, setting.extra_game_args) if part.strip()
+            )
+            memory = int(setting.memory_mb) if setting.memory_mb else int(self.memory_mb)
+            window_title = (setting.window_title or cfg.window_title or "").strip()
+            priority = setting.priority or cfg.process_priority or "normal"
+            proxy = cfg.effective_proxy if cfg.proxy_jvm else ""
+            if account is not None and account.type == "offline":
+                try:
+                    applied = apply_local_skin(account, game_dir, self.version_id)
+                    if applied:
+                        self.log.emit(f"[皮肤] 已应用离线皮肤并生成 {self.version_id} 兜底皮肤包：{applied}")
+                except Exception as exc:  # noqa: BLE001
+                    self.log.emit(f"[皮肤] 离线皮肤应用失败：{exc}")
+            plan = build_launch_plan(
+                LaunchOptions(
+                    version=merged,
+                    game_dir=game_dir,
+                    root_dir=root_dir,
+                    player_name=self.player_name,
+                    java=self.java,
+                    memory_mb=memory,
+                    smart_jvm=bool(cfg.smart_jvm),
+                    pre_touch=bool(cfg.opt_pre_touch),
+                    fixed_heap=bool(cfg.opt_fixed_heap),
+                    width=self.width,
+                    height=self.height,
+                    extra_jvm_args=extra_jvm,
+                    extra_game_args=extra_game,
+                    uuid=uuid,
+                    access_token=access_token,
+                    user_type=user_type,
+                    authlib_jar=authlib_jar,
+                    auth_server=auth_server,
+                    auto_connect=bool(server),
+                    server=server,
+                    server_port=port,
+                    proxy_url=proxy,
+                    window_title=window_title,
+                    priority=priority,
+                    offline=(account is None or account.type == "offline"),
+                )
+            )
+            for warning in plan.warnings:
+                self.log.emit(f"[提示] {warning}")
+            self.log.emit(f"[启动] Java：{self.java.path}")
+            if cfg.smart_jvm:
+                self.log.emit(
+                    f"[启动] 智能 JVM："
+                    f"{jvm_summary(self.java.major, memory, merged.id, extra_jvm)}"
+                )
+            compat = version_jvm_args(merged.id, self.java.major, extra_jvm)
+            if compat:
+                self.log.emit(f"[启动] 版本兼容参数：{' '.join(compat)}")
+            self.log.emit(f"[启动] 日志文件：{plan.log_path}")
+            session = start_game(plan, on_line=self.log.emit)
+            post_launch(session.process, priority=priority, title=window_title)
+            self.session = session
+            early, tail = wait_early_exit(session)
+            if early:
+                self.failed.emit(crash_hint(session.process.returncode or -1, tail))
+                return
+            self.started.emit(session)
+            # QThread 到此结束；进程退出由守护线程监听，避免退出启动器时留下运行中的 QThread。
+            threading.Thread(
+                target=self._watch_session,
+                args=(session, self.ctx.bus),
+                name="mc-exit-watcher",
+                daemon=True,
+            ).start()
+            threading.Thread(
+                target=self._watch_startup,
+                args=(session,),
+                name="mc-startup-watchdog",
+                daemon=True,
+            ).start()
+        except Cancelled:
+            self.failed.emit("启动已取消。")
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+    def _watch_startup(
+        self, session, timeout: float = 30.0, interval: float = 2.0
+    ) -> None:
+        """启动看门狗：30 秒内既没有窗口、进程又仍存活时提示“可能卡在初始化”。"""
+        deadline = time.time() + timeout
+        pid = int(getattr(session.process, "pid", 0) or 0)
+        cpu_flat = True  # 累计 CPU 时间是否始终为 0
+        while time.time() < deadline:
+            if self.cancel_event.is_set():
+                return  # 用户取消启动，尽快退出
+            if session.process.poll() is not None:
+                return  # 进程已退出，交给早退检测 / 退出监听处理
+            if has_game_window(pid):
+                return  # 已出现游戏窗口，无需再等待
+            cpu = process_cpu_seconds(pid)
+            if cpu is not None and cpu > 0:
+                cpu_flat = False
+            if self.cancel_event.wait(interval):
+                return
+        if session.process.poll() is not None or has_game_window(pid):
+            return
+        message = "游戏进程已启动 30 秒仍未检测到窗口，可能卡在初始化，请查看日志。"
+        if cpu_flat:
+            message += "\n（该进程 CPU 时间始终为 0，可能被安全软件拦截或 Java 未能真正运行。）"
+        try:
+            self.stalled.emit(message)
+        except RuntimeError:  # 页面/worker 已销毁
+            pass
+
+    def _watch_session(self, session, bus) -> None:
+        """守护线程只通过总线发信号，不引用 LaunchWorker，避免其已析构。"""
+        try:
+            code = int(session.process.wait() or 0)
+            tail = "\n".join(session.lines()[-12:])
+            bus.game_exited.emit(code, tail)
+        except Exception:  # noqa: BLE001 - 启动器可能已经退出
+            pass
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+        if self.session is not None:
+            self.session.stop()
+
+    def stop_game(self) -> None:
+        if self.session is not None:
+            self.session.stop()
+
+
+_LOG_ERROR_RE = re.compile(
+    r"\[错误\]|\b(error|exception|fatal|failed)\b|caused by|(?<!未)失败|崩溃", re.I
+)
+_LOG_WARN_RE = re.compile(r"\[警告\]|\bwarn(?:ing)?\b|警告", re.I)
+
+
+def _log_level(line: str) -> str:
+    """粗略判断日志级别：error / warn / info，用于着色与过滤。"""
+    if _LOG_ERROR_RE.search(line):
+        return "error"
+    if _LOG_WARN_RE.search(line):
+        return "warn"
+    return "info"
+
+
+class LogHighlighter(QSyntaxHighlighter):
+    """给运行日志着色：错误红色、警告黄色。"""
+
+    def __init__(self, document) -> None:
+        super().__init__(document)
+        self._error = QTextCharFormat()
+        self._error.setForeground(QColor("#ff6b6b"))
+        self._warn = QTextCharFormat()
+        self._warn.setForeground(QColor("#e8c07a"))
+
+    def highlightBlock(self, text: str) -> None:  # noqa: N802 - Qt 命名
+        level = _log_level(text)
+        if level == "error":
+            self.setFormat(0, len(text), self._error)
+        elif level == "warn":
+            self.setFormat(0, len(text), self._warn)
+
+
+class HomePage(QWidget):
+    repair_finished = Signal(bool, str)  # (是否成功, 错误信息)，由补全线程发回主线程
+
+    def __init__(self, ctx: AppContext, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.ctx = ctx
+        self._rows: dict[str, VersionRow] = {}
+        self._bedrock_info: dict | None = None
+        self._bedrock_row: BedrockRow | None = None
+        self._bedrock_worker: QThread | None = None
+        self._bedrock_launch_worker: QThread | None = None
+        self._bedrock_checked_at = 0.0
+        self._bedrock_pending_launch = 0.0
+        self._empty_versions: QWidget | None = None
+        self._selected_id = ""
+        self._required_java = 21
+        self._worker: LaunchWorker | None = None
+        self._session = None
+        self._repair_thread: threading.Thread | None = None
+        self._launch_queue: list[str] = []
+        self._queue_running = False
+        self._queue_stop = False
+        self._queue_total = 0
+        self._server_ping: ServerPingWorker | None = None
+        self._server_ping_cache: dict[str, tuple[float, int, str]] = {}
+        self._log_lines: list[str] = []
+        self._loaded_instance = self.ctx.config.selected_instance_id
+        self._build()
+        self._covers = CoverLoader(self)
+        self._connect()
+        self.refresh_versions()
+        self.reload_config()
+        # 等主窗口把 bus.log 接到控制台后再写入，保证日志既显示也落盘
+        QTimer.singleShot(0, lambda: self._append_log(f"[{APP_NAME}] 启动器已就绪。双击版本即可启动游戏。"))
+
+    def set_recent_pages(self, items: list[dict]) -> None:
+        """刷新顶部「最近使用」快捷入口（由主窗口在页面切换后调用）。"""
+        while self.recent_buttons.count():
+            layout_item = self.recent_buttons.takeAt(0)
+            widget = layout_item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        shown = 0
+        for entry in items[:5]:
+            key = str(entry.get("key") or "")
+            label = str(entry.get("label") or "")
+            if not key or not label:
+                continue
+            button = QPushButton(label if len(label) <= 10 else label[:9] + "…")
+            button.setObjectName("Chip")
+            button.setCursor(Qt.PointingHandCursor)
+            button.setToolTip(label)
+            button.clicked.connect(
+                lambda _checked=False, page=key: self.ctx.bus.navigate.emit(page)
+            )
+            self.recent_buttons.addWidget(button)
+            shown += 1
+        self.recent_bar.setVisible(bool(shown))
+
+    # ------------------------------------------------------------------
+    def _build(self) -> None:
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(20, 18, 20, 18)
+        outer.setSpacing(14)
+
+        header, header_layout = page_header(
+            self.tr("启动游戏"), self.tr("选择已安装的版本，一键进入 Minecraft")
+        )
+        self.dir_button = QPushButton(self.tr("打开游戏目录"))
+        self.dir_button.setObjectName("Chip")
+        self.dir_button.clicked.connect(self._open_game_dir)
+        header_layout.addWidget(self.dir_button)
+        settings_button = QPushButton(self.tr("游戏设置"))
+        settings_button.setObjectName("Chip")
+        settings_button.clicked.connect(lambda: self.ctx.bus.navigate.emit("settings"))
+        header_layout.addWidget(settings_button)
+        nbt_button = QPushButton(self.tr("NBT 编辑器…"))
+        nbt_button.setObjectName("Chip")
+        nbt_button.clicked.connect(self._open_nbt_editor)
+        header_layout.addWidget(nbt_button)
+        outer.addWidget(header)
+
+        self.recent_bar = QWidget()
+        recent_layout = QHBoxLayout(self.recent_bar)
+        recent_layout.setContentsMargins(0, 0, 0, 0)
+        recent_layout.setSpacing(8)
+        recent_caption = QLabel(self.tr("最近使用："))
+        recent_caption.setObjectName("Tiny")
+        recent_layout.addWidget(recent_caption)
+        self.recent_buttons = QHBoxLayout()
+        self.recent_buttons.setSpacing(6)
+        recent_layout.addLayout(self.recent_buttons)
+        recent_layout.addStretch(1)
+        self.recent_bar.setVisible(False)
+        outer.addWidget(self.recent_bar)
+
+        body = QHBoxLayout()
+        body.setSpacing(16)
+        outer.addLayout(body, 1)
+
+        left = QWidget()
+        left.setFixedWidth(320)
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(14)
+        body.addWidget(left)
+
+        # 账号卡片
+        account = Card()
+        self.account_badge = Badge(self.tr("离线模式"), "green")
+        manage_button = QPushButton(self.tr("管理账号"))
+        manage_button.setObjectName("Ghost")
+        manage_button.clicked.connect(lambda: self.ctx.bus.navigate.emit("accounts"))
+        title_widget = self._card_title(
+            self.tr("当前账号"),
+            self.tr("支持离线 / 微软正版 / 外置登录"),
+            self.account_badge,
+        )
+        account.body.addWidget(title_widget)
+        account_row = QHBoxLayout()
+        account_row.setSpacing(12)
+        self.avatar_label = QLabel()
+        self.avatar_label.setFixedSize(56, 56)
+        self.avatar_label.setCursor(Qt.PointingHandCursor)
+        self.avatar_label.setToolTip(self.tr("点击切换账号"))
+        self.avatar_label.installEventFilter(self)
+        account_row.addWidget(self.avatar_label)
+        name_box = QVBoxLayout()
+        name_box.setSpacing(6)
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText(self.tr("输入玩家昵称"))
+        self.name_edit.setMaxLength(16)
+        name_box.addWidget(self.name_edit)
+        self.uuid_label = QLabel()
+        self.uuid_label.setObjectName("Tiny")
+        name_box.addWidget(self.uuid_label)
+        account_row.addLayout(name_box, 1)
+        account.body.addLayout(account_row)
+        account.body.addWidget(manage_button, alignment=Qt.AlignRight)
+        left_layout.addWidget(account)
+
+        # 最近皮肤（与美化版主页一致，点击即可切换）
+        self.skin_card = Card()
+        self.skin_card.body.addWidget(
+            self._card_title(self.tr("最近皮肤"), self.tr("点击即可切换到该皮肤"))
+        )
+        self.skin_grid = QGridLayout()
+        self.skin_grid.setContentsMargins(0, 0, 0, 0)
+        self.skin_grid.setSpacing(8)
+        skin_host = QWidget()
+        skin_host.setLayout(self.skin_grid)
+        self.skin_card.body.addWidget(skin_host)
+        left_layout.addWidget(self.skin_card)
+
+        # 启动配置
+        config_card = Card()
+        config_card.body.addWidget(self._card_title(self.tr("启动配置"), self.tr("Java、内存与窗口")))
+        java_head = QHBoxLayout()
+        java_label = QLabel(self.tr("Java 运行时"))
+        java_label.setObjectName("Muted")
+        java_head.addWidget(java_label)
+        java_head.addStretch(1)
+        self.java_hint = QLabel("")
+        self.java_hint.setObjectName("Tiny")
+        java_head.addWidget(self.java_hint)
+        config_card.body.addLayout(java_head)
+        self.java_combo = QComboBox()
+        config_card.body.addWidget(self.java_combo)
+
+        memory_head = QHBoxLayout()
+        memory_label = QLabel(self.tr("分配内存"))
+        memory_label.setObjectName("Muted")
+        memory_head.addWidget(memory_label)
+        memory_head.addStretch(1)
+        self.memory_value = QLabel("4.0 GB")
+        self.memory_value.setStyleSheet("color: #8fe89b; font-weight: 600;")
+        memory_head.addWidget(self.memory_value)
+        config_card.body.addLayout(memory_head)
+        self.memory_slider = QSlider(Qt.Horizontal)
+        self.memory_slider.setRange(1024, 16384)
+        self.memory_slider.setSingleStep(256)
+        self.memory_slider.setPageStep(1024)
+        config_card.body.addWidget(self.memory_slider)
+
+        resolution_row = QHBoxLayout()
+        self.resolution_check = QCheckBox(self.tr("自定义分辨率"))
+        self.resolution_check.setToolTip(self.tr("勾选后使用下方宽高启动游戏"))
+        resolution_row.addWidget(self.resolution_check)
+        resolution_row.addStretch(1)
+        self.width_spin = QSpinBox()
+        self.width_spin.setRange(320, 12000)
+        self.width_spin.setFixedWidth(66)
+        self.height_spin = QSpinBox()
+        self.height_spin.setRange(240, 12000)
+        self.height_spin.setFixedWidth(66)
+        resolution_row.addWidget(self.width_spin)
+        resolution_row.addWidget(QLabel("×"))
+        resolution_row.addWidget(self.height_spin)
+        config_card.body.addLayout(resolution_row)
+        left_layout.addWidget(config_card)
+
+        # 启动按钮区
+        launch_box = QWidget()
+        launch_layout = QVBoxLayout(launch_box)
+        launch_layout.setContentsMargins(0, 2, 0, 0)
+        launch_layout.setSpacing(8)
+        self.launch_info = QLabel(self.tr("未选择版本"))
+        self.launch_info.setObjectName("Muted")
+        launch_layout.addWidget(self.launch_info)
+
+        server_row = QHBoxLayout()
+        server_row.setSpacing(6)
+        server_caption = QLabel(self.tr("连接服务器"))
+        server_caption.setObjectName("Muted")
+        server_row.addWidget(server_caption)
+        self.server_combo = QComboBox()
+        self.server_combo.setToolTip(
+            self.tr("选择后在启动时自动进入该服务器（单人游戏不受影响）")
+        )
+        self.server_combo.currentIndexChanged.connect(self._on_server_changed)
+        server_row.addWidget(self.server_combo, 1)
+        self.server_manage_button = QPushButton(self.tr("管理"))
+        self.server_manage_button.setObjectName("Ghost")
+        self.server_manage_button.setFixedWidth(56)
+        self.server_manage_button.clicked.connect(self._open_server_dialog)
+        server_row.addWidget(self.server_manage_button)
+        launch_layout.addLayout(server_row)
+
+        self.launch_button = QPushButton(self.tr("启动游戏"))
+        self.launch_button.setObjectName("Primary")
+        self.launch_button.setMinimumHeight(48)
+        self.launch_button.clicked.connect(self._on_launch_clicked)
+        launch_layout.addWidget(self.launch_button)
+        left_layout.addWidget(launch_box)
+
+        # 进度卡片
+        self.progress_card = Card(margins=14, spacing=8)
+        self.progress_stage = QLabel(self.tr("准备启动"))
+        self.progress_stage.setStyleSheet("font-weight: 600;")
+        self.progress_card.body.addWidget(self.progress_stage)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 1000)
+        self.progress_bar.setTextVisible(False)
+        self.progress_card.body.addWidget(self.progress_bar)
+        detail_row = QHBoxLayout()
+        self.progress_detail = QLabel("")
+        self.progress_detail.setObjectName("Tiny")
+        detail_row.addWidget(self.progress_detail, 1)
+        self.cancel_button = QPushButton(self.tr("取消"))
+        self.cancel_button.setObjectName("Ghost")
+        self.cancel_button.clicked.connect(self._cancel_launch)
+        detail_row.addWidget(self.cancel_button)
+        self.progress_card.body.addLayout(detail_row)
+        self.progress_card.setVisible(False)
+        left_layout.addWidget(self.progress_card)
+        left_layout.addStretch(1)
+
+        # 右侧版本列表
+        right = QVBoxLayout()
+        right.setSpacing(14)
+        body.addLayout(right, 1)
+
+        versions_card = Card()
+        versions_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        versions_head = QVBoxLayout()
+        versions_head.setSpacing(8)
+        head_row = QHBoxLayout()
+        head_row.setSpacing(8)
+        title_box = QVBoxLayout()
+        title_box.setSpacing(2)
+        title_label = QLabel(self.tr("已安装版本"))
+        title_label.setObjectName("CardTitle")
+        title_box.addWidget(title_label)
+        self.version_count = QLabel(self.tr("0 个版本"))
+        self.version_count.setObjectName("Tiny")
+        title_box.addWidget(self.version_count)
+        head_row.addLayout(title_box)
+        head_row.addStretch(1)
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText(self.tr("搜索版本…"))
+        self.search_edit.setMinimumWidth(96)
+        self.search_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        head_row.addWidget(self.search_edit, 1)
+
+        # 实例切换与操作按钮放到第二行，窗口变窄时不会把右侧内容挤出卡片
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        instance_label = QLabel(self.tr("实例"))
+        instance_label.setObjectName("Muted")
+        action_row.addWidget(instance_label)
+        self.instance_combo = QComboBox()
+        self.instance_combo.setMinimumWidth(110)
+        self.instance_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.instance_combo.setToolTip(self.tr("切换默认实例或整合包独立实例"))
+        action_row.addWidget(self.instance_combo, 1)
+        refresh_button = QPushButton(self.tr("刷新"))
+        refresh_button.setObjectName("Ghost")
+        refresh_button.clicked.connect(self.refresh_versions)
+        action_row.addWidget(refresh_button)
+        self.queue_launch_button = QPushButton(self.tr("多选启动"))
+        self.queue_launch_button.setObjectName("Ghost")
+        self.queue_launch_button.clicked.connect(self._open_queue_dialog)
+        action_row.addWidget(self.queue_launch_button)
+        self.queue_stop_button = QPushButton(self.tr("停止队列"))
+        self.queue_stop_button.setObjectName("Ghost")
+        self.queue_stop_button.setVisible(False)
+        self.queue_stop_button.clicked.connect(self._stop_queue)
+        action_row.addWidget(self.queue_stop_button)
+        download_button = QPushButton(self.tr("安装新版本"))
+        download_button.clicked.connect(lambda: self.ctx.bus.navigate.emit("download"))
+        action_row.addWidget(download_button)
+        ui_pack_button = QPushButton(self.tr("UI 材质包一键替换"))
+        ui_pack_button.setToolTip(
+            self.tr("为当前选中的版本生成半透明毛玻璃 UI 材质包并自动启用，重复执行会替换旧包")
+        )
+        ui_pack_button.clicked.connect(self._quick_ui_pack)
+        action_row.addWidget(ui_pack_button)
+        versions_head.addLayout(head_row)
+        versions_head.addLayout(action_row)
+
+        # 版本文件夹分区：不同目录各自独立的 versions / mods / 存档
+        dir_row = QHBoxLayout()
+        dir_row.setSpacing(8)
+        dir_label = QLabel(self.tr("版本文件夹"))
+        dir_label.setObjectName("Muted")
+        dir_row.addWidget(dir_label)
+        self.version_dir_combo = QComboBox()
+        self.version_dir_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.version_dir_combo.setToolTip(
+            self.tr("切换版本文件夹分区：每个目录拥有独立的 versions、mods 与存档")
+        )
+        dir_row.addWidget(self.version_dir_combo, 1)
+        self.version_dir_menu_button = QPushButton(self.tr("新建 / 选择…"))
+        self.version_dir_menu_button.setObjectName("Ghost")
+        self.version_dir_menu_button.clicked.connect(self._open_version_dir_menu)
+        dir_row.addWidget(self.version_dir_menu_button)
+        versions_head.addLayout(dir_row)
+        versions_card.body.addLayout(versions_head)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.viewport().setAttribute(Qt.WA_OpaquePaintEvent, False)
+        self.version_host = QWidget()
+        self.version_layout = QVBoxLayout(self.version_host)
+        self.version_layout.setContentsMargins(0, 0, 6, 0)
+        self.version_layout.setSpacing(8)
+        self.version_layout.addStretch(1)
+        self.scroll.setWidget(self.version_host)
+        versions_card.body.addWidget(self.scroll, 1)
+        right.addWidget(versions_card, 1)
+
+        console_card = Card()
+        console_card.setFixedHeight(210)
+        console_head = QHBoxLayout()
+        console_title = QLabel(self.tr("运行日志"))
+        console_title.setObjectName("CardTitle")
+        console_head.addWidget(console_title)
+        console_head.addStretch(1)
+        self.console_filter = QComboBox()
+        self.console_filter.addItem(self.tr("全部日志"), "all")
+        self.console_filter.addItem(self.tr("仅错误与警告"), "problems")
+        self.console_filter.setFixedWidth(130)
+        self.console_filter.currentIndexChanged.connect(lambda _index: self._rebuild_console())
+        console_head.addWidget(self.console_filter)
+        clear_button = QPushButton(self.tr("清空"))
+        clear_button.setObjectName("Ghost")
+        clear_button.clicked.connect(self._clear_console)
+        console_head.addWidget(clear_button)
+        open_log_button = QPushButton(self.tr("日志目录"))
+        open_log_button.setObjectName("Ghost")
+        open_log_button.clicked.connect(self._open_log_dir)
+        console_head.addWidget(open_log_button)
+        console_card.body.addLayout(console_head)
+        self.console = QTextEdit()
+        self.console.setObjectName("Console")
+        self.console.setReadOnly(True)
+        self.console.document().setMaximumBlockCount(4000)
+        self.console_highlighter = LogHighlighter(self.console.document())
+        console_card.body.addWidget(self.console, 1)
+        right.addWidget(console_card)
+
+        # 启动动画遮罩：覆盖在整页之上，默认隐藏
+        self.start_anim = StartAnimationWidget(self)
+        self.start_anim.setGeometry(self.rect())
+        self.start_anim.hide()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if hasattr(self, "start_anim"):
+            self.start_anim.setGeometry(self.rect())
+
+    @staticmethod
+    def _card_title(title: str, subtitle: str, extra: QWidget | None = None) -> QWidget:
+        from .widgets import card_title_row
+
+        return card_title_row(title, subtitle, extra)
+
+    def _connect(self) -> None:
+        self.name_edit.editingFinished.connect(self._on_name_changed)
+        self.java_combo.currentIndexChanged.connect(self._on_java_changed)
+        self.memory_slider.valueChanged.connect(self._on_memory_preview)
+        self.memory_slider.sliderReleased.connect(self._save_memory)
+        self.resolution_check.toggled.connect(self._on_resolution_toggled)
+        self.width_spin.valueChanged.connect(self._on_resolution_changed)
+        self.height_spin.valueChanged.connect(self._on_resolution_changed)
+        self.search_edit.textChanged.connect(self._apply_search)
+        self.instance_combo.currentIndexChanged.connect(self._on_instance_changed)
+        self.version_dir_combo.currentIndexChanged.connect(self._on_version_dir_changed)
+        self.ctx.bus.config_changed.connect(self.reload_config)
+        self.ctx.bus.javas_changed.connect(self.reload_config)
+        self.ctx.bus.versions_changed.connect(self._refresh_after_change)
+        self.ctx.bus.accounts_changed.connect(self._refresh_account_card)
+        self.ctx.bus.instances_changed.connect(self._reload_instances)
+        self.ctx.bus.game_exited.connect(self._on_exited)
+        self.repair_finished.connect(self._on_repair_finished)
+
+    # ------------------------------------------------------------------
+    def _instance_dir(self) -> Path:
+        return self.ctx.config.instance_path(self.ctx.config.selected_instance_id)
+
+    def _refresh_after_change(self) -> None:
+        """版本发生变化（含基岩版安装 / 卸载）时强制重新探测。"""
+        self._bedrock_checked_at = 0.0
+        self.refresh_versions()
+
+    def refresh_versions(self) -> None:
+        game_dir = self._instance_dir()
+        try:
+            game_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._append_log(f"[错误] 游戏目录不可写：{exc}")
+        versions = scan_installed_versions(game_dir)
+        order = self.ctx.config.version_order
+        if order:
+            rank = {vid: index for index, vid in enumerate(order)}
+            # 未排过序的版本保持扫描原始顺序，排在已排序版本之后
+            versions.sort(key=lambda v: rank.get(v.id, len(rank)))
+
+        while self.version_layout.count():
+            item = self.version_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._rows.clear()
+        self._bedrock_row = None
+        self._empty_versions = None
+
+        if not versions:
+            empty = QWidget()
+            empty_layout = QVBoxLayout(empty)
+            empty_layout.setContentsMargins(20, 40, 20, 40)
+            empty_layout.setSpacing(8)
+            icon = QLabel()
+            icon.setPixmap(make_avatar("Alex", 48))
+            icon.setAlignment(Qt.AlignCenter)
+            empty_layout.addWidget(icon)
+            label = QLabel(self.tr("下一步：安装一个游戏版本"))
+            label.setAlignment(Qt.AlignCenter)
+            label.setStyleSheet("font-size: 15px; font-weight: 600;")
+            empty_layout.addWidget(label)
+            hint = QLabel(
+                self.tr(
+                    "点下面的按钮选择版本在线安装；也可以直接把 .jar、mods 文件夹或整合包"
+                    "拖进窗口，会弹出导入向导。"
+                )
+            )
+            hint.setObjectName("Muted")
+            hint.setAlignment(Qt.AlignCenter)
+            hint.setWordWrap(True)
+            empty_layout.addWidget(hint)
+            button = QPushButton(self.tr("安装 Minecraft"))
+            button.setObjectName("Primary")
+            button.setMaximumWidth(180)
+            button.clicked.connect(lambda: self.ctx.bus.navigate.emit("download"))
+            empty_layout.addWidget(button, alignment=Qt.AlignHCenter)
+            extra_row = QHBoxLayout()
+            extra_row.setSpacing(8)
+            extra_row.addStretch(1)
+            pack_button = QPushButton(self.tr("导入整合包"))
+            pack_button.setMaximumWidth(150)
+            pack_button.clicked.connect(lambda: self.ctx.bus.navigate.emit("modpack"))
+            extra_row.addWidget(pack_button)
+            wiki_button = QPushButton(self.tr("看安装教程"))
+            wiki_button.setObjectName("Ghost")
+            wiki_button.setMaximumWidth(150)
+            wiki_button.clicked.connect(lambda: self.ctx.bus.navigate.emit("wiki"))
+            extra_row.addWidget(wiki_button)
+            extra_row.addStretch(1)
+            empty_layout.addLayout(extra_row)
+            self._empty_versions = empty
+            self.version_layout.addWidget(empty)
+            self.version_layout.addStretch(1)
+            self._update_version_count()
+            self._select_version("")
+            self._probe_bedrock()
+            return
+
+        for version in versions:
+            row = VersionRow(version, self.ctx, str(game_dir))
+            row.selected.connect(self._select_version)
+            row.activated.connect(self._launch_version)
+            row.settings_requested.connect(self.ctx.bus.focus_version.emit)
+            row.drag_moved.connect(self._on_version_drag)
+            row.drag_released.connect(self._save_version_order)
+            self.version_layout.insertWidget(self.version_layout.count() - 1, row)
+            self._rows[version.id] = row
+
+        self._update_version_count()
+        self._apply_search(self.search_edit.text())
+        self._probe_bedrock()
+        instance = self.ctx.config.selected_instance()
+        if self._selected_id == BEDROCK_ID and self._bedrock_info is not None:
+            keep = BEDROCK_ID
+        elif self._selected_id in self._rows:
+            keep = self._selected_id
+        elif instance.version_id and instance.version_id in self._rows:
+            keep = instance.version_id
+        else:
+            keep = versions[0].id
+        self._select_version(keep)
+
+    def _update_version_count(self) -> None:
+        count = len(self._rows) + (1 if self._bedrock_info else 0)
+        self.version_count.setText(t("HomePage", "{0} 个版本", count))
+
+    def _probe_bedrock(self) -> None:
+        """异步刷新已安装的基岩版，让基岩版与 Java 版一起出现在启动列表里。"""
+        if self._bedrock_checked_at and time.time() - self._bedrock_checked_at < 10:
+            self._apply_bedrock_info(self._bedrock_info)
+            return
+        if self._bedrock_worker is not None and self._bedrock_worker.isRunning():
+            return
+        worker = BedrockProbeWorker(self)
+        worker.done.connect(self._on_bedrock_probe)
+        worker.finished.connect(lambda w=worker: self._release_bedrock_probe(w))
+        self._bedrock_worker = worker
+        worker.start()
+
+    def _on_bedrock_probe(self, info: object) -> None:
+        self._bedrock_info = info if isinstance(info, dict) else None
+        self._bedrock_checked_at = time.time()
+        self._apply_bedrock_info(self._bedrock_info)
+
+    def _release_bedrock_probe(self, worker: QThread) -> None:
+        if self._bedrock_worker is worker:
+            self._bedrock_worker = None
+        worker.deleteLater()
+
+    def _apply_bedrock_info(self, info: dict | None) -> None:
+        if self._bedrock_row is not None:
+            self.version_layout.removeWidget(self._bedrock_row)
+            self._bedrock_row.deleteLater()
+            self._bedrock_row = None
+        if info:
+            row = BedrockRow(info, self)
+            row.selected.connect(lambda: self._select_version(BEDROCK_ID))
+            row.activated.connect(self._launch_bedrock)
+            self._bedrock_row = row
+            self.version_layout.insertWidget(0, row)
+            if self._empty_versions is not None:
+                self._empty_versions.setVisible(False)
+            self._apply_search(self.search_edit.text())
+            if not self._rows and self._selected_id in ("", BEDROCK_ID):
+                self._select_version(BEDROCK_ID)
+        else:
+            if self._empty_versions is not None:
+                self._empty_versions.setVisible(True)
+            if self._selected_id == BEDROCK_ID:
+                self._select_version("")
+        self._update_version_count()
+
+    def _apply_search(self, text: str) -> None:
+        needle = (text or "").strip().lower()
+        for version_id, row in self._rows.items():
+            row.setVisible(not needle or needle in version_id.lower())
+        if self._bedrock_row is not None:
+            haystack = (t("HomePage", "基岩版") + " bedrock").lower()
+            self._bedrock_row.setVisible(not needle or needle in haystack)
+
+    # ------------------------------------------------------------------
+    # 版本列表拖拽排序（上移/下移换位，松手后写回配置）
+    def _version_rows(self) -> list["VersionRow"]:
+        rows: list[VersionRow] = []
+        for index in range(self.version_layout.count()):
+            widget = self.version_layout.itemAt(index).widget()
+            if isinstance(widget, VersionRow):
+                rows.append(widget)
+        return rows
+
+    def _on_version_drag(self, version_id: str, global_pos: QPoint) -> None:
+        row = self._rows.get(version_id)
+        if row is None or not row.isVisible():
+            return
+        rows = self._version_rows()
+        # 搜索过滤时隐藏行没有可靠坐标，先不允许拖动，避免顺序错乱
+        if len(rows) < 2 or not all(item.isVisible() for item in rows):
+            return
+        rest = [item for item in rows if item is not row]
+        insert_at = len(rest)
+        for index, other in enumerate(rest):
+            center = other.mapToGlobal(QPoint(0, other.height() // 2)).y()
+            if global_pos.y() < center:
+                insert_at = index
+                break
+        new_order = rest[:insert_at] + [row] + rest[insert_at:]
+        if new_order == rows:
+            return
+        # 先把版本行全部摘下，再按新顺序插到基岩版行之后，末尾的 stretch 保持不动
+        for item in rows:
+            self.version_layout.removeWidget(item)
+        base = 1 if self._bedrock_row is not None else 0
+        for offset, item in enumerate(new_order):
+            self.version_layout.insertWidget(base + offset, item)
+            item.show()
+
+    def _save_version_order(self) -> None:
+        rows = self._version_rows()
+        if not rows:
+            return
+        order = [row.version.id for row in rows]
+        if order != self.ctx.config.version_order:
+            self.ctx.config.version_order = order
+            self.ctx.config.save_debounced()
+
+    def _select_version(self, version_id: str) -> None:
+        self._selected_id = version_id
+        for rid, row in self._rows.items():
+            row.set_selected(rid == version_id)
+        if self._bedrock_row is not None:
+            self._bedrock_row.set_selected(version_id == BEDROCK_ID)
+        if not version_id:
+            self.launch_info.setText(self.tr("未选择版本"))
+            self.launch_button.setEnabled(False)
+            self.java_hint.setText("")
+            return
+        if version_id == BEDROCK_ID:
+            version = str((self._bedrock_info or {}).get("Version") or "")
+            self.launch_info.setText(t("HomePage", "将启动：基岩版 {0}", version))
+            self.launch_button.setEnabled(True)
+            self.java_hint.setText(self.tr("基岩版无需 Java"))
+            return
+        row = self._rows.get(version_id)
+        loader = row.version.loader if row else ""
+        self.launch_info.setText(
+            t("HomePage", "将启动：{0}", version_id) + (f" · {loader}" if loader else "")
+        )
+        self.launch_button.setEnabled(bool(row and not row.version.error))
+        self._update_java_hint(version_id)
+
+    def _launch_bedrock(self) -> None:
+        self._select_version(BEDROCK_ID)
+        self._start_bedrock_launch()
+
+    def _start_bedrock_launch(self) -> None:
+        if self._bedrock_launch_worker is not None and self._bedrock_launch_worker.isRunning():
+            return
+        if not self._bedrock_info:
+            self.ctx.bus.toast.emit(self.tr("尚未安装基岩版，请先到基岩版页下载安装"))
+            return
+        self.progress_card.setVisible(True)
+        self.progress_stage.setText(self.tr("正在启动基岩版…"))
+        self.progress_detail.setText("")
+        self.progress_bar.setValue(0)
+        self._append_log("[基岩版] 请求启动已安装的基岩版")
+        worker = BedrockLaunchWorker(self)
+        worker.done.connect(self._on_bedrock_launched)
+        worker.finished.connect(lambda w=worker: self._release_bedrock_launch(w))
+        self._bedrock_launch_worker = worker
+        worker.start()
+
+    def _release_bedrock_launch(self, worker: QThread) -> None:
+        if self._bedrock_launch_worker is worker:
+            self._bedrock_launch_worker = None
+        worker.deleteLater()
+
+    def _on_bedrock_launched(self, ok: bool, message: str) -> None:
+        if not ok:
+            self.progress_card.setVisible(False)
+            QMessageBox.warning(self, self.tr("无法启动基岩版"), message)
+            return
+        self.progress_bar.setValue(1000)
+        self.progress_stage.setText(self.tr("基岩版已启动"))
+        self.progress_detail.setText(message)
+        self.launch_info.setText(self.tr("基岩版运行中"))
+        self._append_log(f"[基岩版] 已启动：{message}")
+        self.ctx.bus.toast.emit(self.tr("正在启动基岩版…"))
+        self._bedrock_pending_launch = time.time()
+        QTimer.singleShot(20000, self._verify_bedrock_launch)
+
+    def _verify_bedrock_launch(self) -> None:
+        if not self._bedrock_pending_launch:
+            return
+        self._bedrock_pending_launch = 0.0
+        try:
+            running = bedrock.is_game_running()
+        except Exception:  # noqa: BLE001
+            running = False
+        if running:
+            return
+        self.progress_card.setVisible(False)
+        hint = bedrock.activation_hint()
+        if hint:
+            QMessageBox.warning(self, self.tr("基岩版未能启动"), hint)
+        else:
+            self.ctx.bus.toast.emit(self.tr("未检测到基岩版进程，请稍等或重试"))
+
+    def _update_java_hint(self, version_id: str) -> None:
+        try:
+            merged = load_version(self._instance_dir(), version_id)
+            self._required_java = merged.java_major or 21
+            self.java_hint.setText(t("HomePage", "需要 Java {0}", self._required_java))
+        except (VersionError, OSError) as exc:
+            self._required_java = 21
+            self.java_hint.setText(self.tr("版本文件异常"))
+            self.java_hint.setToolTip(str(exc))
+
+    # ------------------------------------------------------------------
+    def reload_config(self) -> None:
+        config = self.ctx.config
+        self._reload_instances()
+        self._reload_version_dirs()
+        self._refresh_account_card()
+
+        memory = max(1024, min(16384, int(config.memory_mb)))
+        self.memory_slider.blockSignals(True)
+        self.memory_slider.setValue(memory)
+        self.memory_slider.blockSignals(False)
+        self.memory_value.setText(f"{memory / 1024:.1f} GB")
+
+        self.resolution_check.blockSignals(True)
+        self.resolution_check.setChecked(bool(config.width and config.height))
+        self.resolution_check.blockSignals(False)
+        self.width_spin.blockSignals(True)
+        self.height_spin.blockSignals(True)
+        self.width_spin.setValue(config.width or 854)
+        self.height_spin.setValue(config.height or 480)
+        self.width_spin.blockSignals(False)
+        self.height_spin.blockSignals(False)
+        self.width_spin.setEnabled(self.resolution_check.isChecked())
+        self.height_spin.setEnabled(self.resolution_check.isChecked())
+
+        self._refresh_java_combo()
+        self._refresh_servers()
+        self.dir_button.setToolTip(str(self._instance_dir()))
+        self._update_java_hint(self._selected_id) if self._selected_id else None
+
+    def _refresh_servers(self) -> None:
+        config = self.ctx.config
+        self.server_combo.blockSignals(True)
+        self.server_combo.clear()
+        self.server_combo.addItem(t("HomePage", "不自动连接"), "")
+        now = time.time()
+        for entry in config.servers:
+            label = f"{entry.name} · {entry.host}:{entry.port}"
+            cached = self._server_ping_cache.get(entry.id)
+            if cached is not None and now - cached[0] < 300:
+                _age, latency, players = cached
+                if latency < 0:
+                    label += f" · {t('HomePage', '无法连接')}"
+                else:
+                    label += f" · {players or t('HomePage', '可连接')} · {latency}ms"
+            self.server_combo.addItem(label, entry.id)
+        index = self.server_combo.findData(config.active_server_id)
+        self.server_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.server_combo.blockSignals(False)
+        if self._loaded_instance != config.selected_instance_id:
+            # 新导入/恢复的整合包实例会被自动选中，这里同步刷新版本列表
+            self._loaded_instance = config.selected_instance_id
+            self._selected_id = ""
+            self.refresh_versions()
+        self._ping_servers()
+
+    def _ping_servers(self) -> None:
+        """异步刷新主页服务器在线人数，结果缓存 5 分钟。"""
+        if self._server_ping is not None and self._server_ping.isRunning():
+            return
+        now = time.time()
+        pending = [
+            entry
+            for entry in self.ctx.config.servers
+            if entry.id not in self._server_ping_cache
+            or now - self._server_ping_cache[entry.id][0] >= 300
+        ]
+        if not pending:
+            return
+        worker = ServerPingWorker(pending, self)
+        worker.result.connect(self._on_server_ping)
+        worker.finished.connect(self._on_server_ping_finished)
+        self._server_ping = worker
+        worker.start()
+
+    def _on_server_ping(self, server_id: str, result) -> None:
+        latency = getattr(result, "latency", -1)
+        self._server_ping_cache[server_id] = (time.time(), latency)
+        index = self.server_combo.findData(server_id)
+        if index < 0:
+            return
+        entry = next((item for item in self.ctx.config.servers if item.id == server_id), None)
+        if entry is None:
+            return
+        label = f"{entry.name} · {entry.host}:{entry.port}"
+        if latency < 0:
+            label += f" · {t('HomePage', '无法连接')}"
+        else:
+            players = getattr(result, "players_text", "")
+            motd = getattr(result, "motd", "")
+            if motd:
+                label += f" · {motd[:26]}"
+            label += f" · {players or t('HomePage', '可连接')} · {latency}ms"
+        self.server_combo.setItemText(index, label)
+
+    def _on_server_ping_finished(self) -> None:
+        worker, self._server_ping = self._server_ping, None
+        if worker is not None:
+            worker.deleteLater()
+
+    def _on_server_changed(self, index: int) -> None:
+        server_id = str(self.server_combo.itemData(index) or "")
+        if server_id == self.ctx.config.active_server_id:
+            return
+        self.ctx.config.active_server_id = server_id
+        self.ctx.config.save()
+        if server_id:
+            entry = self.ctx.config.active_server()
+            if entry is not None:
+                self.ctx.bus.toast.emit(f"启动后将自动连接 {entry.name}")
+
+    def _open_server_dialog(self) -> None:
+        dialog = ServerDialog(self.ctx, self)
+        dialog.exec()
+        self._refresh_servers()
+
+    def _reload_instances(self) -> None:
+        current = self.ctx.config.selected_instance_id
+        self.instance_combo.blockSignals(True)
+        self.instance_combo.clear()
+        for instance in self.ctx.config.instance_list():
+            label = f"[整合包] {instance.name}" if instance.modpack else instance.name
+            if instance.mc_version:
+                label += f" · {instance.mc_version}"
+            if instance.loader:
+                label += f" · {instance.loader}"
+            self.instance_combo.addItem(label, instance.id)
+        index = self.instance_combo.findData(current)
+        self.instance_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.instance_combo.blockSignals(False)
+
+    def _on_instance_changed(self, index: int) -> None:
+        instance_id = str(self.instance_combo.itemData(index) or "default")
+        if instance_id == self.ctx.config.selected_instance_id:
+            return
+        self.ctx.config.select_instance(instance_id)
+        self._selected_id = ""
+        self.refresh_versions()
+        self.reload_config()
+        self.ctx.bus.toast.emit(f"已切换到实例：{self.instance_combo.currentText()}")
+
+    # ------------------------------------------------------------------
+    # 版本文件夹分区
+    def _reload_version_dirs(self) -> None:
+        current = self.ctx.config.active_game_dir
+        self.version_dir_combo.blockSignals(True)
+        self.version_dir_combo.clear()
+        for entry in self.ctx.config.game_dirs:
+            self.version_dir_combo.addItem(f"{entry.name} · {entry.path}", entry.id)
+        index = self.version_dir_combo.findData(current)
+        self.version_dir_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.version_dir_combo.blockSignals(False)
+
+    def _on_version_dir_changed(self, index: int) -> None:
+        dir_id = str(self.version_dir_combo.itemData(index) or "")
+        if not dir_id or dir_id == self.ctx.config.active_game_dir:
+            return
+        if not self.ctx.config.select_game_dir(dir_id):
+            return
+        # 版本文件夹分区作用于默认实例，避免与整合包实例目录互相干扰
+        if self.ctx.config.selected_instance_id != "default":
+            self.ctx.config.select_instance("default")
+        self._selected_id = ""
+        self.reload_config()
+        self.ctx.bus.versions_changed.emit()
+        self.ctx.bus.toast.emit(f"已切换版本文件夹：{self.version_dir_combo.currentText()}")
+
+    def _open_version_dir_menu(self) -> None:
+        menu = QMenu(self)
+        menu.addAction(self.tr("选择已有文件夹…"), self._add_version_dir_existing)
+        menu.addAction(self.tr("新建文件夹…"), self._create_version_dir)
+        menu.exec(
+            self.version_dir_menu_button.mapToGlobal(
+                QPoint(0, self.version_dir_menu_button.height())
+            )
+        )
+
+    def _add_version_dir_existing(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, self.tr("选择版本文件夹"), str(self._instance_dir()))
+        if not folder:
+            return
+        self._register_version_dir(Path(folder))
+
+    def _create_version_dir(self) -> None:
+        parent = QFileDialog.getExistingDirectory(
+            self, self.tr("选择新文件夹所在位置"), str(self._instance_dir().parent)
+        )
+        if not parent:
+            return
+        name, ok = QInputDialog.getText(
+            self, self.tr("新建版本文件夹"), self.tr("文件夹名称："), text="Minecraft"
+        )
+        name = str(name or "").strip()
+        if not ok or not name:
+            return
+        if any(char in name for char in '\\/:*?"<>|'):
+            QMessageBox.warning(self, APP_NAME, self.tr("文件夹名称不能包含 \\ / : * ? \" < > |"))
+            return
+        folder = Path(parent) / name
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "versions").mkdir(exist_ok=True)
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, t("HomePage", "创建文件夹失败：{0}", exc))
+            return
+        self._register_version_dir(folder)
+
+    def _register_version_dir(self, folder: Path) -> None:
+        target = os.path.normcase(os.path.normpath(str(folder)))
+        existing = next(
+            (
+                entry
+                for entry in self.ctx.config.game_dirs
+                if os.path.normcase(os.path.normpath(entry.path)) == target
+            ),
+            None,
+        )
+        if existing is None:
+            existing = self.ctx.config.add_game_dir(folder.name or "版本文件夹", str(folder))
+        self.ctx.config.select_game_dir(existing.id)
+        if self.ctx.config.selected_instance_id != "default":
+            self.ctx.config.select_instance("default")
+        self._selected_id = ""
+        self.reload_config()
+        self.ctx.bus.versions_changed.emit()
+        self.ctx.bus.toast.emit(f"已添加版本文件夹：{folder}")
+
+    def launch_instance_version(self, instance_id: str, version_id: str) -> bool:
+        """供「整合包」页调用：切换到指定实例并直接启动版本。"""
+        self.ctx.config.select_instance(instance_id)
+        self._selected_id = ""
+        self._loaded_instance = self.ctx.config.selected_instance_id
+        self._reload_instances()
+        self.refresh_versions()
+        if version_id not in self._rows:
+            return False
+        self._select_version(version_id)
+        self._start_launch()
+        return True
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is self.avatar_label and event.type() == QEvent.MouseButtonRelease:
+            self._show_account_menu()
+            return True
+        return super().eventFilter(obj, event)
+
+    def _show_account_menu(self) -> None:
+        """点头像直接切换账号，无需进入账号页。"""
+        menu = QMenu(self)
+        current = self.ctx.current_account()
+        current_id = current.id if current is not None else ""
+        for account in list(self.ctx.accounts.accounts):
+            action = menu.addAction(
+                f"{account.name} · {t('HomePage', account.type_label)}"
+            )
+            action.setCheckable(True)
+            action.setChecked(account.id == current_id)
+            action.triggered.connect(
+                lambda _checked=False, account_id=account.id: self._switch_account(account_id)
+            )
+        if not self.ctx.accounts.accounts:
+            action = menu.addAction("暂无账号")
+            action.setEnabled(False)
+        menu.addSeparator()
+        menu.addAction("管理账号…", lambda: self.ctx.bus.navigate.emit("accounts"))
+        menu.exec(self.avatar_label.mapToGlobal(self.avatar_label.rect().bottomLeft()))
+
+    def _switch_account(self, account_id: str) -> None:
+        self.ctx.accounts.set_selected(account_id)
+        self._refresh_account_card()
+        self.ctx.bus.accounts_changed.emit()
+        self.ctx.bus.toast.emit(f"已切换账号：{self.ctx.accounts.selected().name}")
+
+    def _refresh_account_card(self) -> None:
+        account = self.ctx.current_account()
+        if account is None:
+            return
+        kinds = {"offline": "gray", "microsoft": "blue", "authlib": "orange"}
+        self.account_badge.setText(t("HomePage", account.type_label))
+        self.account_badge.set_kind(kinds.get(account.type, "gray"))
+        avatar = resolve_account_avatar(account, 56)
+        self.avatar_label.setPixmap(avatar)
+        if getattr(account, "skin_url", "") and not getattr(account, "skin_path", ""):
+            self._covers.load(
+                account.skin_url,
+                lambda pm: self._on_avatar_ready(
+                    make_skin_avatar(pm, 56) if pm is not None and not pm.isNull() else avatar
+                ),
+                QSize(56, 56),
+            )
+        if not self.name_edit.hasFocus():
+            self.name_edit.blockSignals(True)
+            self.name_edit.setText(account.name)
+            self.name_edit.blockSignals(False)
+        self.name_edit.setReadOnly(account.type != "offline")
+        if account.uuid:
+            self.uuid_label.setText(f"UUID: {account.uuid[:18]}…")
+        else:
+            self.uuid_label.setText(t("HomePage", "尚未完成登录"))
+        tip = account.note or t("HomePage", account.type_label)
+        if account.auth_server:
+            tip += f" · {account.auth_server}"
+        self.name_edit.setToolTip(tip)
+        self._refresh_recent_skins()
+
+    def _on_avatar_ready(self, pixmap) -> None:
+        try:
+            self.avatar_label.setPixmap(pixmap)
+        except RuntimeError:
+            pass
+
+    # ------------------------------------------------------------------
+    def _refresh_recent_skins(self) -> None:
+        """刷新主页「最近皮肤」：皮肤库 + 当前账号皮肤 + data/skins 下的 PNG。"""
+        grid = getattr(self, "skin_grid", None)
+        if grid is None:
+            return
+        while grid.count():
+            item = grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        entries: list[tuple[str, str]] = []
+        seen: set[str] = set()
+
+        def add(path: str, label: str = "") -> None:
+            text = str(path or "").strip()
+            if not text or not Path(text).is_file():
+                return
+            key = os.path.normcase(str(Path(text).resolve()))
+            if key in seen:
+                return
+            seen.add(key)
+            entries.append((text, label or Path(text).stem))
+
+        account = self.ctx.current_account()
+        if account is not None:
+            add(getattr(account, "skin_path", "") or "", account.name)
+        try:
+            from ..skins import entries as skin_entries
+
+            for entry in skin_entries(limit=12):
+                add(entry.path, entry.name)
+        except Exception:  # noqa: BLE001 - 皮肤库损坏不影响主页
+            pass
+        skin_dir = DATA_DIR / "skins"
+        if skin_dir.is_dir():
+            for file in sorted(
+                skin_dir.glob("*.png"),
+                key=lambda p: p.stat().st_mtime if p.exists() else 0,
+                reverse=True,
+            ):
+                add(str(file))
+        entries = entries[:12]
+        if not entries:
+            hint = QLabel(self.tr("还没有导入皮肤，到「账号与皮肤」导入一张 PNG。"))
+            hint.setObjectName("Muted")
+            hint.setWordWrap(True)
+            grid.addWidget(hint, 0, 0, 1, 6)
+            return
+        for index, (path, label) in enumerate(entries):
+            pixmap = QPixmap(path)
+            button = QPushButton()
+            button.setFixedSize(42, 42)
+            button.setFlat(True)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setToolTip(label)
+            if not pixmap.isNull():
+                button.setIcon(QIcon(make_skin_avatar(pixmap, 36)))
+                button.setIconSize(QSize(36, 36))
+            button.clicked.connect(lambda _=False, p=path: self._apply_recent_skin(p))
+            grid.addWidget(button, index // 6, index % 6)
+
+    def _apply_recent_skin(self, path: str) -> None:
+        """点击最近皮肤：复制到 data/skins、更新账号并逐版本写入皮肤包。"""
+        account = self.ctx.current_account()
+        if account is None:
+            return
+        source = Path(path)
+        if not source.is_file():
+            return
+        target = DATA_DIR / "skins" / f"{account.name}.png"
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        except OSError as exc:
+            self.ctx.bus.toast.emit(t("HomePage", "应用皮肤失败：{0}", exc))
+            return
+        account.skin_path = str(target)
+        account.skin_url = ""
+        self.ctx.accounts.update(account)
+        try:
+            from ..skins import remember
+
+            remember(target, account.skin_model or "classic", name=source.stem)
+        except Exception:  # noqa: BLE001 - 入库失败不影响应用
+            pass
+        window = self.window()
+        applied = 0
+        if window is not None and hasattr(window, "_apply_skin_to_versions"):
+            applied = window._apply_skin_to_versions(account)
+        self.ctx.bus.accounts_changed.emit()
+        if applied:
+            self.ctx.bus.toast.emit(t("HomePage", "已切换到皮肤「{0}」，并适配 {1} 个游戏目录", source.stem, applied))
+        else:
+            self.ctx.bus.toast.emit(t("HomePage", "已切换到皮肤「{0}」", source.stem))
+
+    def _open_nbt_editor(self) -> None:
+        from .dialog_nbt import NbtEditorDialog
+
+        dialog = NbtEditorDialog(self.ctx, self)
+        dialog.exec()
+
+    def _refresh_java_combo(self) -> None:
+        current = self.ctx.config.java_path
+        self.java_combo.blockSignals(True)
+        self.java_combo.clear()
+        self.java_combo.addItem(t("HomePage", "自动选择（按版本匹配）"), "")
+        for java in self.ctx.javas:
+            self.java_combo.addItem(f"{java.label}", java.path)
+            self.java_combo.setItemData(
+                self.java_combo.count() - 1, java.path, Qt.ToolTipRole
+            )
+        if current:
+            index = self.java_combo.findData(current)
+            if index < 0:
+                info = probe_java(current)
+                if info:
+                    self.java_combo.addItem(info.label, info.path)
+                    index = self.java_combo.count() - 1
+                else:
+                    self.java_combo.addItem(
+                        t("HomePage", "无效的 Java：{0}", Path(current).name), current
+                    )
+                    index = self.java_combo.count() - 1
+            self.java_combo.setCurrentIndex(index)
+        else:
+            self.java_combo.setCurrentIndex(0)
+        self.java_combo.blockSignals(False)
+
+    # ------------------------------------------------------------------
+    def _on_name_changed(self) -> None:
+        name = self.name_edit.text().strip() or "Steve"
+        account = self.ctx.current_account()
+        if account is not None and account.type == "offline":
+            from ..launcher import offline_uuid
+
+            if len(name) > 16:
+                name = name[:16]
+            account.name = name
+            account.uuid = offline_uuid(name)
+            self.ctx.accounts.update(account)
+            self.ctx.bus.accounts_changed.emit()
+        self.ctx.config.player_name = name
+        self.ctx.config.save_debounced()
+        self._refresh_account_card()
+
+    def _on_java_changed(self, index: int) -> None:
+        path = str(self.java_combo.itemData(index) or "")
+        self.ctx.config.java_path = path
+        self.ctx.config.save_debounced()
+        self._update_java_hint(self._selected_id) if self._selected_id else None
+
+    def _on_memory_preview(self, value: int) -> None:
+        self.memory_value.setText(f"{value / 1024:.1f} GB")
+        # 键盘方向键 / PageUp 调整时不会触发 sliderReleased，这里同步写入配置并防抖落盘
+        self.ctx.config.memory_mb = int(value)
+        self.ctx.config.save_debounced()
+
+    def _save_memory(self) -> None:
+        self.ctx.config.memory_mb = int(self.memory_slider.value())
+        self.ctx.config.save()
+
+    def _on_resolution_toggled(self, checked: bool) -> None:
+        self.width_spin.setEnabled(checked)
+        self.height_spin.setEnabled(checked)
+        if checked:
+            self.ctx.config.width = int(self.width_spin.value())
+            self.ctx.config.height = int(self.height_spin.value())
+        else:
+            self.ctx.config.width = 0
+            self.ctx.config.height = 0
+        self.ctx.config.save_debounced()
+
+    def _on_resolution_changed(self) -> None:
+        if self.resolution_check.isChecked():
+            self.ctx.config.width = int(self.width_spin.value())
+            self.ctx.config.height = int(self.height_spin.value())
+            self.ctx.config.save_debounced()
+
+    # ------------------------------------------------------------------
+    def _launch_version(self, version_id: str) -> None:
+        self._select_version(version_id)
+        self._start_launch()
+
+    def _maybe_support_prompt(self) -> bool:
+        """每累计启动 N 次提示一次支持正版；返回 False 表示本次不启动。"""
+        cfg = self.ctx.config
+        cfg.launch_count = int(cfg.launch_count) + 1
+        every = max(1, int(cfg.support_prompt_every or 10))
+        cfg.save_debounced()
+        if cfg.launch_count % every:
+            return True
+        box = QMessageBox(self)
+        box.setWindowTitle("支持正版")
+        box.setIcon(QMessageBox.Information)
+        box.setText(f"你已经累计启动游戏 {cfg.launch_count} 次啦。")
+        box.setInformativeText(
+            "Minecraft 正版可以体验官方皮肤、服务器与联机大厅，也能支持 Mojang 持续更新。\n"
+            "是否前往官方商店购买正版？"
+        )
+        later = box.addButton("下次一定", QMessageBox.AcceptRole)
+        buy = box.addButton("这就去买", QMessageBox.ActionRole)
+        box.setDefaultButton(later)
+        box.exec()
+        if box.clickedButton() is buy:
+            self.ctx.bus.open_browser.emit(
+                "https://www.minecraft.net/zh-hans/store/minecraft-java-bedrock-edition-pc"
+            )
+            self._append_log("[支持正版] 已打开官方商店页面，本次启动已取消。")
+            return False
+        return True
+
+    def _on_launch_clicked(self) -> None:
+        if self._queue_running:
+            self.ctx.bus.toast.emit("多选启动队列进行中，请先点击“停止队列”。")
+            return
+        if self._session is not None:
+            if self._session.process.poll() is None:
+                self._append_log("[启动] 正在停止游戏…")
+                self._session.stop()
+            return
+        if self._worker is not None and self._worker.isRunning():
+            self._append_log("[启动] 取消启动流程…")
+            self._worker.cancel()
+            return
+        self._start_launch()
+
+    def _quick_ui_pack(self) -> None:
+        """主页一键：给当前选中版本生成半透明毛玻璃 UI 材质包并替换旧包。"""
+        version_id = self._selected_id
+        if not version_id or version_id == BEDROCK_ID:
+            QMessageBox.information(self, APP_NAME, "请先选择一个 Java 版游戏版本。")
+            return
+        from ..ui_pack import UiPackError, apply_ui_pack
+
+        try:
+            result = apply_ui_pack(self.ctx.config, version_id, enable=True)
+        except UiPackError as exc:
+            QMessageBox.warning(self, APP_NAME, str(exc))
+            return
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, f"生成 UI 材质包失败：{exc}")
+            return
+        note = "" if result["has_jar"] else "\n未找到客户端 jar，本次只生成了玻璃背景层。"
+        self.ctx.bus.toast.emit(f"UI 材质包已安装并替换：{version_id}{note}")
+        self.ctx.bus.log.emit(f"[UI材质包] {version_id} → {', '.join(result['paths'])}")
+        QMessageBox.information(
+            self,
+            APP_NAME,
+            f"已为 {version_id} 生成并安装 UI 材质包，旧包已替换。{note}",
+        )
+
+    def _start_launch(self) -> None:
+        version_id = self._selected_id
+        if not version_id:
+            QMessageBox.information(self, APP_NAME, "请先选择一个版本。")
+            return
+        if not self._maybe_support_prompt():
+            return
+        if version_id == BEDROCK_ID:
+            self._start_bedrock_launch()
+            return
+        row = self._rows.get(version_id)
+        if row and row.version.error:
+            QMessageBox.warning(self, "版本损坏", row.version.error)
+            return
+        account = self.ctx.current_account()
+        name = account.name if account is not None else self.name_edit.text().strip()
+        if account is None or account.type == "offline":
+            name = self.name_edit.text().strip()
+            if not name:
+                QMessageBox.warning(self, "昵称不能为空", "请输入一个玩家昵称。")
+                return
+            if len(name) > 16 or not re.fullmatch(r"[\w\u4e00-\u9fff]+", name, re.UNICODE):
+                QMessageBox.warning(self, "昵称不合法", "昵称需为 1-16 个字符，且不能包含空格或特殊符号。")
+                return
+        elif account.type == "microsoft" and not account.access_token:
+            QMessageBox.warning(
+                self, "账号未登录", "当前微软账号尚未完成登录，请到账号页重新登录。"
+            )
+            self.ctx.bus.navigate.emit("accounts")
+            return
+
+        game_dir = self._instance_dir()
+        try:
+            merged = load_version(game_dir, version_id)
+            required = merged.java_major or 21
+        except (VersionError, OSError) as exc:
+            self._show_version_error(version_id, str(exc))
+            return
+
+        java, warning = pick_java(self.ctx.javas, required, self.ctx.config.java_path)
+        if java is None:
+            QMessageBox.warning(
+                self,
+                "未找到 Java",
+                f"{warning}\n\n请先在设置页选择 Java，或安装 Java {required}。",
+            )
+            self.ctx.bus.navigate.emit("settings")
+            return
+        if warning:
+            answer = QMessageBox.question(
+                self,
+                "Java 版本提示",
+                f"{warning}\n\n仍要继续启动吗？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+
+        self._session = None
+        self.progress_card.setVisible(True)
+        self.progress_stage.setText(self.tr("准备启动"))
+        self.progress_detail.setText("")
+        self.progress_bar.setValue(0)
+        self.launch_button.setText(self.tr("取消"))
+
+        if self.ctx.config.start_animation:
+            self.start_anim.start()
+
+        self._worker = LaunchWorker(
+            self.ctx,
+            version_id,
+            name,
+            java,
+            self.ctx.config.memory_mb,
+            self.ctx.config.width,
+            self.ctx.config.height,
+            self.ctx.config.extra_jvm_args,
+            extra_game_args=self.ctx.config.extra_game_args,
+            game_dir=game_dir,
+            account=account,
+            parent=self,
+        )
+        self._worker.progress.connect(self._on_progress)
+        self._worker.log.connect(self._on_log)
+        self._worker.started.connect(self._on_started)
+        self._worker.failed.connect(self._on_failed)
+        self._worker.finished.connect(self._on_worker_finished)
+        self._worker.preflight_blocked.connect(self._on_preflight_blocked)
+        self._worker.stalled.connect(self._on_stalled)
+        self._append_log(f"[启动] 准备启动 {version_id}，Java：{java.path}")
+        self._worker.start()
+
+    def _cancel_launch(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.cancel()
+            self._append_log("[启动] 已请求取消。")
+
+    def _on_progress(self, progress: Progress) -> None:
+        self.progress_card.setVisible(True)
+        self.progress_stage.setText(progress.stage)
+        self.progress_bar.setValue(int(progress.percent * 1000))
+        detail = progress.detail
+        if progress.speed > 0 and progress.percent < 1:
+            detail += f" · {progress.speed / 1048576:.1f} MB/s"
+        self.progress_detail.setText(detail)
+        self.start_anim.set_progress(progress.percent, progress.stage)
+
+    def _on_log(self, line: str) -> None:
+        self._append_log(line)
+
+    def _append_log(self, line: str) -> None:
+        # 统一走总线：主页渲染由 _write_console 完成，同时落盘到 data/logs/launcher.log
+        self.ctx.bus.log.emit(line)
+
+    def _write_console(self, line: str) -> None:
+        self._log_lines.append(line)
+        if len(self._log_lines) > 4000:
+            del self._log_lines[:1000]
+        if not self._matches_filter(line):
+            return
+        self.console.append(line)
+        bar = self.console.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    def _matches_filter(self, line: str) -> bool:
+        if self.console_filter.currentData() != "problems":
+            return True
+        return _log_level(line) != "info"
+
+    def _clear_console(self) -> None:
+        self._log_lines.clear()
+        self.console.clear()
+
+    def _rebuild_console(self) -> None:
+        self.console.clear()
+        for line in self._log_lines:
+            if self._matches_filter(line):
+                self.console.append(line)
+
+    def _on_started(self, session) -> None:
+        self._session = session
+        self.progress_card.setVisible(False)
+        self.launch_button.setText(self.tr("停止游戏"))
+        self.launch_button.setEnabled(True)
+        self.launch_info.setText(t("HomePage", "游戏运行中：{0}", self._selected_id))
+        self._append_log("[启动] 游戏进程已启动。")
+        summary = getattr(session, "launch_summary", "")
+        if summary:
+            self._append_log(f"[启动] {summary}")
+            self.ctx.bus.toast.emit(summary)
+            self.launch_info.setToolTip(summary)
+        # 只有通过早退检测后才会走到这里，因此失败启动不会覆盖「上次能启动」快照
+        try:
+            self.ctx.config.remember_last_good_config()
+        except OSError as exc:
+            self._append_log(f"[配置] 保存上次可启动配置失败：{exc}")
+        self.start_anim.finish()
+        action = self.ctx.config.after_launch_action
+        if action == "hide":
+            QTimer.singleShot(800, self.ctx.bus.hide_window.emit)
+        elif action == "close":
+            QTimer.singleShot(1200, lambda: self.window().close())
+
+    def _on_failed(self, message: str) -> None:
+        self._append_log(f"[错误] {message}")
+        self._reset_launch_ui()
+        if self._queue_running:
+            self._append_log("[多选启动] 当前版本启动失败，继续队列中的下一个。")
+            return  # 队列模式只记录，不弹框打断
+        QMessageBox.critical(self, "启动失败", message)
+
+    def _on_exited(self, code: int, tail: str) -> None:
+        session, self._session = self._session, None
+        duration = ""
+        if session is not None and getattr(session, "started_at", 0):
+            minutes = max(0, int((time.time() - session.started_at) / 60))
+            duration = f"，运行 {minutes} 分钟"
+        self._append_log(f"[启动] 游戏已退出（代码 {code}{duration}）。")
+        self._reset_launch_ui()
+        worker = self._worker
+        self._worker = None
+        if worker is not None:
+            worker.deleteLater()
+        if self._launch_queue:
+            # 队列模式：只记录异常，不弹框打断，自动推进下一个
+            if code != 0:
+                self._append_log(
+                    f"[多选启动] {self._selected_id} 异常退出（代码 {code}），继续下一个。"
+                )
+            QTimer.singleShot(0, self._maybe_advance_queue)
+            return
+        if code != 0:
+            if session is not None:
+                archived = archive_crash_log(session, code)
+                if archived is not None:
+                    self._append_log(f"[崩溃] 本次日志已归档：{archived}")
+            hint = crash_hint(code, tail)
+            self._append_log(hint)
+            self._show_crash_dialog(hint)
+        elif not self.ctx.config.keep_launcher_on_game_exit:
+            QTimer.singleShot(200, lambda: self.window().close())
+
+    # ------------------------------------------------------------------
+    # 崩溃提示 / 文件补全 / Java 中心跳转
+    # ------------------------------------------------------------------
+    def _required_java_from_hint(self, hint: str) -> int:
+        """从崩溃日志推断所需 Java 主版本：class file 版本号 - 44，解析不到按 21。"""
+        match = re.search(r"class file version\s+(\d+(?:\.\d+)?)", hint, re.IGNORECASE)
+        if not match:
+            return 21
+        try:
+            version = int(float(match.group(1)))
+        except ValueError:
+            return 21
+        major = version - 44
+        return major if 8 <= major <= 30 else 21
+
+    def _show_crash_dialog(self, hint: str) -> None:
+        """异常退出弹窗：可直达 Java 中心装所需版本，或在后台补全缺失文件。"""
+        box = QMessageBox(self)
+        box.setWindowTitle("游戏异常退出")
+        box.setIcon(QMessageBox.Warning)
+        box.setText(hint)
+        lowered = hint.lower()
+        java_button = None
+        java_major = 0
+        if "unsupportedclassversionerror" in lowered or "class file version" in lowered:
+            java_major = self._required_java_from_hint(hint)
+            java_button = box.addButton(f"去装 Java {java_major}", QMessageBox.ActionRole)
+        repair_button = box.addButton("补全缺失文件", QMessageBox.ActionRole)
+        close_button = box.addButton("确定", QMessageBox.AcceptRole)
+        box.setDefaultButton(close_button)
+        box.exec()
+        clicked = box.clickedButton()
+        if java_button is not None and clicked is java_button:
+            self._open_java_center(java_major)
+        elif clicked is repair_button:
+            repair_button.setEnabled(False)  # 防重复点击
+            self._repair_version_files(self._selected_id)
+
+    def _open_java_center(self, major: int) -> None:
+        """导航到 Java 中心并按所需主版本预选筛选条件。"""
+        main = self.window()
+        navigate = getattr(main, "_navigate_by_name", None)
+        if callable(navigate):
+            navigate("java")
+        else:
+            self.ctx.bus.navigate.emit("java")
+        page = getattr(main, "java_center_page", None)
+        preselect = getattr(page, "preselect", None)
+        if callable(preselect):
+            preselect(int(major), "temurin")
+
+    def _repair_version_files(self, version_id: str) -> None:
+        """后台补全当前版本的缺失文件（libraries / assets 等），完成后提示并刷新列表。"""
+        if not version_id:
+            return
+        if self._repair_thread is not None and self._repair_thread.is_alive():
+            self.ctx.bus.toast.emit("正在补全文件，请稍候。")
+            return
+        self._append_log(f"[补全] 开始补全 {version_id} 的缺失文件…")
+        thread = threading.Thread(
+            target=self._run_repair,
+            args=(version_id,),
+            name="mc-repair-files",
+            daemon=True,
+        )
+        self._repair_thread = thread
+        thread.start()
+
+    def _run_repair(self, version_id: str) -> None:
+        """补全线程：只发信号回主线程，避免跨线程操作控件。"""
+        ok, message = True, ""
+        try:
+            game_dir = self._instance_dir()
+            installer = GameInstaller(
+                self.ctx.config.with_game_dir(game_dir),
+                self.ctx.sources,
+                log_cb=lambda line: self.ctx.bus.log.emit(line),
+            )
+            installer.ensure_version(version_id)
+        except Cancelled:
+            ok, message = False, "补全已取消。"
+        except Exception as exc:  # noqa: BLE001
+            ok, message = False, str(exc)
+        if ok:
+            self.ctx.bus.log.emit(f"[补全] {version_id} 文件补全完成。")
+        else:
+            self.ctx.bus.log.emit(f"[补全] {version_id} 补全失败：{message}")
+        try:
+            self.repair_finished.emit(ok, message)
+        except RuntimeError:  # 页面已销毁
+            pass
+
+    def _on_repair_finished(self, ok: bool, message: str) -> None:
+        if ok:
+            QMessageBox.information(self, "补全完成", "已补全，请重试启动。")
+        else:
+            QMessageBox.warning(self, "补全失败", message or "补全未完成。")
+        self.refresh_versions()
+
+    def _show_version_error(self, version_id: str, message: str) -> None:
+        """无法读取版本（libraries/assets 缺失等）：额外提供“补全缺失文件”入口。"""
+        box = QMessageBox(self)
+        box.setWindowTitle("无法读取版本")
+        box.setIcon(QMessageBox.Critical)
+        box.setText(message)
+        repair_button = box.addButton("补全缺失文件", QMessageBox.ActionRole)
+        close_button = box.addButton("关闭", QMessageBox.RejectRole)
+        box.setDefaultButton(close_button)
+        box.exec()
+        if box.clickedButton() is repair_button:
+            repair_button.setEnabled(False)  # 防重复点击
+            self._repair_version_files(version_id)
+
+    def _on_stalled(self, message: str) -> None:
+        """启动看门狗：进程存活但迟迟没有窗口，允许强制结束并查看日志。"""
+        self._append_log(f"[警告] {message}")
+        box = QMessageBox(self)
+        box.setWindowTitle("游戏可能卡在初始化")
+        box.setIcon(QMessageBox.Warning)
+        box.setText(message)
+        kill_button = box.addButton("强制结束并查看日志", QMessageBox.DestructiveRole)
+        wait_button = box.addButton("继续等待", QMessageBox.RejectRole)
+        box.setDefaultButton(wait_button)
+        box.exec()
+        if box.clickedButton() is not kill_button:
+            return
+        session, self._session = self._session, None
+        if session is None:
+            return
+        try:
+            session.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        self._reset_launch_ui()
+        log_path = getattr(session, "log_path", None)
+        if log_path:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_path)))
+
+    def _reset_launch_ui(self) -> None:
+        self.progress_card.setVisible(False)
+        self.start_anim.finish()
+        self.launch_button.setText(self.tr("启动游戏"))
+        self.launch_button.setEnabled(bool(self._selected_id))
+        if self._selected_id == BEDROCK_ID:
+            version = str((self._bedrock_info or {}).get("Version") or "").strip()
+            self.launch_info.setText(
+                t("HomePage", "将启动：基岩版 {0}", version)
+                if version
+                else self.tr("将启动：基岩版")
+            )
+        elif self._selected_id:
+            row = self._rows.get(self._selected_id)
+            loader = row.version.loader if row else ""
+            self.launch_info.setText(
+                t("HomePage", "将启动：{0}", self._selected_id)
+                + (f" · {loader}" if loader else "")
+            )
+        else:
+            self.launch_info.setText(self.tr("未选择版本"))
+
+    def _on_worker_finished(self) -> None:
+        # 进程仍在运行时保留 worker 引用，直到 exited 信号到达。
+        if self._session is None and self._worker is not None:
+            worker = self._worker
+            self._worker = None
+            worker.deleteLater()
+        # 队列模式：worker 结束但游戏未启动（预检中止 / 启动失败）时推进队列
+        if self._queue_running and self._launch_queue and self._session is None:
+            QTimer.singleShot(0, self._maybe_advance_queue)
+
+    def _on_preflight_blocked(self, blocked: list) -> None:
+        """预检阻止项：弹框让用户选择仍要启动 / 中止。"""
+        worker = self._worker
+        if worker is None:
+            return
+        answer = QMessageBox.warning(
+            self,
+            "启动前预检未通过",
+            "\n".join(str(line) for line in blocked) + "\n\n仍要启动吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        worker._preflight_continue = answer == QMessageBox.Yes
+        worker._preflight_wait.set()
+        if not worker._preflight_continue:
+            self._append_log("[预检] 用户选择不启动，已中止。")
+            self._reset_launch_ui()
+
+    # ------------------------------------------------------------------
+    # 多选启动队列
+    # ------------------------------------------------------------------
+    def _open_queue_dialog(self) -> None:
+        if self._queue_running:
+            self.ctx.bus.toast.emit("已有启动队列在进行中。")
+            return
+        if self._session is not None or (
+            self._worker is not None and self._worker.isRunning()
+        ):
+            self.ctx.bus.toast.emit("当前已有游戏在运行，请先退出再使用多选启动。")
+            return
+        if not self._rows:
+            QMessageBox.information(self, "多选启动", "当前没有可启动的版本。")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(t("HomePage", "多选启动"))
+        dialog.setMinimumSize(360, 420)
+        layout = QVBoxLayout(dialog)
+        tip = QLabel(
+            self.tr("按选择顺序依次启动；同一实例目录不能并行，需等前一个游戏退出。")
+        )
+        tip.setObjectName("Muted")
+        tip.setWordWrap(True)
+        layout.addWidget(tip)
+        list_widget = QListWidget()
+        list_widget.setSelectionMode(QAbstractItemView.MultiSelection)
+        for version_id in self._rows:
+            list_widget.addItem(version_id)
+        layout.addWidget(list_widget, 1)
+        buttons = QHBoxLayout()
+        cancel_btn = QPushButton(self.tr("取消"))
+        cancel_btn.clicked.connect(dialog.reject)
+        launch_btn = QPushButton(self.tr("启动"))
+        launch_btn.setObjectName("Primary")
+        launch_btn.clicked.connect(dialog.accept)
+        buttons.addWidget(cancel_btn)
+        buttons.addWidget(launch_btn)
+        layout.addLayout(buttons)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        selected = [
+            list_widget.item(i).text()
+            for i in range(list_widget.count())
+            if list_widget.item(i).isSelected()
+        ]
+        if not selected:
+            return
+
+        self._launch_queue = list(selected)
+        self._queue_total = len(selected)
+        self._queue_running = True
+        self._queue_stop = False
+        self.queue_stop_button.setVisible(True)
+        self.queue_launch_button.setEnabled(False)
+        self._append_log(f"[多选启动] 已加入队列：{'、'.join(selected)}")
+        self._launch_queue_next()
+
+    def _launch_queue_next(self) -> None:
+        if not self._launch_queue:
+            self._finish_queue()
+            return
+        if self._queue_stop:
+            self._finish_queue("已停止队列。")
+            return
+        version_id = self._launch_queue.pop(0)
+        self._append_log(
+            f"[多选启动] 开始启动：{version_id}（队列剩余 {len(self._launch_queue)}）"
+        )
+        self._select_version(version_id)
+        self._start_launch()
+        # _start_launch 可能因 Java/账号问题提前返回（未创建 worker），交给下一轮推进
+        if self._worker is None or not self._worker.isRunning():
+            QTimer.singleShot(0, self._maybe_advance_queue)
+
+    def _maybe_advance_queue(self) -> None:
+        """队列推进的唯一入口：仅在无运行中游戏 / 无运行中 worker 时启动下一个。"""
+        if not self._queue_running or not self._launch_queue:
+            return
+        if self._session is not None:
+            return
+        if self._worker is not None and self._worker.isRunning():
+            return
+        self._launch_queue_next()
+
+    def _stop_queue(self) -> None:
+        if not self._queue_running:
+            return
+        self._queue_stop = True
+        self._append_log("[多选启动] 已请求停止队列：当前版本退出后不再继续。")
+        self.ctx.bus.toast.emit("已请求停止队列。")
+
+    def _finish_queue(self, message: str = "") -> None:
+        total = self._queue_total
+        self._launch_queue = []
+        self._queue_running = False
+        self._queue_stop = False
+        self._queue_total = 0
+        self.queue_stop_button.setVisible(False)
+        self.queue_launch_button.setEnabled(True)
+        if message:
+            self._append_log(f"[多选启动] {message}")
+            self.ctx.bus.toast.emit(message)
+        elif total:
+            self._append_log(f"[多选启动] 已依次启动 {total} 个版本。")
+            self.ctx.bus.toast.emit(f"已依次启动 {total} 个版本。")
+
+    # ------------------------------------------------------------------
+    def _open_game_dir(self) -> None:
+        path = self._instance_dir()
+        path.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _open_log_dir(self) -> None:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(DATA_DIR / "logs")))
+
+    def shutdown(self) -> None:
+        """关闭启动器时的清理：取消准备中的任务，但不强杀已启动的游戏。"""
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.cancel_event.set()
+            wait_thread(self._worker, 4000)
+        for worker in (self._bedrock_worker, self._bedrock_launch_worker):
+            if worker is not None and worker.isRunning():
+                wait_thread(worker, 2500)
+        self._bedrock_worker = None
+        self._bedrock_launch_worker = None
+        # 关闭后让延迟的基岩版校验回调直接返回，避免访问已销毁的页面
+        self._bedrock_pending_launch = 0.0
+        self._covers.shutdown()

@@ -83,8 +83,8 @@ EXCLUDES = [
 ]
 
 # Electron 自己提供前端文件，后端不需要 ui_web/web
+# translations 只带 .qm，.ts 是 Qt Linguist 源文件，运行时不读取
 DATA_DIRS = (
-    ("mc_launcher/translations", "mc_launcher/translations"),
     ("mc_launcher/data", "mc_launcher/data"),
     ("mc_launcher/resources", "mc_launcher/resources"),
     ("plugins", "plugins"),
@@ -152,6 +152,8 @@ def build_backend() -> int:
         "--clean",
         "--onefile",
         "--console",
+        "--optimize",
+        "2",
         "--name",
         EXE_NAME,
         f"--distpath={BACKEND_DIST}",
@@ -172,6 +174,10 @@ def build_backend() -> int:
         source = ROOT / folder
         if source.is_dir():
             command += ["--add-data", f"{source};{target}"]
+
+    # 翻译只收 .qm（运行时 i18n 只加载 .qm）
+    for qm in sorted((ROOT / "mc_launcher" / "translations").glob("*.qm")):
+        command += ["--add-data", f"{qm};mc_launcher/translations"]
 
     command.append(str(ENTRY))
     print("执行：", " ".join(command))
@@ -215,8 +221,16 @@ def _node_env(npm: str) -> dict[str, str]:
     return env
 
 
+# Electron 自带 50 多种语言的 .pak，这里只保留界面实际使用的中英文
+_KEEP_LOCALES = {"zh-CN", "en-US"}
+
+
 def _zip_unpacked() -> int:
-    """把 win-unpacked 压成单文件内置包，供主 exe 携带。"""
+    """把 win-unpacked 压成单文件内置包，供主 exe 携带。
+
+    顺手裁掉用不到的 Chromium 语言包（locales 里每份 pak 约 0.4-0.8 MB，
+    全量有 40 MB 左右），界面语言只有中/英/俄/法/日，保留 zh-CN + en-US 足够。
+    """
     source = ROOT / "electron" / "dist" / "win-unpacked"
     if not (source / "MikanCL.exe").is_file():
         print(f"未找到 Electron 解包版：{source}")
@@ -225,12 +239,18 @@ def _zip_unpacked() -> int:
     target = BUNDLE / "MikanCL-Electron.zip"
     temp = target.with_suffix(".zip.tmp")
     count = 0
+    trimmed = 0
     try:
         with zipfile.ZipFile(temp, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
             for item in sorted(source.rglob("*")):
                 if not item.is_file():
                     continue
-                archive.write(item, item.relative_to(source).as_posix())
+                rel = item.relative_to(source)
+                if rel.parts[:1] == ("locales",) and rel.suffix == ".pak":
+                    if rel.stem not in _KEEP_LOCALES:
+                        trimmed += 1
+                        continue
+                archive.write(item, rel.as_posix())
                 count += 1
         os.replace(temp, target)
     except OSError as exc:
@@ -238,7 +258,7 @@ def _zip_unpacked() -> int:
         print(f"压缩 Electron 失败：{exc}")
         return 1
     size = target.stat().st_size / 1024 / 1024
-    print(f"内置包完成：{target}（{count} 个文件，{size:.1f} MB）")
+    print(f"内置包完成：{target}（{count} 个文件，{size:.1f} MB，裁剪语言包 {trimmed} 个）")
     return 0
 
 

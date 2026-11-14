@@ -1,0 +1,2860 @@
+"""设置页：下载源管理（自定义源 + API Key）、游戏设置与 Java 管理。"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sys
+import threading
+import time
+from pathlib import Path
+
+from PySide6.QtCore import QThread, QUrl, Qt, Signal
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QButtonGroup,
+    QCheckBox,
+    QColorDialog,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QInputDialog,
+    QLabel,
+    QLayout,
+    QLineEdit,
+    QMessageBox,
+    QProgressDialog,
+    QPushButton,
+    QSlider,
+    QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .. import APP_NAME, APP_VERSION, agreement, themes
+from .._trace import trace as _trace
+from ..config import (
+    AFTER_LAUNCH_ACTIONS,
+    CACHE_DIR,
+    DATA_DIR,
+    FEATURE_PAGE_KEYS,
+    ISOLATION_LABELS,
+    LAUNCH_CONFIG_FIELDS,
+    LAUNCH_CONFIG_FORMAT,
+    PROCESS_PRIORITIES,
+    SOURCE_MAPPINGS,
+    DownloadSource,
+)
+from ..context import AppContext, wait_thread
+from ..hardware import memory_summary, recommend_memory_mb
+from ..i18n import SUPPORTED_LANGUAGES, t, translation_file
+from ..java import detect_java_installed, download_java, merge_java_lists, probe_java
+from ..net import Cancelled, apply_proxy, test_source
+from . import theme
+from .widgets import Card, card_title_row, page_header, scroll_page
+
+
+class TestSourceWorker(QThread):
+    done = Signal(str, bool, str)
+
+    def __init__(self, source: DownloadSource, parent=None):
+        super().__init__(parent)
+        self.source = DownloadSource.from_dict(source.to_dict())
+
+    def run(self) -> None:
+        ok, message = test_source(self.source)
+        self.done.emit(self.source.name, ok, message)
+
+
+class UpdateCheckWorker(QThread):
+    """检查 GitHub 更新；network 失败也要给出可读结果，不能抛到界面线程。"""
+
+    done = Signal(dict)
+
+    def run(self) -> None:
+        try:
+            from ..update import check_update
+
+            info = check_update()
+        except Exception as exc:  # noqa: BLE001 - 检查更新失败只提示，不影响启动器
+            info = {"ok": False, "message": f"检查更新失败：{exc}", "has_update": False}
+        self.done.emit(info or {"ok": False, "message": "检查更新失败", "has_update": False})
+
+
+class UpdateDownloadWorker(QThread):
+    """下载更新包；完成后交给批处理替换自身。"""
+
+    progress = Signal(float, str)
+    done = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, info: dict, parent=None):
+        super().__init__(parent)
+        self.info = dict(info or {})
+
+    def run(self) -> None:
+        try:
+            from ..update import download_update
+
+            path = download_update(
+                self.info,
+                progress=lambda percent, done, total: self.progress.emit(
+                    float(percent or 0),
+                    (f"{done // 1024} / {total // 1024} KB" if total else "正在下载更新…"),
+                ),
+            )
+            self.done.emit(path)
+        except Exception as exc:  # noqa: BLE001 - 统一转成可读错误
+            self.failed.emit(str(exc))
+
+
+class JavaDownloadWorker(QThread):
+    done = Signal(object)
+    failed = Signal(str)
+    progress = Signal(float, float)  # 0~1 进度, 字节/秒
+
+    def __init__(
+        self,
+        major: int,
+        dest_root: Path,
+        task_id: str = "",
+        cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.major = int(major)
+        self.dest_root = Path(dest_root)
+        self.task_id = task_id
+        self.cancel_event = cancel_event or threading.Event()
+        self.pause_event = pause_event or threading.Event()
+
+    def run(self) -> None:
+        state = {"total": 0, "bytes": 0, "last_t": time.time(), "last_b": 0}
+
+        def on_total(total: int) -> None:
+            state["total"] = int(total)
+
+        def on_bytes(n: int) -> None:
+            # 限频上报进度与速度，避免高频刷新下载中心表格
+            state["bytes"] += n
+            now = time.time()
+            if now - state["last_t"] < 0.25:
+                return
+            dt = now - state["last_t"]
+            speed = (state["bytes"] - state["last_b"]) / dt if dt > 0 else 0.0
+            state["last_t"], state["last_b"] = now, state["bytes"]
+            total = state["total"]
+            percent = min(1.0, state["bytes"] / total) if total else 0.0
+            self.progress.emit(percent, speed)
+
+        try:
+            info = download_java(
+                self.major,
+                self.dest_root,
+                log=lambda text: None,
+                on_bytes=on_bytes,
+                cancel=self.cancel_event,
+                pause=self.pause_event,
+                on_total=on_total,
+            )
+            self.done.emit(info)
+        except Cancelled:
+            pass  # 已由下载中心标记为取消
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
+class RescanJavaWorker(QThread):
+    done = Signal(list)
+
+    def __init__(self, extra_paths: list[str] | None = None, parent=None):
+        super().__init__(parent)
+        self.extra_paths = list(extra_paths or [])
+
+    def run(self) -> None:
+        self.done.emit(detect_java_installed(self.extra_paths))
+
+
+class SourceDialog(QDialog):
+    def __init__(self, source: DownloadSource, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"编辑下载源 · {source.name}")
+        self.setMinimumWidth(520)
+        self.source = source
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        self.name_edit = QLineEdit(source.name)
+        self.manifest_edit = QLineEdit(source.manifest_url)
+        self.manifest_edit.setPlaceholderText("https://example.com/mc/game/version_manifest_v2.json")
+        self.mapping_combo = QComboBox()
+        for key, text in SOURCE_MAPPINGS.items():
+            self.mapping_combo.addItem(text, key)
+        index = self.mapping_combo.findData(source.mapping)
+        self.mapping_combo.setCurrentIndex(max(0, index))
+        self.base_edit = QLineEdit(source.download_base)
+        self.base_edit.setPlaceholderText("如 https://bmclapi2.bangbang93.com")
+        self.header_edit = QLineEdit(source.api_key_header or "X-API-Key")
+        self.header_edit.setPlaceholderText("X-API-Key")
+        self.key_edit = QLineEdit(source.api_key)
+        self.key_edit.setEchoMode(QLineEdit.PasswordEchoOnEdit)
+        self.key_edit.setPlaceholderText("可留空")
+
+        form.addRow("源名称", self.name_edit)
+        form.addRow("版本清单地址", self.manifest_edit)
+        form.addRow("资源映射方式", self.mapping_combo)
+        form.addRow("镜像根地址", self.base_edit)
+        form.addRow("API Key 请求头名", self.header_edit)
+        form.addRow("API Key", self.key_edit)
+        layout.addLayout(form)
+
+        tip = QLabel(
+            "BMCLAPI 兼容：把 Mojang 域名替换为镜像根地址并适配 /assets、/maven 路径。\n"
+            "同路径镜像：仅替换域名，路径保持不变。\n"
+            "若映射方式为“不重写”，资源仍从官方地址下载，仅清单从该源获取。"
+        )
+        tip.setObjectName("Tiny")
+        tip.setWordWrap(True)
+        layout.addWidget(tip)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._validate)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _validate(self) -> None:
+        name = self.name_edit.text().strip()
+        manifest = self.manifest_edit.text().strip()
+        mapping = str(self.mapping_combo.currentData())
+        base = self.base_edit.text().strip()
+        if not name:
+            QMessageBox.warning(self, "信息不完整", "请填写源名称。")
+            return
+        if not manifest.startswith(("http://", "https://")):
+            if base.startswith(("http://", "https://")):
+                manifest = base.rstrip("/") + "/mc/game/version_manifest_v2.json"
+            else:
+                QMessageBox.warning(
+                    self, "信息不完整", "请填写有效的版本清单地址（http/https）。"
+                )
+                return
+        if mapping != "none" and not base.startswith(("http://", "https://")):
+            QMessageBox.warning(
+                self, "信息不完整", "该映射方式需要填写有效的镜像根地址（http/https）。"
+            )
+            return
+        self.source.name = name
+        self.source.manifest_url = manifest
+        self.source.mapping = mapping
+        self.source.download_base = base
+        self.source.api_key_header = self.header_edit.text().strip() or "X-API-Key"
+        self.source.api_key = self.key_edit.text()
+        self.accept()
+
+
+class SettingsPage(QWidget):
+    def __init__(self, ctx: AppContext, parent: QWidget | None = None):
+        super().__init__(parent)
+        _trace("settings: init entry")
+        self.ctx = ctx
+        self._test_worker: TestSourceWorker | None = None
+        self._rescan_worker: RescanJavaWorker | None = None
+        self._java_download_worker: JavaDownloadWorker | None = None
+        # 「常用 / 显示全部」视图：只在显示全部时出现的控件与标签页
+        self._advanced_widgets: list[QWidget] = []
+        self._advanced_tabs: set[QWidget] = set()
+        self._settings_view_common = True
+        self._build()
+        _trace("settings: _build done")
+        self._connect()
+        _trace("settings: _connect done")
+        self._sync_ui_from_config()
+        _trace("settings: sync done")
+        self._rebuild_source_table()
+        _trace("settings: source table done")
+        self._rebuild_java_table()
+        _trace("settings: java table done")
+
+    # ------------------------------------------------------------------
+    def _build(self) -> None:
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(26, 20, 26, 20)
+        outer.setSpacing(16)
+        header, _ = page_header(
+            self.tr("设置"), self.tr("下载源、游戏配置与 Java 运行时管理")
+        )
+        outer.addWidget(header)
+
+        view_row = QHBoxLayout()
+        view_row.setSpacing(6)
+        self.view_common_btn = QPushButton(self.tr("常用"))
+        self.view_common_btn.setObjectName("Chip")
+        self.view_common_btn.setCheckable(True)
+        self.view_common_btn.setChecked(True)
+        self.view_all_btn = QPushButton(self.tr("显示全部"))
+        self.view_all_btn.setObjectName("Chip")
+        self.view_all_btn.setCheckable(True)
+        self.view_group = QButtonGroup(self)
+        self.view_group.setExclusive(True)
+        self.view_group.addButton(self.view_common_btn)
+        self.view_group.addButton(self.view_all_btn)
+        self.view_common_btn.clicked.connect(lambda: self._set_settings_view(True))
+        self.view_all_btn.clicked.connect(lambda: self._set_settings_view(False))
+        view_row.addWidget(self.view_common_btn)
+        view_row.addWidget(self.view_all_btn)
+        view_hint = QLabel(
+            self.tr("常用视图只显示影响启动的关键设置，其余选项在「显示全部」中。")
+        )
+        view_hint.setObjectName("Tiny")
+        view_row.addWidget(view_hint, 1)
+        outer.addLayout(view_row)
+
+        self.tabs = QTabWidget()
+        outer.addWidget(self.tabs, 1)
+        self.tabs.insertTab(0, scroll_page(self._build_general_tab()), self.tr("通用"))
+        _trace("settings: tab general")
+        features_tab = scroll_page(self._build_features_tab())
+        self.tabs.insertTab(1, features_tab, self.tr("功能开关"))
+        self._advanced_tabs.add(features_tab)
+        _trace("settings: tab features")
+        self.tabs.insertTab(2, scroll_page(self._build_appearance_tab()), self.tr("外观"))
+        _trace("settings: tab appearance")
+        sources_tab = self._build_sources_tab()
+        self.tabs.addTab(sources_tab, self.tr("下载源"))
+        self._advanced_tabs.add(sources_tab)
+        _trace("settings: tab sources")
+        content_tab = scroll_page(self._build_content_tab())
+        self.tabs.addTab(content_tab, self.tr("内容源与镜像"))
+        self._advanced_tabs.add(content_tab)
+        _trace("settings: tab content")
+        auth_tab = scroll_page(self._build_auth_tab())
+        self.tabs.addTab(auth_tab, self.tr("账号与登录"))
+        self._advanced_tabs.add(auth_tab)
+        _trace("settings: tab auth")
+        self.tabs.addTab(scroll_page(self._build_game_tab()), self.tr("游戏设置"))
+        _trace("settings: tab game")
+        java_tab = self._build_java_tab()
+        self.tabs.addTab(java_tab, self.tr("Java 运行时"))
+        self._advanced_tabs.add(java_tab)
+        _trace("settings: tab java")
+        about_tab = scroll_page(self._build_about_tab())
+        self.tabs.addTab(about_tab, self.tr("关于"))
+        self._advanced_tabs.add(about_tab)
+        _trace("settings: tab about")
+        self._set_settings_view(True)
+
+    # ------------------------------------------------------------------
+    # 「常用 / 显示全部」视图：只隐藏控件，不销毁重建，滚动区域高度自动收敛
+    def _mark_advanced(self, *items) -> None:
+        """标记只在「显示全部」中出现的控件或分组。"""
+        for item in items:
+            if isinstance(item, QWidget):
+                if isinstance(item, QLabel) and not item.text():
+                    continue
+                self._advanced_widgets.append(item)
+            elif isinstance(item, QLayout):
+                for index in range(item.count()):
+                    child = item.itemAt(index)
+                    if child is None:
+                        continue
+                    if child.widget() is not None:
+                        self._mark_advanced(child.widget())
+                    elif child.layout() is not None:
+                        self._mark_advanced(child.layout())
+
+    def _mark_advanced_row(self, form: QFormLayout) -> None:
+        """把表单刚添加的一行（标签 + 字段）标记为「显示全部」才出现。"""
+        row = form.rowCount() - 1
+        if row < 0:
+            return
+        for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
+            item = form.itemAt(row, role)
+            if item is None:
+                continue
+            widget = item.widget()
+            if widget is not None:
+                if isinstance(widget, QLabel) and not widget.text():
+                    continue
+                self._advanced_widgets.append(widget)
+            elif item.layout() is not None:
+                self._mark_advanced(item.layout())
+
+    def _set_settings_view(self, common: bool) -> None:
+        self._settings_view_common = bool(common)
+        for widget in self._advanced_widgets:
+            widget.setVisible(not common)
+        for index in range(self.tabs.count()):
+            page = self.tabs.widget(index)
+            self.tabs.setTabVisible(index, not (common and page in self._advanced_tabs))
+        self.view_common_btn.setChecked(common)
+        self.view_all_btn.setChecked(not common)
+        if common and self.tabs.widget(self.tabs.currentIndex()) in self._advanced_tabs:
+            for index in range(self.tabs.count()):
+                if self.tabs.isTabVisible(index):
+                    self.tabs.setCurrentIndex(index)
+                    break
+
+    def _build_general_tab(self) -> QWidget:
+        _trace("gt: entry")
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 14, 0, 0)
+        layout.setSpacing(12)
+
+        card = Card(margins=20, spacing=12)
+        form = QFormLayout()
+        _trace("gt: card+form")
+        form.setSpacing(11)
+        form.setLabelAlignment(Qt.AlignRight | Qt.AlignTrailing)
+
+        self.tray_check = QCheckBox(self.tr("关闭窗口时最小化到托盘（可从托盘恢复）"))
+        form.addRow("", self.tray_check)
+        self._mark_advanced_row(form)
+
+        self.language_combo = QComboBox()
+        for code, name in SUPPORTED_LANGUAGES.items():
+            self.language_combo.addItem(name, code)
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
+        restart = QPushButton(self.tr("立即重启"))
+        restart.setObjectName("Ghost")
+        restart.clicked.connect(self._restart_launcher)
+        language_row = QHBoxLayout()
+        language_row.setSpacing(8)
+        language_row.addWidget(self.language_combo, 1)
+        language_row.addWidget(restart)
+        form.addRow(self.tr("界面语言"), language_row)
+        _trace("gt: language row")
+
+        self.general_memory_spin = QSpinBox()
+        self.general_memory_spin.setRange(512, 65536)
+        self.general_memory_spin.setSingleStep(512)
+        self.general_memory_spin.setSuffix(" MB")
+        detect_memory = QPushButton(self.tr("自动检测"))
+        detect_memory.setObjectName("Ghost")
+        detect_memory.setToolTip(
+            self.tr("读取本机物理内存，按 25% 规则建议游戏可用内存并立即生效")
+        )
+        detect_memory.clicked.connect(self._on_detect_memory)
+        memory_row = QHBoxLayout()
+        memory_row.setSpacing(8)
+        memory_row.addWidget(self.general_memory_spin, 1)
+        memory_row.addWidget(detect_memory)
+        form.addRow(self.tr("默认最大内存"), memory_row)
+        _trace("gt: memory row")
+
+        self.general_threads_spin = QSpinBox()
+        self.general_threads_spin.setRange(1, 328)
+        self.general_threads_spin.setSuffix(f" {t('SettingsPage', '线程')}")
+        form.addRow(self.tr("下载线程数"), self.general_threads_spin)
+
+        self.speed_limit_spin = QSpinBox()
+        self.speed_limit_spin.setRange(0, 102400)
+        self.speed_limit_spin.setSingleStep(128)
+        self.speed_limit_spin.setSuffix(" KB/s")
+        self.speed_limit_spin.setSpecialValueText(self.tr("不限速"))
+        self.speed_limit_spin.setToolTip(
+            self.tr("全局带宽上限，边下载边看视频时可设为 1024 左右；0 表示不限速。")
+        )
+        form.addRow(self.tr("下载限速"), self.speed_limit_spin)
+        self._mark_advanced_row(form)
+
+        self.preload_check = QCheckBox(self.tr("预加载 JVM（实验性）"))
+        self.preload_check.setToolTip(
+            self.tr(
+                "开启后每次启动启动器都会在后台用所选 Java 预热一次 JVM（加载核心类与本地库到系统缓存），"
+                "之后启动游戏可更快进入；默认关闭，不影响未开启的用户。"
+            )
+        )
+        form.addRow("", self.preload_check)
+        self._mark_advanced_row(form)
+        self.preload_java_combo = QComboBox()
+        self.preload_java_combo.setMinimumWidth(220)
+        self.preload_check.toggled.connect(self.preload_java_combo.setEnabled)
+        form.addRow(self.tr("预加载的 Java"), self.preload_java_combo)
+        self._mark_advanced_row(form)
+        preload_hint = QLabel(
+            self.tr(
+                "预加载 JVM 默认关闭：每次启动启动器会多一次后台预热，"
+                "只在机械硬盘 / 冷启动场景收益明显。"
+            )
+        )
+        preload_hint.setObjectName("Tiny")
+        preload_hint.setWordWrap(True)
+        form.addRow("", preload_hint)
+        self._mark_advanced_row(form)
+        _trace("gt: preload row")
+
+        self.general_hide_check = QCheckBox(self.tr("启动游戏后隐藏启动器（可从托盘恢复）"))
+        form.addRow("", self.general_hide_check)
+
+        self.start_anim_check = QCheckBox(self.tr("启动游戏时显示启动动画"))
+        form.addRow("", self.start_anim_check)
+        self._mark_advanced_row(form)
+        _trace("gt: all form rows")
+
+        card.body.addLayout(form)
+        buttons = QHBoxLayout()
+        save = QPushButton(self.tr("保存通用设置"))
+        save.setObjectName("Primary")
+        save.clicked.connect(self._save_general_settings)
+        buttons.addWidget(save)
+        buttons.addStretch(1)
+        card.body.addLayout(buttons)
+        hint = QLabel(
+            self.tr(
+                "通用设置修改后需点击“保存通用设置”生效；内存与下载线程数同时影响全局配置。"
+            )
+        )
+        hint.setObjectName("Tiny")
+        hint.setWordWrap(True)
+        card.body.addWidget(hint)
+        layout.addWidget(card)
+        _trace("gt: main card added")
+
+        paths_card = Card(margins=20, spacing=12)
+        paths_card.body.addWidget(
+            card_title_row(
+                self.tr("目录与缓存"), self.tr("打开数据/游戏目录，或清理下载与封面缓存")
+            )
+        )
+        self.data_dir_label = QLabel(t("SettingsPage", "数据目录：{0}", DATA_DIR))
+        self.data_dir_label.setObjectName("Tiny")
+        self.data_dir_label.setWordWrap(True)
+        self.data_dir_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.version_label = QLabel(
+            t("SettingsPage", "当前版本：{0} v{1}", APP_NAME, APP_VERSION)
+        )
+        self.version_label.setObjectName("Tiny")
+        paths_card.body.addWidget(self.data_dir_label)
+        paths_card.body.addWidget(self.version_label)
+
+        open_row = QHBoxLayout()
+        open_data = QPushButton(self.tr("打开数据目录"))
+        open_data.clicked.connect(lambda: self._open_directory(DATA_DIR))
+        open_row.addWidget(open_data)
+        open_game = QPushButton(self.tr("打开游戏目录"))
+        open_game.clicked.connect(lambda: self._open_directory(self.ctx.config.game_path))
+        open_row.addWidget(open_game)
+        open_plugins = QPushButton(self.tr("打开插件目录"))
+        open_plugins.clicked.connect(lambda: self._open_directory(DATA_DIR / "plugins"))
+        open_row.addWidget(open_plugins)
+        open_row.addStretch(1)
+        paths_card.body.addLayout(open_row)
+
+        clear_row = QHBoxLayout()
+        clear_covers = QPushButton(self.tr("清理封面缓存"))
+        clear_covers.clicked.connect(
+            lambda: self._clear_cache(["covers"], "封面缓存")
+        )
+        clear_row.addWidget(clear_covers)
+        clear_downloads = QPushButton(self.tr("清理下载缓存"))
+        clear_downloads.clicked.connect(
+            lambda: self._clear_cache(["modpacks", "loaders"], "下载缓存")
+        )
+        clear_row.addWidget(clear_downloads)
+        clear_row.addStretch(1)
+        paths_card.body.addLayout(clear_row)
+
+        path_hint = QLabel(
+            t(
+                "SettingsPage",
+                "缓存目录位于 {0}；清理后已下载的整合包与加载器需要重新下载。",
+                CACHE_DIR,
+            )
+        )
+        path_hint.setObjectName("Tiny")
+        path_hint.setWordWrap(True)
+        paths_card.body.addWidget(path_hint)
+        layout.addWidget(paths_card)
+        self._mark_advanced(paths_card)
+        _trace("gt: paths card added")
+
+        share_card = Card(margins=20, spacing=10)
+        share_card.body.addWidget(
+            card_title_row(
+                self.tr("配置分享"),
+                self.tr("把影响启动的关键配置导出为 .mikan 文件，或导入他人分享的片段"),
+            )
+        )
+        share_row = QHBoxLayout()
+        share_row.setSpacing(8)
+        export_fragment = QPushButton(self.tr("导出配置片段…"))
+        export_fragment.clicked.connect(self._export_config_fragment)
+        share_row.addWidget(export_fragment)
+        import_fragment = QPushButton(self.tr("导入配置片段…"))
+        import_fragment.setObjectName("Ghost")
+        import_fragment.clicked.connect(self._import_config_fragment)
+        share_row.addWidget(import_fragment)
+        share_row.addStretch(1)
+        share_card.body.addLayout(share_row)
+        share_hint = QLabel(
+            self.tr(
+                "只分享内存、JVM 参数、隔离方式等启动配置，不含账号、目录与下载源；"
+                "导入时会校验格式并自动钳制内存与线程数。"
+            )
+        )
+        share_hint.setObjectName("Tiny")
+        share_hint.setWordWrap(True)
+        share_card.body.addWidget(share_hint)
+        layout.addWidget(share_card)
+        self._mark_advanced(share_card)
+        layout.addStretch(1)
+        _trace("gt: share card added")
+        return page
+
+    # ------------------------------------------------------------------
+    # 功能开关：标签页显隐（重启生效）+ 离线登录/皮肤入口（立即生效）
+    def _build_features_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 14, 0, 0)
+        layout.setSpacing(12)
+
+        cfg = self.ctx.config
+        self._feature_checks: dict[str, QCheckBox] = {}
+
+        pages_card = Card(margins=20, spacing=10)
+        pages_card.body.addWidget(
+            card_title_row(
+                self.tr("标签页开关"),
+                self.tr("关闭的标签页会从侧边栏隐藏并停用，重启启动器后生效"),
+            )
+        )
+        # 与主窗口 nav_items 的 key 一一对应；名称复用 MainWindow 上下文翻译
+        nav_names = {
+            "home": "启动游戏",
+            "download": "下载安装",
+            "downloads": "下载中心",
+            "download_accel": "下载加速",
+            "content": "内容中心",
+            "modpack": "整合包",
+            "account": "账号管理",
+            "control": "版本设置",
+            "loaders": "Mod 加载器",
+            "multiplayer": "多人联机",
+            "browser": "内置浏览器",
+            "forbric": "Forbric",
+            "java": "Java 中心",
+            "deps": "依赖补全",
+            "modgraph": "Mod 关系网",
+            "wiki": "教程中心",
+            "bedrock": "基岩版",
+            "skin_factory": "皮肤工厂",
+            "skin_pack": "皮肤包",
+            "seed_terrain": "世界种子",
+            "gallery": "截图图库",
+            "crash": "崩溃报告",
+        }
+        for key in FEATURE_PAGE_KEYS:
+            check = QCheckBox(t("MainWindow", nav_names[key]))
+            check.setChecked(cfg.feature_enabled(key))
+            check.toggled.connect(
+                lambda checked, k=key: self._on_page_feature_toggled(k, checked)
+            )
+            pages_card.body.addWidget(check)
+            self._feature_checks[key] = check
+            if key == "download_accel":
+                hint = QLabel(
+                    self.tr(
+                        "下载加速默认开启：只影响「下载加速」页的分段并发下载，"
+                        "普通下载页仍按全局线程数执行。"
+                    )
+                )
+                hint.setObjectName("Tiny")
+                hint.setWordWrap(True)
+                pages_card.body.addWidget(hint)
+        layout.addWidget(pages_card)
+
+        func_card = Card(margins=20, spacing=10)
+        func_card.body.addWidget(
+            card_title_row(
+                self.tr("功能入口开关"),
+                self.tr("关闭后账号管理页立即隐藏对应入口，无需重启"),
+            )
+        )
+        for key, text in (
+            ("offline_login", self.tr("离线登录（添加离线账号）")),
+            ("offline_skin", self.tr("离线皮肤（本地皮肤 / 正版皮肤搜索）")),
+        ):
+            check = QCheckBox(text)
+            check.setChecked(cfg.feature_enabled(key))
+            check.toggled.connect(
+                lambda checked, k=key: self._on_function_feature_toggled(k, checked)
+            )
+            func_card.body.addWidget(check)
+            self._feature_checks[key] = check
+            if key == "offline_skin":
+                hint = QLabel(
+                    self.tr(
+                        "离线皮肤默认开启：离线账号也能显示本地皮肤，"
+                        "不需要正版账号；关闭后账号页只保留默认皮肤。"
+                    )
+                )
+                hint.setObjectName("Tiny")
+                hint.setWordWrap(True)
+                func_card.body.addWidget(hint)
+        layout.addWidget(func_card)
+
+        restart_row = QHBoxLayout()
+        restart_row.setSpacing(10)
+        restart = QPushButton(self.tr("立即重启"))
+        restart.setObjectName("Ghost")
+        restart.clicked.connect(self._restart_launcher)
+        restart_row.addWidget(restart)
+        hint = QLabel(self.tr("标签页开关重启后生效；功能入口开关立即生效。"))
+        hint.setObjectName("Tiny")
+        hint.setWordWrap(True)
+        restart_row.addWidget(hint, 1)
+        layout.addLayout(restart_row)
+        layout.addStretch(1)
+        return page
+
+    def _on_page_feature_toggled(self, key: str, checked: bool) -> None:
+        self.ctx.config.set_feature(key, checked)
+        self.ctx.bus.toast.emit(self.tr("标签页开关已保存，重启启动器后生效。"))
+
+    def _on_function_feature_toggled(self, key: str, checked: bool) -> None:
+        self.ctx.config.set_feature(key, checked)
+        # 账号页监听 config_changed，立即隐藏/恢复对应入口
+        self.ctx.bus.config_changed.emit()
+
+    def _build_appearance_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 14, 0, 0)
+        layout.setSpacing(12)
+
+        card = Card(margins=20, spacing=12)
+        card.body.addWidget(
+            card_title_row(
+                self.tr("主题色与背景"),
+                self.tr("主题色即时生效；背景图按窗口大小等比铺满并居中裁切，不会拉伸变形"),
+            )
+        )
+
+        theme_row = QHBoxLayout()
+        theme_row.setSpacing(8)
+        self.theme_combo = QComboBox()
+        self.theme_combo.setMinimumWidth(140)
+        for name in themes.all_themes():
+            self.theme_combo.addItem(name)
+        self.theme_combo.activated.connect(
+            lambda _index: self._apply_named_theme(self.theme_combo.currentText())
+        )
+        theme_row.addWidget(self.theme_combo)
+        import_theme = QPushButton(self.tr("导入主题…"))
+        import_theme.setObjectName("Ghost")
+        import_theme.clicked.connect(self._import_theme)
+        theme_row.addWidget(import_theme)
+        export_theme = QPushButton(self.tr("导出模板…"))
+        export_theme.setObjectName("Ghost")
+        export_theme.clicked.connect(self._export_theme_template)
+        theme_row.addWidget(export_theme)
+        theme_row.addStretch(1)
+        card.body.addWidget(QLabel(self.tr("主题方案")))
+        card.body.addLayout(theme_row)
+        theme_hint = QLabel(
+            self.tr("自定义主题是 data/themes/*.json，改完点「导入主题」即可生效；只换主题色时用下方色块。")
+        )
+        theme_hint.setObjectName("Tiny")
+        theme_hint.setWordWrap(True)
+        card.body.addWidget(theme_hint)
+
+        accent_row = QHBoxLayout()
+        accent_row.setSpacing(8)
+        self.accent_buttons: dict[str, QPushButton] = {}
+        for name, color in theme.ACCENT_PRESETS.items():
+            chip = QPushButton(name)
+            chip.setObjectName("Chip")
+            chip.setCheckable(True)
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.setStyleSheet(
+                "QPushButton#Chip:checked {"
+                f" background-color: {color}; border-color: {color}; color: #08200e;"
+                " font-weight: 600; }"
+            )
+            chip.clicked.connect(lambda checked=False, c=color: self._apply_accent(c))
+            accent_row.addWidget(chip)
+            self.accent_buttons[color.lower()] = chip
+        custom = QPushButton(self.tr("自定义颜色…"))
+        custom.setObjectName("Ghost")
+        custom.clicked.connect(self._pick_accent)
+        accent_row.addWidget(custom)
+        accent_row.addStretch(1)
+        card.body.addWidget(QLabel(self.tr("主题色")))
+        card.body.addLayout(accent_row)
+
+        self.background_label = QLabel("未设置（使用默认深色背景）")
+        self.background_label.setObjectName("Tiny")
+        self.background_label.setWordWrap(True)
+        self.background_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        card.body.addWidget(QLabel(self.tr("启动器背景图")))
+        card.body.addWidget(self.background_label)
+
+        background_row = QHBoxLayout()
+        pick_bg = QPushButton(self.tr("选择图片…"))
+        pick_bg.clicked.connect(self._pick_background)
+        background_row.addWidget(pick_bg)
+        clear_bg = QPushButton(self.tr("清除背景"))
+        clear_bg.setObjectName("Ghost")
+        clear_bg.clicked.connect(self._clear_background)
+        background_row.addWidget(clear_bg)
+        background_row.addStretch(1)
+        card.body.addLayout(background_row)
+
+        hint = QLabel(
+            self.tr(
+                "背景图会随窗口缩放自动适配：窗口比例与图片不同时按「铺满 + 居中裁切」处理，"
+                "侧边栏与标题栏会自动半透明，保证文字可读。"
+            )
+        )
+        hint.setObjectName("Tiny")
+        hint.setWordWrap(True)
+        card.body.addWidget(hint)
+
+        self.dynamic_label = QLabel("未设置（静态背景）")
+        self.dynamic_label.setObjectName("Tiny")
+        self.dynamic_label.setWordWrap(True)
+        self.dynamic_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        card.body.addWidget(QLabel(self.tr("动态壁纸（GIF / WebP 动图）")))
+        card.body.addWidget(self.dynamic_label)
+        dynamic_default_hint = QLabel(
+            self.tr(
+                "动态壁纸默认关闭（未设置）：动图会持续解码占用 CPU / GPU，"
+                "只有选择文件后才开始播放；低配机建议保持静态背景。"
+            )
+        )
+        dynamic_default_hint.setObjectName("Tiny")
+        dynamic_default_hint.setWordWrap(True)
+        card.body.addWidget(dynamic_default_hint)
+        dynamic_row = QHBoxLayout()
+        pick_dynamic = QPushButton(self.tr("选择动图…"))
+        pick_dynamic.clicked.connect(self._pick_dynamic_wallpaper)
+        dynamic_row.addWidget(pick_dynamic)
+        clear_dynamic = QPushButton(self.tr("清除动态壁纸"))
+        clear_dynamic.setObjectName("Ghost")
+        clear_dynamic.clicked.connect(self._clear_dynamic_wallpaper)
+        dynamic_row.addWidget(clear_dynamic)
+        dynamic_row.addStretch(1)
+        card.body.addLayout(dynamic_row)
+        dynamic_hint = QLabel(
+            self.tr(
+                "动态壁纸会循环播放，优先于静态背景图；仅支持 GIF / WebP 动图。"
+                "美化版另外支持 MP4 / WebM 视频壁纸，可在美化版设置中配置。"
+            )
+        )
+        dynamic_hint.setObjectName("Tiny")
+        dynamic_hint.setWordWrap(True)
+        card.body.addWidget(dynamic_hint)
+        layout.addWidget(card)
+
+        effects_card = Card(margins=20, spacing=10)
+        effects_card.body.addWidget(
+            card_title_row(
+                self.tr("界面效果"),
+                self.tr("均可随时开关，关闭后可降低 GPU 与内存占用"),
+            )
+        )
+        self.anim_check = QCheckBox(self.tr("页面切换动画（淡入淡出）"))
+        self.anim_check.setChecked(self.ctx.config.ui_animations)
+        self.anim_check.toggled.connect(self._on_animations_toggled)
+        effects_card.body.addWidget(self.anim_check)
+        frame_row = QHBoxLayout()
+        frame_row.setSpacing(10)
+        frame_row.addWidget(QLabel(self.tr("界面框架")))
+        self.frame_combo = QComboBox()
+        self.frame_combo.addItem(self.tr("经典版（Qt，省内存）"), "classic")
+        self.frame_combo.addItem(self.tr("美化版（pywebview + WebView2，推荐）"), "webview")
+        self.frame_combo.addItem(self.tr("独立版（Electron，自带 Chromium，占用较高）"), "electron")
+        self.frame_combo.setCurrentIndex(self._frame_index(self.ctx.config.frame_mode))
+        self.frame_combo.currentIndexChanged.connect(self._on_frame_mode_changed)
+        frame_row.addWidget(self.frame_combo, 1)
+        effects_card.body.addLayout(frame_row)
+        frame_hint = QLabel(
+            self.tr(
+                "经典版 / 美化版 / 独立版可随时切换，三套界面共用同一套启动、下载、账号与联机内核；"
+                "修改后重启启动器生效，不会丢失下载进度或设置。"
+                "独立版自带 Chromium、不依赖 WebView2，占用更高；单文件版已内置独立版，首次切换会自动释放。"
+            )
+        )
+        frame_hint.setObjectName("Tiny")
+        frame_hint.setWordWrap(True)
+        effects_card.body.addWidget(frame_hint)
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(10)
+        mode_row.addWidget(QLabel(self.tr("运行模式")))
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem(self.tr("经典模式（稳定 · 低占用）"), "classic")
+        self.mode_combo.addItem(self.tr("视觉增强（毛玻璃 · 磁贴）"), "visual")
+        index = 1 if self.ctx.config.ui_mode == "visual" else 0
+        self.mode_combo.setCurrentIndex(index)
+        self.mode_combo.currentIndexChanged.connect(self._on_ui_mode_changed)
+        mode_row.addWidget(self.mode_combo, 1)
+        effects_card.body.addLayout(mode_row)
+        self.acrylic_check = QCheckBox(self.tr("毛玻璃背景（依赖 Windows DWM 合成）"))
+        self.acrylic_check.setChecked(self.ctx.config.ui_acrylic)
+        self.acrylic_check.toggled.connect(self._on_acrylic_toggled)
+        effects_card.body.addWidget(self.acrylic_check)
+        strength_row = QHBoxLayout()
+        strength_row.setSpacing(10)
+        strength_row.addWidget(QLabel(self.tr("毛玻璃强度")))
+        self.glass_strength_slider = QSlider(Qt.Horizontal)
+        self.glass_strength_slider.setRange(0, 100)
+        self.glass_strength_slider.setValue(int(self.ctx.config.glass_strength or 62))
+        self.glass_strength_slider.setEnabled(bool(self.ctx.config.ui_acrylic))
+        self.glass_strength_slider.valueChanged.connect(self._on_glass_strength_changed)
+        strength_row.addWidget(self.glass_strength_slider, 1)
+        self.glass_strength_label = QLabel(f"{self.glass_strength_slider.value()}%")
+        self.glass_strength_label.setObjectName("Tiny")
+        self.glass_strength_label.setMinimumWidth(38)
+        strength_row.addWidget(self.glass_strength_label)
+        effects_card.body.addLayout(strength_row)
+        effects_hint = QLabel(
+            self.tr(
+                "毛玻璃仅在 Windows 10/11 桌面窗口管理器开启时生效，不额外启动进程、不联网；"
+                "在不支持的系统上会自动回退为半透明深色背景。"
+            )
+        )
+        effects_hint.setObjectName("Tiny")
+        effects_hint.setWordWrap(True)
+        effects_card.body.addWidget(effects_hint)
+        layout.addWidget(effects_card)
+        self._mark_advanced(effects_card)
+
+        layout.addStretch(1)
+        return page
+
+    def _on_animations_toggled(self, checked: bool) -> None:
+        cfg = self.ctx.config
+        cfg.ui_animations = bool(checked)
+        cfg.save()
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit(self.tr("界面动画设置已保存。"))
+
+    def _on_acrylic_toggled(self, checked: bool) -> None:
+        cfg = self.ctx.config
+        cfg.ui_acrylic = bool(checked)
+        if getattr(self, "glass_strength_slider", None) is not None:
+            self.glass_strength_slider.setEnabled(bool(checked))
+        cfg.save()
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit(self.tr("毛玻璃设置已保存。"))
+
+    def _on_glass_strength_changed(self, value: int) -> None:
+        cfg = self.ctx.config
+        cfg.glass_strength = max(0, min(100, int(value)))
+        if getattr(self, "glass_strength_label", None) is not None:
+            self.glass_strength_label.setText(f"{cfg.glass_strength}%")
+        cfg.save()
+        self.ctx.bus.config_changed.emit()
+
+    @staticmethod
+    def _frame_index(mode: str) -> int:
+        return {"classic": 0, "webview": 1, "electron": 2}.get(str(mode or ""), 1)
+
+    def _on_frame_mode_changed(self, index: int) -> None:
+        """经典 Qt / 美化 pywebview / 独立 Electron 三向切换：重启后生效。"""
+        from ..electron_launcher import electron_installed
+        from .dialog_frame import webview2_installed
+
+        cfg = self.ctx.config
+        mode = self.frame_combo.itemData(index) or "classic"
+        if mode == cfg.frame_mode:
+            return
+        if mode == "webview" and not webview2_installed():
+            answer = QMessageBox.question(
+                self,
+                APP_NAME,
+                self.tr(
+                    "未检测到 WebView2 Runtime，美化版可能无法启动。\n"
+                    "仍要切换吗？（启动时会引导安装 WebView2 Runtime；"
+                    "若启动失败会提示是否切回经典版）"
+                ),
+            )
+            if answer != QMessageBox.Yes:
+                self.frame_combo.blockSignals(True)
+                self.frame_combo.setCurrentIndex(self._frame_index(cfg.frame_mode))
+                self.frame_combo.blockSignals(False)
+                return
+        if mode == "electron" and not electron_installed():
+            answer = QMessageBox.question(
+                self,
+                APP_NAME,
+                self.tr(
+                    "未检测到独立版（Electron）。\n"
+                    "单文件版应已内置独立版，第一次切换会自动释放；"
+                    "若使用源码运行，请先运行 build_electron.py --all 生成。\n\n"
+                    "仍要切换吗？"
+                ),
+            )
+            if answer != QMessageBox.Yes:
+                self.frame_combo.blockSignals(True)
+                self.frame_combo.setCurrentIndex(self._frame_index(cfg.frame_mode))
+                self.frame_combo.blockSignals(False)
+                return
+        cfg.frame_mode = mode
+        cfg.frame_mode_asked = True
+        cfg.frame_locked = False
+        cfg.save()
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit(self.tr("界面框架已保存，重启启动器后生效。"))
+
+
+    def _on_ui_mode_changed(self, index: int) -> None:
+        """经典 / 视觉模式切换：视觉模式自动开启毛玻璃，经典模式关闭。"""
+        cfg = self.ctx.config
+        mode = self.mode_combo.itemData(index) or "classic"
+        cfg.ui_mode = str(mode)
+        visual = cfg.ui_mode == "visual"
+        cfg.ui_acrylic = visual
+        cfg.save()
+        self.acrylic_check.blockSignals(True)
+        self.acrylic_check.setChecked(visual)
+        self.acrylic_check.blockSignals(False)
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit(
+            self.tr("已切换到视觉增强模式。") if visual else self.tr("已切换到经典模式。")
+        )
+
+    def _apply_accent(self, color: str) -> None:
+        cfg = self.ctx.config
+        cfg.accent_color = color
+        cfg.theme_name = ""   # 只换主题色：退出主题方案，改走色相旋转
+        cfg.save()
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            theme.apply_theme(app, color, "")
+        for key, chip in self.accent_buttons.items():
+            chip.setChecked(key == color.lower())
+        if hasattr(self, "theme_combo"):
+            self.theme_combo.blockSignals(True)
+            self.theme_combo.setCurrentIndex(-1)
+            self.theme_combo.blockSignals(False)
+        self.ctx.bus.toast.emit(f"主题色已切换为 {color}")
+
+    def _apply_named_theme(self, name: str) -> None:
+        """切换整套主题（背景 / 卡片 / 文字 / 强调色一起变）。"""
+        theme_obj = themes.get(name)
+        cfg = self.ctx.config
+        cfg.theme_name = name
+        cfg.accent_color = theme_obj.accent or cfg.accent_color
+        cfg.save()
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            theme.apply_theme(app, cfg.accent_color, name)
+        for key, chip in self.accent_buttons.items():
+            chip.setChecked(key == cfg.accent_color.lower())
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit(self.tr("已切换到主题「{0}」").format(name))
+
+    def _reload_theme_combo(self, selected: str = "") -> None:
+        if not hasattr(self, "theme_combo"):
+            return
+        self.theme_combo.blockSignals(True)
+        self.theme_combo.clear()
+        for name in themes.all_themes():
+            self.theme_combo.addItem(name)
+        if selected and self.theme_combo.findText(selected) >= 0:
+            self.theme_combo.setCurrentText(selected)
+        self.theme_combo.blockSignals(False)
+
+    def _import_theme(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, self.tr("导入主题"), str(DATA_DIR), "主题文件 (*.json)"
+        )
+        if not path:
+            return
+        try:
+            item = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, APP_NAME, f"主题文件读取失败：{exc}")
+            return
+        registered = themes.register(item) if isinstance(item, dict) else None
+        if registered is None:
+            QMessageBox.warning(
+                self, APP_NAME, "主题文件缺少 name 字段，或 accent 不是 #RRGGBB。"
+            )
+            return
+        self._reload_theme_combo(registered.name)
+        self._apply_named_theme(registered.name)
+
+    def _export_theme_template(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            self.tr("导出主题模板"),
+            str(Path.home() / "mikan-theme.json"),
+            "主题文件 (*.json)",
+        )
+        if not path:
+            return
+        try:
+            themes.write_template(path)
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, f"写入失败：{exc}")
+            return
+        self.ctx.bus.toast.emit("主题模板已导出，改完 color 后点「导入主题」即可生效。")
+
+    def _pick_accent(self) -> None:
+        current = self.ctx.config.accent_color or theme.ACCENT
+        color = QColorDialog.getColor(current, self, self.tr("选择主题色"))
+        if color.isValid():
+            self._apply_accent(color.name())
+
+    def _pick_background(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            self.tr("选择启动器背景图"),
+            str(DATA_DIR),
+            "图片文件 (*.png *.jpg *.jpeg *.bmp *.webp)",
+        )
+        if not path:
+            return
+        cfg = self.ctx.config
+        cfg.background_image = path
+        cfg.save()
+        self._sync_appearance()
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit("背景图已更新。")
+
+    def _clear_background(self) -> None:
+        cfg = self.ctx.config
+        if not cfg.background_image:
+            return
+        cfg.background_image = ""
+        cfg.save()
+        self._sync_appearance()
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit("已恢复默认背景。")
+
+    def _pick_dynamic_wallpaper(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            self.tr("选择动态壁纸"),
+            str(DATA_DIR),
+            "动态图片 (*.gif *.webp);;所有文件 (*.*)",
+        )
+        if not path:
+            return
+        cfg = self.ctx.config
+        cfg.dynamic_wallpaper = path
+        cfg.save()
+        self._sync_appearance()
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit("动态壁纸已更新。")
+
+    def _clear_dynamic_wallpaper(self) -> None:
+        cfg = self.ctx.config
+        if not cfg.dynamic_wallpaper:
+            return
+        cfg.dynamic_wallpaper = ""
+        cfg.save()
+        self._sync_appearance()
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit("已清除动态壁纸。")
+
+    def _sync_appearance(self) -> None:
+        cfg = self.ctx.config
+        accent = (cfg.accent_color or theme.ACCENT).lower()
+        for key, chip in self.accent_buttons.items():
+            chip.setChecked(key == accent)
+        if hasattr(self, "theme_combo"):
+            self.theme_combo.blockSignals(True)
+            if cfg.theme_name and self.theme_combo.findText(cfg.theme_name) >= 0:
+                self.theme_combo.setCurrentText(cfg.theme_name)
+            else:
+                self.theme_combo.setCurrentIndex(-1)
+            self.theme_combo.blockSignals(False)
+        image = cfg.background_image
+        if image and Path(image).exists():
+            self.background_label.setText(image)
+        elif image:
+            self.background_label.setText(f"{image}（文件不存在）")
+        else:
+            self.background_label.setText("未设置（使用默认深色背景）")
+        dynamic = cfg.dynamic_wallpaper
+        if dynamic and Path(dynamic).exists():
+            self.dynamic_label.setText(dynamic)
+        elif dynamic:
+            self.dynamic_label.setText(f"{dynamic}（文件不存在）")
+        else:
+            self.dynamic_label.setText("未设置（静态背景）")
+
+    def _build_sources_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 14, 0, 0)
+        layout.setSpacing(12)
+
+        card = Card(margins=16, spacing=10)
+        top = QHBoxLayout()
+        desc = QLabel(
+            self.tr(
+                "支持官方源、BMCLAPI 镜像、自定义镜像与 API Key。下载时会按列表顺序自动回退。"
+            )
+        )
+        desc.setObjectName("Muted")
+        top.addWidget(desc, 1)
+        add = QPushButton(self.tr("＋ 添加自定义源"))
+        add.clicked.connect(self._add_source)
+        top.addWidget(add)
+        test = QPushButton(self.tr("测试当前源"))
+        test.clicked.connect(self._test_selected_source)
+        top.addWidget(test)
+        card.body.addLayout(top)
+
+        self.source_table = QTableWidget(0, 6)
+        self.source_table.setHorizontalHeaderLabels(
+            [
+                self.tr("名称"),
+                self.tr("版本清单地址"),
+                self.tr("映射方式"),
+                self.tr("API Key"),
+                self.tr("启用"),
+                self.tr("操作"),
+            ]
+        )
+        self.source_table.verticalHeader().setVisible(False)
+        self.source_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.source_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        header = self.source_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.Fixed)
+        self.source_table.setColumnWidth(5, 214)
+        self.source_table.verticalHeader().setDefaultSectionSize(38)
+        card.body.addWidget(self.source_table, 1)
+
+        hint = QLabel(
+            "API Key 会作为请求头附加到该源的清单与资源请求。内置源不可删除，但可以禁用或编辑 API Key。\n"
+            "自定义源排在内置源之后作为备用；下载失败会自动尝试下一个源。"
+        )
+        hint.setObjectName("Tiny")
+        hint.setWordWrap(True)
+        card.body.addWidget(hint)
+        layout.addWidget(card, 1)
+        return page
+
+    def _build_content_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 14, 0, 0)
+        layout.setSpacing(12)
+        card = Card(margins=20, spacing=12)
+        form = QFormLayout()
+        form.setSpacing(11)
+        self.modrinth_edit = QLineEdit()
+        self.modrinth_edit.setPlaceholderText("https://api.modrinth.com/v2")
+        self.modrinth_mirror_edit = QLineEdit()
+        self.modrinth_mirror_edit.setPlaceholderText(
+            self.tr("留空使用官方 CDN；可填自建镜像根地址")
+        )
+        self.cf_edit = QLineEdit()
+        self.cf_edit.setPlaceholderText("https://api.curseforge.com/v1")
+        self.cf_key_edit = QLineEdit()
+        self.cf_key_edit.setEchoMode(QLineEdit.PasswordEchoOnEdit)
+        self.cf_key_edit.setPlaceholderText(self.tr("CurseForge API Key（必填）"))
+        self.cf_mirror_edit = QLineEdit()
+        self.cf_mirror_edit.setPlaceholderText(
+            self.tr("留空使用官方 CDN；如 https://mediafilez.forgecdn.net")
+        )
+        self.threads_spin = QSpinBox()
+        self.threads_spin.setRange(1, 328)
+        self.threads_spin.setSuffix(f" {t('SettingsPage', '线程')}")
+        form.addRow("Modrinth API", self.modrinth_edit)
+        form.addRow(self.tr("Modrinth CDN 镜像"), self.modrinth_mirror_edit)
+        form.addRow("CurseForge API", self.cf_edit)
+        form.addRow("CurseForge API Key", self.cf_key_edit)
+        form.addRow(self.tr("CurseForge CDN 镜像"), self.cf_mirror_edit)
+        form.addRow(self.tr("并行下载线程"), self.threads_spin)
+        card.body.addLayout(form)
+        buttons = QHBoxLayout()
+        save = QPushButton(self.tr("保存内容源设置"))
+        save.setObjectName("Primary")
+        save.clicked.connect(self._save_content_settings)
+        buttons.addWidget(save)
+        buttons.addStretch(1)
+        card.body.addLayout(buttons)
+        hint = QLabel(
+            "Modrinth 与 CurseForge 提供 Mod、整合包、资源包与光影包。\n"
+            "CDN 镜像仅替换下载地址的域名，不影响 API 请求。CurseForge 的 API Key 默认已内置，"
+            "如失效请到 curseforge.com 开发者控制台申请后填入。"
+        )
+        hint.setObjectName("Tiny")
+        hint.setWordWrap(True)
+        card.body.addWidget(hint)
+        layout.addWidget(card)
+        layout.addStretch(1)
+        return page
+
+    def _build_auth_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 14, 0, 0)
+        layout.setSpacing(12)
+        card = Card(margins=20, spacing=12)
+        form = QFormLayout()
+        form.setSpacing(11)
+        self.ms_client_edit = QLineEdit()
+        self.ms_client_edit.setPlaceholderText(self.tr("微软 OAuth 客户端 ID"))
+        self.authlib_url_edit = QLineEdit()
+        self.authlib_url_edit.setPlaceholderText(
+            self.tr("authlib-injector latest.json 地址")
+        )
+        form.addRow(self.tr("微软 Client ID"), self.ms_client_edit)
+        form.addRow(self.tr("authlib-injector 源"), self.authlib_url_edit)
+        card.body.addLayout(form)
+        path_row = QHBoxLayout()
+        self.authlib_path_label = QLabel("")
+        self.authlib_path_label.setObjectName("Tiny")
+        self.authlib_path_label.setWordWrap(True)
+        path_row.addWidget(self.authlib_path_label, 1)
+        clear = QPushButton(self.tr("清除缓存"))
+        clear.setObjectName("Ghost")
+        clear.clicked.connect(self._clear_authlib)
+        path_row.addWidget(clear)
+        card.body.addLayout(path_row)
+        buttons = QHBoxLayout()
+        save = QPushButton(self.tr("保存登录设置"))
+        save.setObjectName("Primary")
+        save.clicked.connect(self._save_auth_settings)
+        buttons.addWidget(save)
+        accounts = QPushButton(self.tr("前往账号管理"))
+        accounts.clicked.connect(lambda: self.ctx.bus.navigate.emit("accounts"))
+        buttons.addWidget(accounts)
+        buttons.addStretch(1)
+        card.body.addLayout(buttons)
+        hint = QLabel(
+            "微软正版登录采用 OAuth 设备码，不会保存密码。第三方外置登录会在启动时自动下载 "
+            "authlib-injector 并以 javaagent 注入游戏；账号页可为每个账号单独指定验证服务器。\n"
+            "所有登录令牌保存在 data/accounts.json，请勿将该文件分享给他人。"
+        )
+        hint.setObjectName("Tiny")
+        hint.setWordWrap(True)
+        card.body.addWidget(hint)
+        layout.addWidget(card)
+        layout.addStretch(1)
+        return page
+
+    def _build_game_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 14, 0, 0)
+        layout.setSpacing(12)
+        card = Card(margins=20, spacing=12)
+        form = QFormLayout()
+        form.setSpacing(12)
+        form.setLabelAlignment(Qt.AlignRight | Qt.AlignTrailing)
+
+        self.game_dir_combo = QComboBox()
+        self.game_dir_combo.setMinimumWidth(360)
+        self.game_dir_combo.currentIndexChanged.connect(self._on_game_dir_selected)
+        game_dir_row = QHBoxLayout()
+        game_dir_row.setSpacing(8)
+        game_dir_row.addWidget(self.game_dir_combo, 1)
+        add_game = QPushButton(self.tr("添加…"))
+        add_game.clicked.connect(self._add_game_dir)
+        game_dir_row.addWidget(add_game)
+        remove_game = QPushButton(self.tr("移除"))
+        remove_game.setObjectName("Ghost")
+        remove_game.clicked.connect(self._remove_game_dir)
+        game_dir_row.addWidget(remove_game)
+        open_game = QPushButton(self.tr("打开"))
+        open_game.setObjectName("Ghost")
+        open_game.clicked.connect(self._open_game_dir)
+        game_dir_row.addWidget(open_game)
+        form.addRow(self.tr("数据目录"), game_dir_row)
+
+        launch_import_row = QHBoxLayout()
+        launch_import_row.setSpacing(8)
+        launch_import_tip = QLabel(
+            self.tr("从 PCL2 / HMCL 的配置目录导入本启动器没有的版本，并沿用对方的游戏设置。")
+        )
+        launch_import_tip.setObjectName("Tiny")
+        launch_import_tip.setWordWrap(True)
+        launch_import_row.addWidget(launch_import_tip, 1)
+        import_launcher = QPushButton(self.tr("从 PCL / HMCL 导入…"))
+        import_launcher.clicked.connect(self._open_launcher_import)
+        launch_import_row.addWidget(import_launcher)
+        form.addRow(self.tr("导入配置"), launch_import_row)
+        self._mark_advanced_row(form)
+
+        self.isolation_combo = QComboBox()
+        for key, label in ISOLATION_LABELS.items():
+            self.isolation_combo.addItem(self.tr(label), key)
+        self.isolation_combo.setToolTip(self.tr("按版本隔离模组或存档，可避免不同版本互相干扰"))
+        self.isolation_combo.currentIndexChanged.connect(self._on_isolation_changed)
+        form.addRow(self.tr("版本隔离"), self.isolation_combo)
+        isolation_hint = QLabel(
+            self.tr(
+                "版本隔离默认「全部隔离」：每个版本独享 mods 与存档，避免互相干扰；"
+                "只玩原版可以改成「不隔离」节省磁盘空间。"
+            )
+        )
+        isolation_hint.setObjectName("Tiny")
+        isolation_hint.setWordWrap(True)
+        form.addRow("", isolation_hint)
+
+        self.priority_combo = QComboBox()
+        for key, label in PROCESS_PRIORITIES.items():
+            self.priority_combo.addItem(self.tr(label), key)
+        self.priority_combo.currentIndexChanged.connect(self._on_priority_changed)
+        form.addRow(self.tr("游戏进程优先级"), self.priority_combo)
+        self._mark_advanced_row(form)
+
+        self.after_launch_combo = QComboBox()
+        for key, label in AFTER_LAUNCH_ACTIONS.items():
+            self.after_launch_combo.addItem(self.tr(label), key)
+        self.after_launch_combo.currentIndexChanged.connect(self._on_after_launch_changed)
+        form.addRow(self.tr("启动后动作"), self.after_launch_combo)
+
+        self.window_title_edit = QLineEdit()
+        self.window_title_edit.setPlaceholderText(self.tr("留空则使用游戏默认标题"))
+        self.window_title_edit.editingFinished.connect(self._on_window_title_changed)
+        form.addRow(self.tr("游戏窗口标题"), self.window_title_edit)
+        self._mark_advanced_row(form)
+
+        proxy_row = QHBoxLayout()
+        proxy_row.setSpacing(8)
+        self.proxy_check = QCheckBox(self.tr("启用代理"))
+        self.proxy_check.toggled.connect(self._on_proxy_changed)
+        proxy_row.addWidget(self.proxy_check)
+        self.proxy_edit = QLineEdit()
+        self.proxy_edit.setPlaceholderText("http://127.0.0.1:7890")
+        self.proxy_edit.editingFinished.connect(self._on_proxy_changed)
+        proxy_row.addWidget(self.proxy_edit, 1)
+        self.proxy_jvm_check = QCheckBox(self.tr("游戏也走代理"))
+        self.proxy_jvm_check.toggled.connect(self._on_proxy_changed)
+        proxy_row.addWidget(self.proxy_jvm_check)
+        form.addRow(self.tr("网络代理"), proxy_row)
+        proxy_hint = QLabel(
+            self.tr(
+                "代理默认关闭：本机直连即可下载与登录；只有网络受限或需要加速时才填写代理地址。"
+            )
+        )
+        proxy_hint.setObjectName("Tiny")
+        proxy_hint.setWordWrap(True)
+        form.addRow("", proxy_hint)
+
+        self.java_path_edit = QLineEdit()
+        self.java_path_edit.setPlaceholderText(self.tr("留空则自动按版本选择"))
+        self.java_path_edit.editingFinished.connect(self._on_java_path_changed)
+        java_row = QHBoxLayout()
+        java_row.addWidget(self.java_path_edit, 1)
+        browse_java = QPushButton(self.tr("选择…"))
+        browse_java.clicked.connect(self._browse_java)
+        java_row.addWidget(browse_java)
+        form.addRow(self.tr("Java 路径"), java_row)
+
+        self.memory_spin = QSpinBox()
+        self.memory_spin.setRange(512, 65536)
+        self.memory_spin.setSingleStep(512)
+        self.memory_spin.setSuffix(" MB")
+        self.memory_spin.valueChanged.connect(self._on_memory_changed)
+        form.addRow(self.tr("分配内存"), self.memory_spin)
+
+        restore_row = QHBoxLayout()
+        restore_row.setSpacing(8)
+        self.restore_good_button = QPushButton(
+            self.tr("恢复到上次能启动的配置")
+        )
+        self.restore_good_button.setObjectName("Ghost")
+        self.restore_good_button.clicked.connect(self._restore_last_good_config)
+        restore_row.addWidget(self.restore_good_button)
+        restore_hint = QLabel(
+            self.tr("启动成功后会自动记录内存、JVM 参数与隔离方式；改坏了可以一键退回。")
+        )
+        restore_hint.setObjectName("Tiny")
+        restore_hint.setWordWrap(True)
+        restore_row.addWidget(restore_hint, 1)
+        form.addRow("", restore_row)
+
+        self.jvm_edit = QLineEdit()
+        self.jvm_edit.setPlaceholderText("如 -Dfile.encoding=UTF-8 -XX:+UseG1GC")
+        self.jvm_edit.editingFinished.connect(self._on_jvm_changed)
+        form.addRow(self.tr("额外 JVM 参数"), self.jvm_edit)
+        self._mark_advanced_row(form)
+
+        self.keep_check = QCheckBox(self.tr("游戏退出后保持启动器窗口打开"))
+        self.keep_check.toggled.connect(self._on_keep_changed)
+        form.addRow("", self.keep_check)
+        self._mark_advanced_row(form)
+
+        card.body.addLayout(form)
+        note = QLabel(
+            "内存建议：原版 2–4 GB，整合包 4–8 GB。内存分配过大反而会拖慢系统。\n"
+            "数据目录可添加多个 .minecraft 目录并用下拉框快速切换；版本隔离可在“版本设置”中按版本覆盖。\n"
+            "自定义窗口标题与进程优先级通过系统 API 在游戏启动后自动应用。"
+        )
+        note.setObjectName("Tiny")
+        note.setWordWrap(True)
+        card.body.addWidget(note)
+        layout.addWidget(card)
+
+        opt_card = Card(margins=20, spacing=10)
+        opt_card.body.addWidget(
+            card_title_row(
+                self.tr("游戏优化"),
+                self.tr("全部为开关键，改动立即生效，下次启动游戏时应用"),
+            )
+        )
+        self.smart_jvm_check = QCheckBox(
+            self.tr("智能 JVM 参数（自动启用 G1GC 等调优，减少卡顿）")
+        )
+        self.smart_jvm_check.setToolTip(
+            self.tr("按 Java 版本与内存自动追加 Aikar 风格 G1GC 参数；已自定义 GC 参数时自动跳过。")
+        )
+        self.smart_jvm_check.toggled.connect(self._on_optimization_changed)
+        opt_card.body.addWidget(self.smart_jvm_check)
+        smart_hint = QLabel(
+            self.tr(
+                "智能 JVM 默认开启：按你的 Java 与游戏版本自动调优；"
+                "你手动填写 GC 参数时会自动跳过。"
+            )
+        )
+        smart_hint.setObjectName("Tiny")
+        smart_hint.setWordWrap(True)
+        opt_card.body.addWidget(smart_hint)
+
+        self.opt_pretouch_check = QCheckBox(
+            self.tr("大堆预触碰（AlwaysPreTouch，稳定内存占用）")
+        )
+        self.opt_pretouch_check.setToolTip(
+            self.tr("仅在分配内存 ≥ 4 GB 时追加，启动稍慢一点，但运行中更少卡顿。")
+        )
+        self.opt_pretouch_check.toggled.connect(self._on_optimization_changed)
+        opt_card.body.addWidget(self.opt_pretouch_check)
+        pretouch_hint = QLabel(
+            self.tr(
+                "预读取资源（预触碰）默认开启：只在分配内存 ≥ 4 GB 时生效，"
+                "用启动时多花一点时间换取运行中更稳定的内存布局。"
+            )
+        )
+        pretouch_hint.setObjectName("Tiny")
+        pretouch_hint.setWordWrap(True)
+        opt_card.body.addWidget(pretouch_hint)
+        self._mark_advanced(self.opt_pretouch_check, pretouch_hint)
+
+        self.opt_fixed_heap_check = QCheckBox(
+            self.tr("固定堆大小（-Xms 与 -Xmx 相同）")
+        )
+        self.opt_fixed_heap_check.setToolTip(
+            self.tr("启动时一次性占满分配内存，避免运行中扩堆；内存紧张的老机器不建议开启。")
+        )
+        self.opt_fixed_heap_check.toggled.connect(self._on_optimization_changed)
+        opt_card.body.addWidget(self.opt_fixed_heap_check)
+        fixed_heap_hint = QLabel(
+            self.tr(
+                "固定堆大小默认关闭：启动时就会占满分配内存，"
+                "内存紧张或后台程序较多时会更卡，按需开启。"
+            )
+        )
+        fixed_heap_hint.setObjectName("Tiny")
+        fixed_heap_hint.setWordWrap(True)
+        opt_card.body.addWidget(fixed_heap_hint)
+        self._mark_advanced(self.opt_fixed_heap_check, fixed_heap_hint)
+
+        opt_hint = QLabel(
+            "这些开关只影响启动参数，不改动游戏内的画面设置。\n"
+            "老机器建议只开「智能 JVM 参数」，其余按需开启。"
+        )
+        opt_hint.setObjectName("Tiny")
+        opt_hint.setWordWrap(True)
+        opt_card.body.addWidget(opt_hint)
+        layout.addWidget(opt_card)
+
+        layout.addStretch(1)
+        return page
+
+    def _build_java_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 14, 0, 0)
+        layout.setSpacing(12)
+        card = Card(margins=16, spacing=10)
+        top = QHBoxLayout()
+        desc = QLabel(
+            self.tr(
+                "启动器会自动扫描系统与常见启动器目录。Java 8 → 1.16，Java 17 → 1.17–1.20.4，Java 21 → 1.20.5+"
+            )
+        )
+        desc.setObjectName("Muted")
+        desc.setWordWrap(True)
+        top.addWidget(desc, 1)
+        rescan = QPushButton(self.tr("重新扫描"))
+        rescan.clicked.connect(self._rescan_java)
+        top.addWidget(rescan)
+        add_java = QPushButton(self.tr("手动添加…"))
+        add_java.setObjectName("Ghost")
+        add_java.clicked.connect(self._add_java_manual)
+        top.addWidget(add_java)
+        self.java_download_button = QPushButton(self.tr("下载 Java…"))
+        self.java_download_button.clicked.connect(self._download_java)
+        top.addWidget(self.java_download_button)
+        java_center = QPushButton(self.tr("Java 中心"))
+        java_center.setObjectName("Ghost")
+        java_center.clicked.connect(self._open_java_center)
+        top.addWidget(java_center)
+        card.body.addLayout(top)
+
+        self.java_table = QTableWidget(0, 3)
+        self.java_table.setHorizontalHeaderLabels(
+            [self.tr("Java 版本"), self.tr("位数"), self.tr("路径")]
+        )
+        self.java_table.verticalHeader().setVisible(False)
+        self.java_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.java_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.java_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.java_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.java_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.java_table.verticalHeader().setDefaultSectionSize(32)
+        self.java_table.doubleClicked.connect(self._use_selected_java)
+        self.java_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.java_table.customContextMenuRequested.connect(self._java_context_menu)
+        card.body.addWidget(self.java_table, 1)
+        self.java_tip = QLabel(
+            self.tr(
+                "双击一行可将其设为默认 Java。同一主版本默认只显示一个，右键可查看所有版本。"
+            )
+        )
+        self.java_tip.setObjectName("Tiny")
+        card.body.addWidget(self.java_tip)
+        layout.addWidget(card, 1)
+        return page
+
+    def _build_about_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 14, 0, 0)
+        layout.setSpacing(12)
+        card = Card(margins=24, spacing=12)
+        title = QLabel(f"{APP_NAME} <span style='color:#65d46e'>v{APP_VERSION}</span>")
+        title.setTextFormat(Qt.RichText)
+        title.setStyleSheet("font-size: 22px; font-weight: 700;")
+        card.body.addWidget(title)
+        desc = QLabel(
+            "MikanCL 是一款参考 HMCL / PCL 设计实现的全能 Minecraft 启动器。\n\n"
+            "· 正版微软登录（设备码）、外置登录（authlib-injector）与离线账号并存\n"
+            "· 兼容标准 .minecraft 目录与 inheritsFrom 继承版本（Forge / NeoForge / Fabric / Quilt / LiteLoader / OptiFine）\n"
+            "· 一键安装 Forge、NeoForge、Fabric、Quilt、LiteLoader 加载器\n"
+            "· 内容中心接入 Modrinth 与 CurseForge：Mod、整合包、资源包、光影包搜索与多线程下载\n"
+            "· 整合包自动创建独立实例，独立配置版本、内存、参数与自动连服\n"
+            "· 控制面板：实例切换、Mod 启用/禁用/删除、启动参数与自动连服配置\n"
+            "· 内置 Mojang 官方源、BMCLAPI 镜像、自定义源与 API Key，内容 CDN 可配镜像\n"
+            "· 内置 Chromium 浏览器，可直接访问 Minecraft Wiki、MC 百科与 Bilibili"
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #b3c8b9; line-height: 1.6;")
+        card.body.addWidget(desc)
+        links = QHBoxLayout()
+        wiki = QPushButton(self.tr("打开 Minecraft Wiki"))
+        wiki.clicked.connect(
+            lambda: self.ctx.bus.open_browser.emit("https://zh.minecraft.wiki/")
+        )
+        links.addWidget(wiki)
+        bili = QPushButton(self.tr("打开 Bilibili"))
+        bili.clicked.connect(
+            lambda: self.ctx.bus.open_browser.emit(
+                "https://search.bilibili.com/all?keyword=我的世界"
+            )
+        )
+        links.addWidget(bili)
+        links.addStretch(1)
+        card.body.addLayout(links)
+        note = QLabel(
+            "免责声明：本启动器与 Mojang Studios、Microsoft、Bilibili、Minecraft Wiki 无隶属关系；"
+            "Minecraft 是 Mojang Studios 的商标。请通过官方渠道支持正版游戏。"
+        )
+        note.setObjectName("Tiny")
+        note.setWordWrap(True)
+        card.body.addWidget(note)
+        layout.addWidget(card)
+
+        # 用户协议：随时可重新查看，也可关闭启动前的确认提示
+        agree_texts = agreement.texts(self.ctx.config.language)
+        agree_card = Card(margins=20, spacing=10)
+        agree_title = QLabel(agree_texts["title"])
+        agree_title.setStyleSheet("font-size: 15px; font-weight: 700;")
+        agree_card.body.addWidget(agree_title)
+        accepted_text = (
+            agree_texts["agreed_at"].format(agreement.accepted_at(self.ctx.config))
+            if agreement.accepted(self.ctx.config)
+            else agree_texts["not_accepted"]
+        )
+        agree_info = QLabel(
+            agree_texts["version"].format(agreement.AGREEMENT_VERSION)
+            + "  ·  "
+            + accepted_text
+        )
+        agree_info.setObjectName("Tiny")
+        agree_info.setWordWrap(True)
+        agree_card.body.addWidget(agree_info)
+        agree_row = QHBoxLayout()
+        self.agreement_view_button = QPushButton(agree_texts["view"])
+        self.agreement_view_button.setObjectName("GhostCompact")
+        self.agreement_view_button.setFixedHeight(34)
+        self.agreement_view_button.clicked.connect(self._view_agreement)
+        agree_row.addWidget(self.agreement_view_button)
+        self.agreement_prompt_check = QCheckBox(agree_texts["prompt_switch"])
+        self.agreement_prompt_check.setChecked(bool(self.ctx.config.agreement_prompt))
+        self.agreement_prompt_check.toggled.connect(self._set_agreement_prompt)
+        agree_row.addWidget(self.agreement_prompt_check)
+        agree_row.addStretch(1)
+        agree_card.body.addLayout(agree_row)
+        layout.addWidget(agree_card)
+
+        # 检查更新：更新源固定为 GitHub 仓库 luohaocheng171/mikanCL
+        update_card = Card(margins=20, spacing=10)
+        update_title = QLabel(self.tr("检查更新"))
+        update_title.setStyleSheet("font-size: 15px; font-weight: 700;")
+        update_card.body.addWidget(update_title)
+        self.update_status = QLabel(
+            self.tr("当前版本 v{0} · 更新源 GitHub / luohaocheng171/mikanCL", APP_VERSION)
+        )
+        self.update_status.setObjectName("Tiny")
+        self.update_status.setWordWrap(True)
+        update_card.body.addWidget(self.update_status)
+        update_row = QHBoxLayout()
+        self.update_button = QPushButton(self.tr("检查更新"))
+        self.update_button.setObjectName("GhostCompact")
+        self.update_button.setFixedHeight(34)
+        self.update_button.clicked.connect(self._check_update)
+        update_row.addWidget(self.update_button)
+        self.update_download_button = QPushButton(self.tr("下载并更新"))
+        self.update_download_button.setFixedHeight(34)
+        self.update_download_button.setVisible(False)
+        self.update_download_button.clicked.connect(self._download_update)
+        update_row.addWidget(self.update_download_button)
+        repo = QPushButton(self.tr("打开 Releases"))
+        repo.setObjectName("GhostCompact")
+        repo.setFixedHeight(34)
+        repo.clicked.connect(
+            lambda: self.ctx.bus.open_browser.emit(
+                "https://github.com/luohaocheng171/mikanCL/releases"
+            )
+        )
+        update_row.addWidget(repo)
+        update_row.addStretch(1)
+        update_card.body.addLayout(update_row)
+        layout.addWidget(update_card)
+        layout.addStretch(1)
+        return page
+
+    def _check_update(self) -> None:
+        if getattr(self, "update_worker", None) is not None and self.update_worker.isRunning():
+            return
+        self.update_button.setEnabled(False)
+        self.update_status.setText(self.tr("正在连接 GitHub 检查更新…"))
+        worker = UpdateCheckWorker(self)
+        worker.done.connect(self._on_update_checked)
+        worker.finished.connect(lambda: self.update_button.setEnabled(True))
+        self.update_worker = worker
+        worker.start()
+
+    def _on_update_checked(self, info: dict) -> None:
+        info = info or {}
+        if not info.get("ok"):
+            self.update_status.setText(str(info.get("message") or self.tr("检查更新失败")))
+            return
+        latest = str(info.get("tag") or "")
+        if not info.get("has_update"):
+            self.update_status.setText(
+                self.tr("当前 v{0}，已经是最新版本（最新 v{1}）。", APP_VERSION, latest)
+            )
+            self.update_download_button.setVisible(False)
+            return
+        notes = str(info.get("notes") or "").strip()
+        self.update_status.setText(
+            self.tr("发现新版本 v{0}（当前 v{1}）。", latest, APP_VERSION)
+            + ("\n" + notes[:400] if notes else "")
+        )
+        self.current_update_info = info
+        self.update_download_button.setVisible(bool(info.get("downloadable")))
+        if not info.get("downloadable"):
+            QMessageBox.information(
+                self,
+                self.tr("检查更新"),
+                self.tr("这个版本没有附带 exe，请到 Releases 页面手动下载。"),
+            )
+
+    def _download_update(self) -> None:
+        info = getattr(self, "current_update_info", None)
+        if not info:
+            return
+        if getattr(self, "update_download_worker", None) is not None and self.update_download_worker.isRunning():
+            return
+        dialog = QProgressDialog(self.tr("正在下载更新…"), self.tr("取消"), 0, 100, self)
+        dialog.setWindowTitle(self.tr("下载更新"))
+        dialog.setWindowModality(Qt.WindowModal)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.setValue(0)
+        self.update_progress = dialog
+        worker = UpdateDownloadWorker(info, self)
+        worker.progress.connect(
+            lambda percent, detail: (
+                dialog.setValue(int(max(0.0, min(100.0, percent)))),
+                dialog.setLabelText(str(detail or self.tr("正在下载更新…"))),
+            )
+        )
+        worker.done.connect(self._on_update_downloaded)
+        worker.failed.connect(self._on_update_failed)
+        worker.finished.connect(dialog.close)
+        self.update_download_worker = worker
+        worker.start()
+
+    def _on_update_downloaded(self, path) -> None:
+        from ..update import apply_update
+
+        result = apply_update(path)
+        if not result.get("ok"):
+            self._on_update_failed(str(result.get("message") or self.tr("替换失败")))
+            return
+        self.update_status.setText(str(result.get("message") or ""))
+        QMessageBox.information(
+            self,
+            self.tr("更新已就绪"),
+            self.tr("启动器关闭后会自动替换为新版本并重新打开。"),
+        )
+        window = self.window()
+        if window is not None:
+            try:
+                setattr(window, "_force_quit", True)
+                from PySide6.QtCore import QTimer
+
+                QTimer.singleShot(1200, window.close)
+            except (RuntimeError, AttributeError):
+                pass
+
+    def _on_update_failed(self, message: str) -> None:
+        if getattr(self, "update_progress", None) is not None:
+            self.update_progress.close()
+        self.update_status.setText(str(message or self.tr("更新失败")))
+        QMessageBox.warning(self, self.tr("更新失败"), str(message or self.tr("更新失败")))
+
+    def _view_agreement(self) -> None:
+        from .dialog_agreement import AgreementDialog
+
+        AgreementDialog(self.ctx.config.language, self, view_only=True).exec()
+
+    def _set_agreement_prompt(self, checked: bool) -> None:
+        self.ctx.config.agreement_prompt = bool(checked)
+        self.ctx.config.save_debounced()
+
+    def _connect(self) -> None:
+        self.ctx.bus.config_changed.connect(self._sync_ui_from_config)
+        self.ctx.bus.javas_changed.connect(self._rebuild_java_table)
+        self.ctx.bus.javas_changed.connect(self._rebuild_preload_java)
+
+    # ------------------------------------------------------------------
+    def _rebuild_source_table(self) -> None:
+        config = self.ctx.config
+        self.source_table.setRowCount(0)
+        for row, source in enumerate(config.sources):
+            self.source_table.insertRow(row)
+            name_item = QTableWidgetItem(
+                source.name + (t("SettingsPage", "（内置）") if source.builtin else "")
+            )
+            name_item.setData(Qt.UserRole, source.id)
+            self.source_table.setItem(row, 0, name_item)
+            self.source_table.setItem(row, 1, QTableWidgetItem(source.manifest_url))
+            self.source_table.setItem(
+                row,
+                2,
+                QTableWidgetItem(
+                    t(
+                        "SettingsPage",
+                        SOURCE_MAPPINGS.get(source.mapping, source.mapping),
+                    )
+                ),
+            )
+            self.source_table.setItem(
+                row,
+                3,
+                QTableWidgetItem(
+                    t("SettingsPage", "已配置") if source.api_key.strip() else t("SettingsPage", "未设置")
+                ),
+            )
+            self.source_table.setItem(
+                row, 4, QTableWidgetItem(t("SettingsPage", "启用") if source.enabled else t("SettingsPage", "禁用"))
+            )
+
+            ops = QHBoxLayout()
+            ops.setContentsMargins(0, 0, 0, 0)
+            ops.setSpacing(4)
+            edit = QPushButton(t("SettingsPage", "编辑"))
+            edit.setStyleSheet("padding: 2px 8px; font-size: 11px;")
+            edit.clicked.connect(lambda _=False, sid=source.id: self._edit_source(sid))
+            ops.addWidget(edit)
+            test = QPushButton(t("SettingsPage", "测试"))
+            test.setStyleSheet("padding: 2px 8px; font-size: 11px;")
+            test.clicked.connect(lambda _=False, sid=source.id: self._test_source(sid))
+            ops.addWidget(test)
+            toggle = QPushButton(
+                t("SettingsPage", "禁用") if source.enabled else t("SettingsPage", "启用")
+            )
+            toggle.setStyleSheet("padding: 2px 8px; font-size: 11px;")
+            toggle.clicked.connect(lambda _=False, sid=source.id: self._toggle_source(sid))
+            ops.addWidget(toggle)
+            if not source.builtin:
+                delete = QPushButton(t("SettingsPage", "删除"))
+                delete.setObjectName("Danger")
+                delete.setStyleSheet("padding: 2px 8px; font-size: 11px;")
+                delete.clicked.connect(lambda _=False, sid=source.id: self._delete_source(sid))
+                ops.addWidget(delete)
+            wrapper = QWidget()
+            wrapper.setLayout(ops)
+            self.source_table.setCellWidget(row, 5, wrapper)
+
+    def _selected_source(self) -> DownloadSource | None:
+        row = self.source_table.currentRow()
+        if row < 0:
+            return None
+        item = self.source_table.item(row, 0)
+        if item is None:
+            return None
+        return self.ctx.config.get_source(str(item.data(Qt.UserRole)))
+
+    def _add_source(self) -> None:
+        source = DownloadSource(
+            id=self.ctx.config.new_source_id(),
+            name=f"自定义源 {len(self.ctx.config.sources) + 1}",
+            manifest_url="",
+            mapping="bmclapi",
+            download_base="",
+            api_key_header="X-API-Key",
+            api_key="",
+            enabled=True,
+            priority=90,
+            builtin=False,
+        )
+        dialog = SourceDialog(source, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self.ctx.config.sources.append(source)
+        self._ctx_save()
+        self.ctx.bus.toast.emit(f"已添加下载源：{source.name}")
+
+    def _edit_source(self, source_id: str) -> None:
+        source = self.ctx.config.get_source(source_id)
+        if not source:
+            return
+        dialog = SourceDialog(source, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._ctx_save()
+        self.ctx.bus.toast.emit(f"已保存下载源：{source.name}")
+        if source.id == self.ctx.config.selected_source_id:
+            self.ctx.bus.toast.emit("当前清单源已更新，可在下载页刷新清单。")
+
+    def _delete_source(self, source_id: str) -> None:
+        source = self.ctx.config.get_source(source_id)
+        if not source or source.builtin:
+            return
+        answer = QMessageBox.question(
+            self,
+            "删除下载源",
+            f"确定删除“{source.name}”吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.ctx.config.sources = [s for s in self.ctx.config.sources if s.id != source_id]
+        if self.ctx.config.selected_source_id == source_id:
+            remaining = [s for s in self.ctx.config.sources if s.enabled]
+            self.ctx.config.selected_source_id = remaining[0].id if remaining else "official"
+        self._ctx_save()
+        self.ctx.bus.toast.emit(f"已删除下载源：{source.name}")
+
+    def _toggle_source(self, source_id: str) -> None:
+        source = self.ctx.config.get_source(source_id)
+        if not source:
+            return
+        if source.enabled and len([s for s in self.ctx.config.sources if s.enabled]) <= 1:
+            QMessageBox.warning(self, "无法禁用", "至少需要保留一个启用的下载源。")
+            return
+        source.enabled = not source.enabled
+        self._ctx_save()
+        self.ctx.bus.toast.emit(f"下载源已{'启用' if source.enabled else '禁用'}：{source.name}")
+
+    def _test_source(self, source_id: str) -> None:
+        source = self.ctx.config.get_source(source_id)
+        if not source:
+            return
+        if self._test_worker is not None and self._test_worker.isRunning():
+            self.ctx.bus.toast.emit("正在测试其他源，请稍候…")
+            return
+        self.ctx.bus.toast.emit(f"正在测试源：{source.name}")
+        self._test_worker = TestSourceWorker(source, self)
+        self._test_worker.done.connect(self._on_tested)
+        self._test_worker.finished.connect(self._on_test_finished)
+        self._test_worker.start()
+
+    def _test_selected_source(self) -> None:
+        source = self._selected_source()
+        if source:
+            self._test_source(source.id)
+        else:
+            self._test_source(self.ctx.config.selected_source_id)
+
+    def _on_tested(self, name: str, ok: bool, message: str) -> None:
+        self.ctx.bus.log.emit(f"[源测试] {name}：{message}")
+        if ok:
+            QMessageBox.information(self, "测试通过", f"「{name}」\n{message}")
+        else:
+            QMessageBox.warning(self, "测试失败", f"「{name}」\n{message}")
+
+    def _on_test_finished(self) -> None:
+        worker = self._test_worker
+        self._test_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    # ------------------------------------------------------------------
+    def _sync_ui_from_config(self) -> None:
+        cfg = self.ctx.config
+        self._rebuild_game_dir_combo()
+        for widget, value in (
+            (self.java_path_edit, str(cfg.java_path)),
+            (self.jvm_edit, str(cfg.extra_jvm_args)),
+            (self.window_title_edit, str(cfg.window_title)),
+        ):
+            if widget.hasFocus():
+                continue
+            widget.blockSignals(True)
+            widget.setText(value)
+            widget.blockSignals(False)
+        for combo, value in (
+            (self.isolation_combo, cfg.isolation_mode),
+            (self.priority_combo, cfg.process_priority),
+            (self.after_launch_combo, cfg.after_launch_action),
+        ):
+            combo.blockSignals(True)
+            index = combo.findData(value)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+            combo.blockSignals(False)
+        proxy_widgets = (self.proxy_check, self.proxy_edit, self.proxy_jvm_check)
+        for widget in proxy_widgets:
+            widget.blockSignals(True)
+        self.proxy_check.setChecked(bool(cfg.proxy_enabled))
+        self.proxy_edit.setText(str(cfg.proxy_url))
+        self.proxy_edit.setEnabled(bool(cfg.proxy_enabled))
+        self.proxy_jvm_check.setChecked(bool(cfg.proxy_jvm))
+        for widget in proxy_widgets:
+            widget.blockSignals(False)
+        self.memory_spin.blockSignals(True)
+        self.memory_spin.setValue(max(512, int(cfg.memory_mb)))
+        self.memory_spin.blockSignals(False)
+        self.keep_check.blockSignals(True)
+        self.keep_check.setChecked(bool(cfg.keep_launcher_on_game_exit))
+        self.keep_check.blockSignals(False)
+        self._rebuild_source_table()
+
+        for widget, value in (
+            (self.modrinth_edit, cfg.modrinth_api_base),
+            (self.modrinth_mirror_edit, cfg.modrinth_cdn_mirror),
+            (self.cf_edit, cfg.curseforge_api_base),
+            (self.cf_key_edit, cfg.curseforge_api_key),
+            (self.cf_mirror_edit, cfg.curseforge_cdn_mirror),
+            (self.ms_client_edit, cfg.microsoft_client_id),
+            (self.authlib_url_edit, cfg.authlib_injector_url),
+        ):
+            if widget.hasFocus():
+                continue
+            widget.blockSignals(True)
+            widget.setText(str(value or ""))
+            widget.blockSignals(False)
+        self.threads_spin.blockSignals(True)
+        self.threads_spin.setValue(max(1, min(328, int(cfg.download_threads))))
+        self.threads_spin.blockSignals(False)
+        for check, value in (
+            (self.tray_check, cfg.close_to_tray),
+            (self.general_hide_check, cfg.after_launch_action == "hide"),
+            (self.start_anim_check, cfg.start_animation),
+            (self.smart_jvm_check, cfg.smart_jvm),
+            (self.opt_pretouch_check, cfg.opt_pre_touch),
+            (self.opt_fixed_heap_check, cfg.opt_fixed_heap),
+            (self.preload_check, cfg.preload_jvm),
+        ):
+            check.blockSignals(True)
+            check.setChecked(bool(value))
+            check.blockSignals(False)
+        self.general_memory_spin.blockSignals(True)
+        self.general_memory_spin.setValue(max(512, int(cfg.memory_mb)))
+        self.general_memory_spin.blockSignals(False)
+        self.general_threads_spin.blockSignals(True)
+        self.general_threads_spin.setValue(max(1, min(328, int(cfg.download_threads))))
+        self.general_threads_spin.blockSignals(False)
+        self.speed_limit_spin.blockSignals(True)
+        self.speed_limit_spin.setValue(max(0, int(cfg.download_speed_limit)))
+        self.speed_limit_spin.blockSignals(False)
+        self._rebuild_preload_java()
+        index = self.preload_java_combo.findData(cfg.preload_java_path or "")
+        self.preload_java_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.preload_java_combo.setEnabled(bool(cfg.preload_jvm))
+        self.language_combo.blockSignals(True)
+        index = self.language_combo.findData(cfg.language)
+        self.language_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.language_combo.blockSignals(False)
+        self._sync_appearance()
+        self.authlib_path_label.setText(self._authlib_path_text())
+        has_snapshot = bool(cfg.last_good_config)
+        self.restore_good_button.setEnabled(has_snapshot)
+        self.restore_good_button.setToolTip(
+            self.tr("成功启动一次游戏后会自动记录，之后即可一键恢复")
+            if not has_snapshot
+            else self.tr("恢复到上次成功启动时的内存、JVM 参数与隔离方式")
+        )
+
+    def _rebuild_preload_java(self) -> None:
+        combo = self.preload_java_combo
+        current = combo.currentData() or ""
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("自动（使用启动时选中的 Java）", "")
+        for info in self.ctx.javas:
+            combo.addItem(f"Java {info.major} · {info.path}", info.path)
+        index = combo.findData(current)
+        combo.setCurrentIndex(index if index >= 0 else 0)
+        combo.blockSignals(False)
+
+    def _authlib_path_text(self) -> str:
+        from ..auth import injector_jar_path
+
+        path = Path(self.ctx.config.authlib_injector_path) if self.ctx.config.authlib_injector_path else injector_jar_path()
+        if path.exists():
+            size = path.stat().st_size / 1024
+            return t("SettingsPage", "authlib-injector 缓存：{0}（{1} KB）", path, f"{size:.0f}")
+        return t(
+            "SettingsPage",
+            "authlib-injector 缓存：{0}（尚未下载，首次使用外置登录时自动获取）",
+            path,
+        )
+
+    def _on_language_changed(self, index: int) -> None:
+        code = str(self.language_combo.itemData(index) or "zh_CN")
+        cfg = self.ctx.config
+        if code == cfg.language:
+            return
+        if code != "zh_CN" and not translation_file(code).is_file():
+            QMessageBox.warning(
+                self, APP_NAME, self.tr("该语言的翻译文件缺失，已回退中文。")
+            )
+            self.language_combo.blockSignals(True)
+            index = self.language_combo.findData(cfg.language)
+            self.language_combo.setCurrentIndex(index if index >= 0 else 0)
+            self.language_combo.blockSignals(False)
+            return
+        cfg.language = code
+        cfg.save()
+        QMessageBox.information(self, APP_NAME, self.tr("语言已保存，重启启动器后生效"))
+
+    def _restart_launcher(self) -> None:
+        # 必须先释放单实例锁，否则新进程会 attach 成功并判定为「已经在运行中」而直接退出
+        from ..main import release_single_instance
+        from ..relaunch import spawn_restart
+
+        release_single_instance()
+        # relaunch 会清掉 PyInstaller onefile 的 _PYI_* 环境变量：这些变量被新实例
+        # 继承后会让它复用旧进程已经删除的 _MEI 解包目录，启动时直接报
+        # 「Failed to load Python DLL ... python315.dll」。
+        if not spawn_restart():
+            QMessageBox.warning(self, APP_NAME, "重启失败，请手动重新打开启动器。")
+            return
+        QApplication.quit()
+        QApplication.quit()
+
+    def _on_detect_memory(self) -> None:
+        """按本机物理内存推荐内存上限，填入输入框并立即写入配置。"""
+        recommended = recommend_memory_mb()
+        self.general_memory_spin.blockSignals(True)
+        self.general_memory_spin.setValue(max(512, int(recommended)))
+        self.general_memory_spin.blockSignals(False)
+        self.ctx.config.memory_mb = int(recommended)
+        self.ctx.config.save()
+        self.ctx.bus.config_changed.emit()
+        summary = memory_summary()
+        detail = f"（{summary}）" if summary else ""
+        self.ctx.bus.toast.emit(
+            f"已按本机配置自动分配内存：{recommended} MB{detail}"
+        )
+
+    def _save_general_settings(self) -> None:
+        cfg = self.ctx.config
+        cfg.close_to_tray = self.tray_check.isChecked()
+        cfg.start_animation = self.start_anim_check.isChecked()
+        cfg.memory_mb = int(self.general_memory_spin.value())
+        cfg.smart_jvm = self.smart_jvm_check.isChecked()
+        cfg.download_threads = int(self.general_threads_spin.value())
+        cfg.download_speed_limit = int(self.speed_limit_spin.value())
+        cfg.preload_jvm = self.preload_check.isChecked()
+        cfg.preload_java_path = str(self.preload_java_combo.currentData() or "")
+        from ..net import set_default_download_workers, set_download_speed_limit
+
+        set_default_download_workers(cfg.download_threads)
+        set_download_speed_limit(cfg.download_speed_limit)
+        if self.general_hide_check.isChecked():
+            if cfg.after_launch_action != "hide":
+                cfg.after_launch_action = "hide"
+        elif cfg.after_launch_action == "hide":
+            cfg.after_launch_action = "nothing"
+        cfg.hide_after_launch = cfg.after_launch_action == "hide"
+        self.after_launch_combo.blockSignals(True)
+        index = self.after_launch_combo.findData(cfg.after_launch_action)
+        self.after_launch_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.after_launch_combo.blockSignals(False)
+        self._ctx_save()
+        self.ctx.bus.toast.emit("通用设置已保存。")
+
+    def _open_directory(self, path) -> None:
+        target = Path(path)
+        if not target.exists():
+            QMessageBox.warning(self, "目录不存在", f"目录尚不存在：\n{target}")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
+
+    def _clear_cache(self, names: list[str], label: str) -> None:
+        removed = 0
+        failed = 0
+        for name in names:
+            folder = CACHE_DIR / name
+            if not folder.is_dir():
+                continue
+            for item in folder.iterdir():
+                # 缓存目录里可能有子目录（封面分组、整合包嵌套目录），需要递归删除
+                try:
+                    if item.is_dir() and not item.is_symlink():
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+                    removed += 1
+                except OSError:
+                    failed += 1
+        message = f"已清理{label}：{removed} 个文件。"
+        if failed:
+            message += f"（{failed} 个文件无法删除）"
+        self.ctx.bus.toast.emit(message)
+
+    def _save_content_settings(self) -> None:
+        cfg = self.ctx.config
+        cfg.modrinth_api_base = self.modrinth_edit.text().strip() or cfg.modrinth_api_base
+        cfg.modrinth_cdn_mirror = self.modrinth_mirror_edit.text().strip()
+        cfg.curseforge_api_base = self.cf_edit.text().strip() or cfg.curseforge_api_base
+        cfg.curseforge_api_key = self.cf_key_edit.text().strip()
+        cfg.curseforge_cdn_mirror = self.cf_mirror_edit.text().strip()
+        cfg.download_threads = int(self.threads_spin.value())
+        self._ctx_save()
+        self.ctx.bus.toast.emit("内容源设置已保存。")
+
+    def _save_auth_settings(self) -> None:
+        cfg = self.ctx.config
+        cfg.microsoft_client_id = self.ms_client_edit.text().strip() or cfg.microsoft_client_id
+        cfg.authlib_injector_url = (
+            self.authlib_url_edit.text().strip() or cfg.authlib_injector_url
+        )
+        self._ctx_save()
+        self.authlib_path_label.setText(self._authlib_path_text())
+        self.ctx.bus.toast.emit("登录设置已保存。")
+
+    def _clear_authlib(self) -> None:
+        from ..auth import injector_jar_path
+
+        path = (
+            Path(self.ctx.config.authlib_injector_path)
+            if self.ctx.config.authlib_injector_path
+            else injector_jar_path()
+        )
+        if not path.exists():
+            self.ctx.bus.toast.emit("authlib-injector 缓存已为空。")
+            return
+        try:
+            path.unlink()
+        except OSError as exc:
+            QMessageBox.warning(self, "删除失败", f"无法删除缓存文件：\n{exc}")
+            return
+        self.authlib_path_label.setText(self._authlib_path_text())
+        self.ctx.bus.toast.emit("authlib-injector 缓存已清除，下次使用时会重新下载。")
+
+    def _rebuild_game_dir_combo(self) -> None:
+        cfg = self.ctx.config
+        combo = self.game_dir_combo
+        combo.blockSignals(True)
+        combo.clear()
+        for entry in cfg.game_dirs:
+            combo.addItem(f"{entry.name} · {entry.path}", entry.id)
+        index = combo.findData(cfg.active_game_dir)
+        combo.setCurrentIndex(index if index >= 0 else 0)
+        combo.blockSignals(False)
+
+    def _on_game_dir_selected(self, index: int) -> None:
+        dir_id = str(self.game_dir_combo.itemData(index) or "")
+        cfg = self.ctx.config
+        if not dir_id or dir_id == cfg.active_game_dir:
+            return
+        if cfg.select_game_dir(dir_id):
+            self.ctx.bus.config_changed.emit()
+            self.ctx.bus.versions_changed.emit()
+            entry = cfg.active_game_entry()
+            self.ctx.bus.toast.emit(f"已切换到数据目录：{entry.name}")
+
+    def _add_game_dir(self) -> None:
+        path = QFileDialog.getExistingDirectory(
+            self, "选择要添加的数据目录", str(self.ctx.config.game_path)
+        )
+        if not path:
+            return
+        from ..config import detect_game_root
+
+        root = detect_game_root(path)
+        cfg = self.ctx.config
+        existing = next(
+            (entry for entry in cfg.game_dirs if Path(entry.path) == root), None
+        )
+        if existing is not None:
+            cfg.select_game_dir(existing.id)
+            message = f"已切换到数据目录：{existing.name}"
+        else:
+            entry = cfg.add_game_dir(root.name or "新目录", str(root))
+            cfg.select_game_dir(entry.id)
+            message = f"已添加数据目录：{entry.name}"
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.versions_changed.emit()
+        self._rebuild_game_dir_combo()
+        self.ctx.bus.toast.emit(message)
+
+    def _remove_game_dir(self) -> None:
+        cfg = self.ctx.config
+        dir_id = str(self.game_dir_combo.currentData() or cfg.active_game_dir)
+        if not cfg.remove_game_dir(dir_id):
+            QMessageBox.information(self, "无法移除", "至少需要保留一个数据目录。")
+            return
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.versions_changed.emit()
+        self._rebuild_game_dir_combo()
+        self.ctx.bus.toast.emit("数据目录已移除。")
+
+    def _open_game_dir(self) -> None:
+        path = self.ctx.config.game_path
+        path.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _open_launcher_import(self) -> None:
+        from .dialog_import_launcher import ImportLauncherDialog
+
+        dialog = ImportLauncherDialog(self.ctx, self)
+        dialog.exec()
+
+    def _on_isolation_changed(self, index: int) -> None:
+        self.ctx.config.isolation_mode = str(self.isolation_combo.itemData(index) or "none")
+        self._ctx_save()
+
+    def _on_priority_changed(self, index: int) -> None:
+        self.ctx.config.process_priority = str(self.priority_combo.itemData(index) or "normal")
+        self._ctx_save()
+
+    def _on_after_launch_changed(self, index: int) -> None:
+        value = str(self.after_launch_combo.itemData(index) or "nothing")
+        self.ctx.config.after_launch_action = value
+        self.ctx.config.hide_after_launch = value == "hide"
+        self._ctx_save()
+
+    def _on_window_title_changed(self) -> None:
+        self.ctx.config.window_title = self.window_title_edit.text().strip()
+        self._ctx_save()
+
+    def _on_proxy_changed(self, *_args) -> None:
+        cfg = self.ctx.config
+        cfg.proxy_enabled = self.proxy_check.isChecked()
+        cfg.proxy_url = self.proxy_edit.text().strip()
+        cfg.proxy_jvm = self.proxy_jvm_check.isChecked()
+        self.proxy_edit.setEnabled(cfg.proxy_enabled)
+        apply_proxy(cfg.effective_proxy)
+        self._ctx_save()
+
+    def _on_java_path_changed(self) -> None:
+        self.ctx.config.java_path = self.java_path_edit.text().strip()
+        self._ctx_save()
+
+    def _browse_java(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择 javaw.exe 或 java.exe",
+            str(Path(self.ctx.config.java_path).parent) if self.ctx.config.java_path else str(Path.home()),
+            "Java 可执行文件 (javaw.exe java.exe);;所有文件 (*)",
+        )
+        if path:
+            self.java_path_edit.setText(path)
+            self._on_java_path_changed()
+
+    def _java_task_active(self) -> bool:
+        return any(t.kind == "Java" and t.active for t in self.ctx.downloads.tasks())
+
+    def _download_java(self) -> None:
+        if self._java_task_active():
+            self.ctx.bus.toast.emit("已有 Java 下载任务在进行中。")
+            return
+        major, ok = QInputDialog.getInt(
+            self, "下载 Java", "要下载的 Java 大版本（8 / 17 / 21）：", 21, 8, 30, 1
+        )
+        if not ok:
+            return
+        cancel_event = threading.Event()
+        pause_event = threading.Event()
+
+        def factory(_task) -> QThread:
+            worker = JavaDownloadWorker(
+                major, DATA_DIR / "runtime", _task.id, cancel_event, pause_event, self
+            )
+            worker.progress.connect(
+                lambda p, s, tid=_task.id: self.ctx.downloads.update(
+                    tid, percent=p, speed=s
+                )
+            )
+            worker.done.connect(self._on_java_downloaded)
+            worker.failed.connect(
+                lambda msg, tid=_task.id: self._on_java_download_failed(tid, msg)
+            )
+            worker.finished.connect(self._restore_java_button)
+            self._java_download_worker = worker
+            return worker
+
+        self.ctx.downloads.submit(
+            kind="Java",
+            name=f"Java {major}",
+            factory=factory,
+            cancel=cancel_event.set,
+            pause=pause_event,
+            rebuild=factory,
+            target_dir=str(DATA_DIR / "runtime"),
+            detail=f"Adoptium JRE · Java {major}",
+        )
+        self.java_download_button.setEnabled(False)
+        self.java_download_button.setText("下载中…")
+        self.ctx.bus.toast.emit(f"已加入下载中心：Java {major}（Adoptium）")
+
+    def _restore_java_button(self) -> None:
+        self._java_download_worker = None
+        self.java_download_button.setEnabled(True)
+        self.java_download_button.setText("下载 Java…")
+
+    def _on_java_downloaded(self, info) -> None:
+        found = detect_java_installed(self.ctx.config.java_scan_paths())
+        if info is not None:
+            found.append(info)
+        self._apply_java_scan(found)
+        self.ctx.bus.javas_changed.emit()
+        self.ctx.bus.toast.emit(f"Java 已就绪：{getattr(info, 'version', '')}")
+
+    def _apply_java_scan(self, found: list) -> list:
+        """扫描结果与现有列表合并后落库，避免两批结果互相覆盖导致 Java 丢失。"""
+        merged = merge_java_lists(self.ctx.javas, found)
+        self.ctx.javas = merged
+        self.ctx.config.remember_java_paths(java.path for java in merged)
+        return merged
+
+    def _add_java_manual(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("手动添加 Java")
+        dialog.setMinimumWidth(520)
+        layout = QVBoxLayout(dialog)
+        tip = QLabel("选择 javaw.exe / java.exe，或直接填写 Java 安装目录。")
+        tip.setObjectName("Muted")
+        tip.setWordWrap(True)
+        layout.addWidget(tip)
+        row = QHBoxLayout()
+        edit = QLineEdit()
+        edit.setPlaceholderText(r"例如 C:\Program Files\Java\jdk-21\bin\javaw.exe")
+        row.addWidget(edit, 1)
+
+        browse_file = QPushButton("选择文件…")
+        browse_folder = QPushButton("选择目录…")
+        row.addWidget(browse_file)
+        row.addWidget(browse_folder)
+        layout.addLayout(row)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        def pick_file() -> None:
+            path, _ = QFileDialog.getOpenFileName(
+                dialog,
+                "选择 Java 可执行文件",
+                "",
+                "Java 可执行文件 (javaw.exe java.exe);;所有文件 (*)",
+            )
+            if path:
+                edit.setText(path)
+
+        def pick_folder() -> None:
+            path = QFileDialog.getExistingDirectory(dialog, "选择 Java 安装目录")
+            if path:
+                edit.setText(path)
+
+        browse_file.clicked.connect(pick_file)
+        browse_folder.clicked.connect(pick_folder)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        raw = edit.text().strip().strip('"')
+        if not raw:
+            return
+        info = probe_java(raw)
+        if info is None:
+            QMessageBox.warning(self, APP_NAME, "该路径不是可用的 Java（未找到 java.exe / javaw.exe）。")
+            return
+        self.ctx.config.add_manual_java_path(info.path)
+        self._apply_java_scan([info])
+        self.ctx.bus.javas_changed.emit()
+        self.ctx.bus.toast.emit(f"已添加 Java {info.major}（{info.version}）")
+
+    def _on_java_download_failed(self, task_id: str, message: str) -> None:
+        self.ctx.downloads.finish(task_id, ok=False, message=message)
+        QMessageBox.warning(self, APP_NAME, f"Java 下载失败：{message}")
+
+    def _open_java_center(self) -> None:
+        """以对话框形式打开 Java 中心，关闭时回收其后台 worker。"""
+        from .page_java_center import JavaCenterPage
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Java 中心")
+        dialog.resize(900, 540)
+        page = JavaCenterPage(self.ctx, dialog)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(page)
+        dialog.finished.connect(page.shutdown)
+        dialog.exec()
+
+    def _rescan_java(self) -> None:
+        if self._rescan_worker is not None and self._rescan_worker.isRunning():
+            return
+        self.ctx.bus.toast.emit("正在扫描 Java 运行时…")
+        self._rescan_worker = RescanJavaWorker(
+            self.ctx.config.java_scan_paths(), self
+        )
+        self._rescan_worker.done.connect(self._on_java_rescanned)
+        self._rescan_worker.start()
+
+    def _on_java_rescanned(self, javas: list) -> None:
+        merged = self._apply_java_scan(javas)
+        self.ctx.bus.javas_changed.emit()
+        self.ctx.bus.toast.emit(f"扫描完成，共找到 {len(merged)} 个 Java 运行时。")
+
+    def _rebuild_java_table(self) -> None:
+        self.java_table.setRowCount(0)
+        javas = list(self.ctx.javas)
+        if not getattr(self, "_show_all_java", False):
+            # 同一主版本只显示一个（优先保留位数更高、路径更短的条目）
+            grouped: dict[int, object] = {}
+            for java in javas:
+                current = grouped.get(java.major)
+                if current is None:
+                    grouped[java.major] = java
+                    continue
+                if (java.bits, -len(java.path)) > (current.bits, -len(current.path)):
+                    grouped[java.major] = java
+            javas = sorted(grouped.values(), key=lambda j: (-j.major, j.path))
+            hidden = max(0, len(self.ctx.javas) - len(javas))
+            if hidden and hasattr(self, "java_tip"):
+                self.java_tip.setText(
+                    self.tr(
+                        "双击一行可将其设为默认 Java。已合并 {hidden} 个同版本条目，右键可查看所有 Java。"
+                    ).format(hidden=hidden)
+                )
+        elif hasattr(self, "java_tip"):
+            self.java_tip.setText(
+                self.tr("双击一行可将其设为默认 Java。右键可切回「每个版本只显示一个」。")
+            )
+        for row, java in enumerate(javas):
+            self.java_table.insertRow(row)
+            version_item = QTableWidgetItem(f"Java {java.major}  ({java.version})")
+            version_item.setData(Qt.UserRole, java.path)
+            self.java_table.setItem(row, 0, version_item)
+            bits_item = QTableWidgetItem(f"{java.bits} 位")
+            bits_item.setTextAlignment(Qt.AlignCenter)
+            self.java_table.setItem(row, 1, bits_item)
+            self.java_table.setItem(row, 2, QTableWidgetItem(java.path))
+
+    def _java_context_menu(self, pos) -> None:
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self.java_table)
+        action = menu.addAction(
+            self.tr("查看所有 Java 版本") if not getattr(self, "_show_all_java", False)
+            else self.tr("每个版本只显示一个")
+        )
+        action.triggered.connect(self._toggle_all_java)
+        menu.addSeparator()
+        pick = menu.addAction(self.tr("把当前行设为默认 Java"))
+        pick.triggered.connect(self._use_selected_java)
+        menu.exec(self.java_table.viewport().mapToGlobal(pos))
+
+    def _toggle_all_java(self) -> None:
+        self._show_all_java = not getattr(self, "_show_all_java", False)
+        self._rebuild_java_table()
+
+    def _use_selected_java(self) -> None:
+        row = self.java_table.currentRow()
+        if row < 0:
+            return
+        item = self.java_table.item(row, 0)
+        if item is None:
+            return
+        path = str(item.data(Qt.UserRole) or "")
+        if path:
+            self.java_path_edit.setText(path)
+            self._on_java_path_changed()
+            self.ctx.bus.toast.emit(f"默认 Java 已设置为 Java {self.java_table.item(row, 0).text()}")
+
+    def _on_memory_changed(self, value: int) -> None:
+        self.ctx.config.memory_mb = int(value)
+        self._ctx_save()
+
+    def _on_jvm_changed(self) -> None:
+        self.ctx.config.extra_jvm_args = self.jvm_edit.text()
+        self._ctx_save()
+
+    def _on_optimization_changed(self) -> None:
+        """游戏优化开关：立即写回配置，下次启动游戏即生效。"""
+        cfg = self.ctx.config
+        cfg.smart_jvm = self.smart_jvm_check.isChecked()
+        cfg.opt_pre_touch = self.opt_pretouch_check.isChecked()
+        cfg.opt_fixed_heap = self.opt_fixed_heap_check.isChecked()
+        cfg.save_debounced()
+
+    def _on_keep_changed(self, checked: bool) -> None:
+        self.ctx.config.keep_launcher_on_game_exit = bool(checked)
+        self._ctx_save()
+
+    def _ctx_save(self) -> None:
+        self.ctx.config.save_debounced()
+        self.ctx.bus.config_changed.emit()
+
+    # ------------------------------------------------------------------
+    # 启动配置快照 / .mikan 配置片段分享
+    def _restore_last_good_config(self) -> None:
+        cfg = self.ctx.config
+        snapshot = cfg.last_good_config
+        if not isinstance(snapshot, dict) or not snapshot:
+            QMessageBox.information(
+                self,
+                self.tr("暂无快照"),
+                self.tr("还没有成功启动记录；成功启动一次游戏后会自动保存。"),
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            self.tr("恢复配置"),
+            self.tr(
+                "将内存、JVM 参数、隔离方式等启动配置恢复到上次成功启动时的状态？\n"
+                "账号、数据目录与下载源不会改动。"
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            applied = cfg.apply_launch_config(snapshot)
+            cfg.save()
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                self.tr("恢复失败"),
+                t("SettingsPage", "保存配置失败：{0}", exc),
+            )
+            return
+        if not applied:
+            QMessageBox.information(
+                self, self.tr("恢复配置"), self.tr("快照里没有可恢复的配置项。")
+            )
+            return
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit(
+            t("SettingsPage", "已恢复到上次能启动的配置（{0} 项）。", len(applied))
+        )
+
+    def _export_config_fragment(self) -> None:
+        default_name = f"mikan-config-{time.strftime('%Y%m%d')}.mikan"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            self.tr("导出配置片段"),
+            str(Path.home() / default_name),
+            self.tr("Mikan 配置片段 (*.mikan);;所有文件 (*)"),
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".mikan"):
+            path += ".mikan"
+        cfg = self.ctx.config
+        fields = cfg.launch_config_snapshot()
+        # 下载线程数只用于分享，不进入启动快照
+        fields["download_threads"] = int(cfg.download_threads)
+        payload = {
+            "format": LAUNCH_CONFIG_FORMAT,
+            "app": APP_NAME,
+            "app_version": APP_VERSION,
+            "exported_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "config": fields,
+        }
+        try:
+            Path(path).write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                self.tr("导出失败"),
+                t("SettingsPage", "无法写入文件：{0}", exc),
+            )
+            return
+        self.ctx.bus.toast.emit(t("SettingsPage", "已导出配置片段：{0}", path))
+
+    def _validate_config_fragment(self, fields: dict) -> dict:
+        """校验导入字段的类型与取值范围，非法时抛出带可读说明的 ValueError。"""
+        cleaned: dict = {}
+        for key in LAUNCH_CONFIG_FIELDS:
+            if key not in fields:
+                continue
+            value = fields[key]
+            if key in ("memory_mb", "download_threads"):
+                if isinstance(value, bool) or not isinstance(value, int):
+                    raise ValueError(
+                        t("SettingsPage", "字段 {0} 需要整数。", self._config_field_label(key))
+                    )
+            elif key in ("smart_jvm", "opt_fixed_heap", "opt_pre_touch", "proxy_enabled"):
+                if not isinstance(value, bool):
+                    raise ValueError(
+                        t(
+                            "SettingsPage",
+                            "字段 {0} 需要 true/false。",
+                            self._config_field_label(key),
+                        )
+                    )
+            elif not isinstance(value, str):
+                raise ValueError(
+                    t("SettingsPage", "字段 {0} 需要文本。", self._config_field_label(key))
+                )
+            if key == "isolation_mode" and value not in ISOLATION_LABELS:
+                raise ValueError(
+                    t("SettingsPage", "版本隔离取值无效：{0}", value)
+                )
+            if key == "priority" and value not in PROCESS_PRIORITIES:
+                raise ValueError(
+                    t("SettingsPage", "进程优先级取值无效：{0}", value)
+                )
+            cleaned[key] = value
+        return cleaned
+
+    def _config_field_label(self, key: str) -> str:
+        labels = {
+            "memory_mb": self.tr("内存上限"),
+            "extra_jvm_args": self.tr("额外 JVM 参数"),
+            "extra_game_args": self.tr("额外游戏参数"),
+            "smart_jvm": self.tr("智能 JVM"),
+            "opt_fixed_heap": self.tr("固定堆大小"),
+            "opt_pre_touch": self.tr("预读取资源"),
+            "isolation_mode": self.tr("版本隔离"),
+            "window_title": self.tr("游戏窗口标题"),
+            "server": self.tr("自动连接服务器"),
+            "priority": self.tr("进程优先级"),
+            "java_path": self.tr("Java 路径"),
+            "proxy_enabled": self.tr("启用代理"),
+            "proxy_url": self.tr("代理地址"),
+            "download_threads": self.tr("下载线程数"),
+        }
+        return labels.get(key, key)
+
+    def _import_config_fragment(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            self.tr("导入配置片段"),
+            str(Path.home()),
+            self.tr("Mikan 配置片段 (*.mikan);;所有文件 (*)"),
+        )
+        if not path:
+            return
+        try:
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                self.tr("导入失败"),
+                t("SettingsPage", "无法读取文件：{0}", exc),
+            )
+            return
+        except ValueError as exc:
+            QMessageBox.warning(
+                self,
+                self.tr("导入失败"),
+                t("SettingsPage", "文件不是有效的 JSON：{0}", exc),
+            )
+            return
+        if not isinstance(payload, dict):
+            QMessageBox.warning(
+                self, self.tr("导入失败"), self.tr("文件内容不是配置片段。")
+            )
+            return
+        if str(payload.get("format") or "") != LAUNCH_CONFIG_FORMAT:
+            QMessageBox.warning(
+                self,
+                self.tr("导入失败"),
+                self.tr("不是 Mikan 配置片段（format 标识不匹配）。"),
+            )
+            return
+        fields = payload.get("config")
+        if not isinstance(fields, dict):
+            QMessageBox.warning(
+                self, self.tr("导入失败"), self.tr("配置片段里缺少 config 字段。")
+            )
+            return
+        try:
+            cleaned = self._validate_config_fragment(fields)
+        except ValueError as exc:
+            QMessageBox.warning(self, self.tr("导入失败"), str(exc))
+            return
+        if not cleaned:
+            QMessageBox.warning(
+                self, self.tr("导入失败"), self.tr("没有可导入的配置项。")
+            )
+            return
+        cfg = self.ctx.config
+        try:
+            applied = cfg.apply_launch_config(cleaned)
+            cfg.save()
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                self.tr("导入失败"),
+                t("SettingsPage", "保存配置失败：{0}", exc),
+            )
+            return
+        if "proxy_enabled" in applied or "proxy_url" in applied:
+            apply_proxy(cfg.effective_proxy)
+        self.ctx.bus.config_changed.emit()
+        names = "、".join(self._config_field_label(key) for key in applied)
+        QMessageBox.information(
+            self,
+            self.tr("导入完成"),
+            t("SettingsPage", "已导入 {0} 项：{1}", len(applied), names),
+        )
+
+    def shutdown(self) -> None:
+        for worker in (self._test_worker, self._rescan_worker, self._java_download_worker):
+            wait_thread(worker, 2000)

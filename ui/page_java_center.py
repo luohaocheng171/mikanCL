@@ -1,0 +1,724 @@
+"""Java 中心：从各家官方渠道动态获取可用版本，下载任务统一登记到下载中心（kind="Java"）。"""
+
+from __future__ import annotations
+
+import threading
+import time
+from pathlib import Path
+
+from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..config import DATA_DIR
+from ..context import AppContext, wait_thread
+from ..hardware import recommend_memory_mb
+from ..java import (
+    detect_java_installed,
+    download_java,
+    fetch_distribution_versions,
+    fetch_java_installer_versions,
+    find_java_in,
+    install_java_with_installer,
+    installer_supported,
+    java_runtime_name,
+    list_java_distributions,
+    merge_java_lists,
+)
+from ..net import Cancelled
+from .widgets import Card, page_header
+
+# 与设置页的 Java 下载目录保持一致
+JAVA_ROOT = DATA_DIR / "runtime"
+
+# 外部调用常写作 Adoptium（官方名为 Eclipse Temurin），统一映射到真实发行版 key
+_DIST_ALIASES = {"adoptium": "temurin"}
+
+
+def _fmt_size(value: object) -> str:
+    try:
+        size = int(value or 0)
+    except (TypeError, ValueError):
+        size = 0
+    if size <= 0:
+        return "未知"
+    if size >= 1024 ** 3:
+        return f"{size / 1024 ** 3:.2f} GB"
+    return f"{size / 1024 ** 2:.1f} MB"
+
+
+# ---------------------------------------------------------------------------
+# 版本查询 / 下载 worker
+# ---------------------------------------------------------------------------
+class ResolveWorker(QThread):
+    """异步获取某发行版某主版本的可用版本列表（联网，不阻塞界面）。"""
+
+    done = Signal(str, object)  # (请求 key, 版本列表)
+    failed = Signal(str, str)  # (请求 key, 错误信息)
+
+    def __init__(
+        self,
+        dist_id: str,
+        major: int,
+        force: bool = False,
+        package: str = "jdk",
+        install_mode: str = "zip",
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.dist_id = dist_id
+        self.major = int(major)
+        self.force = force
+        self.package = "jre" if str(package).lower() == "jre" else "jdk"
+        self.install_mode = "installer" if install_mode == "installer" else "zip"
+
+    def run(self) -> None:
+        key = f"{self.dist_id}:{self.major}:{self.package}:{self.install_mode}"
+        try:
+            if self.install_mode == "installer":
+                versions = fetch_java_installer_versions(
+                    self.dist_id, self.major, package=self.package
+                )
+            else:
+                versions = fetch_distribution_versions(
+                    self.dist_id, self.major, force=self.force, package=self.package
+                )
+            self.done.emit(key, versions)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(key, str(exc))
+
+
+class JavaCenterInstallWorker(QThread):
+    done = Signal(object)
+    failed = Signal(str)
+    progress = Signal(float, float)  # 0~1 进度, 字节/秒
+
+    def __init__(
+        self,
+        major: int,
+        dest_root: Path,
+        task_id: str = "",
+        cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
+        url: str = "",
+        target_name: str = "",
+        size: int = 0,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.major = int(major)
+        self.dest_root = Path(dest_root)
+        self.task_id = task_id
+        self.cancel_event = cancel_event or threading.Event()
+        self.pause_event = pause_event or threading.Event()
+        self.url = url
+        self.target_name = target_name
+        self.size = int(size or 0)
+
+    def run(self) -> None:
+        state = {"total": 0, "bytes": 0, "last_t": time.time(), "last_b": 0}
+
+        def on_total(total: int) -> None:
+            state["total"] = int(total)
+
+        def on_bytes(n: int) -> None:
+            state["bytes"] += n
+            now = time.time()
+            if now - state["last_t"] < 0.25:
+                return
+            dt = now - state["last_t"]
+            speed = (state["bytes"] - state["last_b"]) / dt if dt > 0 else 0.0
+            state["last_t"], state["last_b"] = now, state["bytes"]
+            total = state["total"]
+            percent = min(1.0, state["bytes"] / total) if total else 0.0
+            self.progress.emit(percent, speed)
+
+        try:
+            info = download_java(
+                self.major,
+                self.dest_root,
+                log=lambda text: None,
+                on_bytes=on_bytes,
+                cancel=self.cancel_event,
+                pause=self.pause_event,
+                on_total=on_total,
+                url=self.url,
+                target_name=self.target_name,
+                size=self.size,
+            )
+            self.done.emit(info)
+        except Cancelled:
+            pass  # 已由下载中心标记为取消
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
+class JavaInstallerWorker(QThread):
+    """下载官方 EXE / MSI 安装程序并运行安装向导，完成后重新扫描 Java。"""
+
+    done = Signal(object)
+    failed = Signal(str)
+    progress = Signal(float, float)
+
+    def __init__(
+        self,
+        asset: dict,
+        task_id: str = "",
+        cancel_event: threading.Event | None = None,
+        pause_event: threading.Event | None = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.asset = dict(asset)
+        self.task_id = task_id
+        self.cancel_event = cancel_event or threading.Event()
+        self.pause_event = pause_event or threading.Event()
+
+    def run(self) -> None:
+        state = {"total": 0, "bytes": 0, "last_t": time.time(), "last_b": 0}
+
+        def on_total(total: int) -> None:
+            state["total"] = int(total)
+
+        def on_bytes(n: int) -> None:
+            state["bytes"] += n
+            now = time.time()
+            if now - state["last_t"] < 0.25:
+                return
+            dt = now - state["last_t"]
+            speed = (state["bytes"] - state["last_b"]) / dt if dt > 0 else 0.0
+            state["last_t"], state["last_b"] = now, state["bytes"]
+            total = state["total"]
+            percent = min(1.0, state["bytes"] / total) if total else 0.0
+            self.progress.emit(percent, speed)
+
+        try:
+            info = install_java_with_installer(
+                self.asset,
+                log=lambda text: None,
+                on_bytes=on_bytes,
+                cancel=self.cancel_event,
+                pause=self.pause_event,
+                on_total=on_total,
+            )
+            self.done.emit(info)
+        except Cancelled:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
+# ---------------------------------------------------------------------------
+class JavaCenterPage(QWidget):
+    """Java 中心页：按发行版 + 主版本筛选，列出官方渠道的真实版本并提供下载。"""
+
+    def __init__(self, ctx: AppContext, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.ctx = ctx
+        self._distributions = list_java_distributions()
+        self._versions: list[dict] = []
+        self._request_key = ""
+        self._workers: list[QThread] = []
+        self._task_packages: dict[str, str] = {}
+        self._build()
+        self.refresh()
+
+    # ------------------------------------------------------------------
+    def _build(self) -> None:
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 18, 24, 18)
+        outer.setSpacing(14)
+        header, _ = page_header(
+            "Java 中心", "从各家官方渠道获取可用版本，下载安装到本地运行时目录（data/runtime）"
+        )
+        outer.addWidget(header)
+
+        card = Card(margins=14, spacing=10)
+        tip = QLabel(
+            "版本列表来自各发行版官方 API / 官方下载页；查询失败时自动回退到官方最新版稳定链接。"
+            "标有「国内镜像」的发行版（清华 TUNA、华为云）在国内下载更快；"
+            "大文件会自动启用多线程分段下载。"
+            "安装方式可选「ZIP 便携版」（解压到 data/runtime 并自动写入用户 PATH）"
+            "或「官方安装程序」（Temurin / Azul / Corretto 提供 EXE / MSI 向导安装）。"
+            "下载任务统一登记到下载中心，可暂停 / 取消 / 重试。"
+        )
+        tip.setObjectName("Tiny")
+        tip.setWordWrap(True)
+        card.body.addWidget(tip)
+
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+        dist_label = QLabel("发行版")
+        dist_label.setObjectName("Tiny")
+        toolbar.addWidget(dist_label)
+
+        self._dist_combo = QComboBox()
+        self._dist_combo.setMinimumWidth(230)
+        for dist in self._distributions:
+            self._dist_combo.addItem(f"{dist['name']}（{dist['vendor']}）", dist["id"])
+        toolbar.addWidget(self._dist_combo)
+
+        type_label = QLabel("安装类型")
+        type_label.setObjectName("Tiny")
+        toolbar.addWidget(type_label)
+
+        self._type_combo = QComboBox()
+        self._type_combo.setMinimumWidth(170)
+        self._type_combo.setToolTip("运行时 JRE 仅包含运行游戏所需组件，体积更小；完整 JDK 额外包含开发与调试工具。")
+        self._populate_types()
+        toolbar.addWidget(self._type_combo)
+
+        mode_label = QLabel("安装方式")
+        mode_label.setObjectName("Tiny")
+        toolbar.addWidget(mode_label)
+
+        self._mode_combo = QComboBox()
+        self._mode_combo.setMinimumWidth(210)
+        self._mode_combo.setToolTip(
+            "ZIP 便携版：解压到 data/runtime 并自动加入用户 PATH；"
+            "安装程序：下载官方 EXE / MSI 并启动向导，安装到系统默认位置。"
+        )
+        self._populate_modes()
+        toolbar.addWidget(self._mode_combo)
+
+        major_label = QLabel("主版本")
+        major_label.setObjectName("Tiny")
+        toolbar.addWidget(major_label)
+
+        self._major_combo = QComboBox()
+        self._major_combo.setMinimumWidth(110)
+        toolbar.addWidget(self._major_combo)
+        self._populate_majors(default=21)
+
+        self._refresh_btn = QPushButton("重新获取")
+        self._refresh_btn.setObjectName("Ghost")
+        self._refresh_btn.setFixedHeight(28)
+        self._refresh_btn.clicked.connect(lambda: self.refresh(force=True))
+        toolbar.addWidget(self._refresh_btn)
+
+        self._status_label = QLabel("")
+        self._status_label.setObjectName("Tiny")
+        self._status_label.setWordWrap(True)
+        toolbar.addWidget(self._status_label, 1)
+        card.body.addLayout(toolbar)
+
+        # 选择变化只触发一次查询（构造完成后再接线，避免初始化期重复请求）
+        self._dist_combo.currentIndexChanged.connect(self._on_distribution_changed)
+        self._type_combo.currentIndexChanged.connect(self._on_type_changed)
+        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        self._major_combo.currentIndexChanged.connect(self._on_major_changed)
+
+        table = QTableWidget(0, 5)
+        table.setHorizontalHeaderLabels(["版本", "大小", "来源", "状态", "操作"])
+        table.verticalHeader().setVisible(False)
+        table.setSelectionMode(QAbstractItemView.NoSelection)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.horizontalHeader().setStretchLastSection(False)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        table.setColumnWidth(1, 100)
+        table.setColumnWidth(3, 110)
+        table.setColumnWidth(4, 130)
+        table.verticalHeader().setDefaultSectionSize(38)
+        card.body.addWidget(table, 1)
+        self._table = table
+
+        hint = QLabel(
+            f"安装目录：{JAVA_ROOT}（JRE / JDK 与不同发行版、版本分目录安装，互不覆盖）"
+        )
+        hint.setObjectName("Tiny")
+        hint.setWordWrap(True)
+        card.body.addWidget(hint)
+        outer.addWidget(card, 1)
+
+    # ------------------------------------------------------------------
+    def _current_distribution(self) -> dict | None:
+        dist_id = self._dist_combo.currentData()
+        for dist in self._distributions:
+            if dist["id"] == dist_id:
+                return dist
+        return self._distributions[0] if self._distributions else None
+
+    def _current_major(self) -> int | None:
+        value = self._major_combo.currentData()
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    def _current_package(self) -> str:
+        value = self._type_combo.currentData() if hasattr(self, "_type_combo") else "jdk"
+        return "jre" if str(value or "jdk").lower() == "jre" else "jdk"
+
+    def _current_mode(self) -> str:
+        value = self._mode_combo.currentData() if hasattr(self, "_mode_combo") else "zip"
+        return "installer" if str(value or "zip") == "installer" else "zip"
+
+    def _populate_modes(self) -> None:
+        """按当前发行版重建安装方式；没有官方安装程序的发行版只保留 ZIP。"""
+        dist = self._current_distribution()
+        supported = installer_supported(str((dist or {}).get("id") or ""))
+        previous = self._current_mode() if hasattr(self, "_mode_combo") else "zip"
+        self._mode_combo.blockSignals(True)
+        self._mode_combo.clear()
+        self._mode_combo.addItem("ZIP 便携版（自动解压 + PATH）", "zip")
+        if supported:
+            self._mode_combo.addItem("官方安装程序（EXE / MSI）", "installer")
+        index = self._mode_combo.findData(previous)
+        self._mode_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._mode_combo.blockSignals(False)
+
+    def _populate_types(self) -> None:
+        """按当前发行版重建安装类型选项；不支持 JRE 的发行版只保留完整 JDK。"""
+        dist = self._current_distribution()
+        supports_jre = bool((dist or {}).get("supports_jre"))
+        previous = self._type_combo.currentData() if self._type_combo.count() else "jre"
+        self._type_combo.blockSignals(True)
+        self._type_combo.clear()
+        if supports_jre:
+            self._type_combo.addItem("运行时 JRE（轻量，推荐）", "jre")
+        self._type_combo.addItem("完整 JDK（含开发工具）", "jdk")
+        index = self._type_combo.findData(previous)
+        self._type_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._type_combo.blockSignals(False)
+
+    def _populate_majors(self, default: int = 21) -> None:
+        dist = self._current_distribution()
+        if dist is None:
+            return
+        majors = list(dist.get("majors") or [8, 11, 17, 21])
+        previous = self._major_combo.currentData()
+        target = previous if previous in majors else (
+            default if default in majors else majors[-1]
+        )
+        self._major_combo.blockSignals(True)
+        self._major_combo.clear()
+        for major in majors:
+            self._major_combo.addItem(f"Java {major}", int(major))
+        index = self._major_combo.findData(target)
+        self._major_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._major_combo.blockSignals(False)
+
+    def _on_distribution_changed(self, _index: int = -1) -> None:
+        self._populate_types()
+        self._populate_modes()
+        self._populate_majors()
+        self.refresh()
+
+    def _on_type_changed(self, _index: int = -1) -> None:
+        self.refresh()
+
+    def _on_mode_changed(self, _index: int = -1) -> None:
+        self.refresh()
+
+    def _on_major_changed(self, _index: int = -1) -> None:
+        self.refresh()
+
+    def preselect(self, major: int, distribution: str | None = None) -> None:
+        """外部跳转入口：预选主版本（找不到对应项就按数值就近）与可选发行版，然后刷新列表。"""
+        try:
+            wanted = int(major)
+        except (TypeError, ValueError):
+            wanted = 21
+        if distribution:
+            dist_id = _DIST_ALIASES.get(str(distribution).strip().lower(), distribution)
+            index = self._dist_combo.findData(dist_id)
+            if index >= 0:
+                self._dist_combo.blockSignals(True)
+                self._dist_combo.setCurrentIndex(index)
+                self._dist_combo.blockSignals(False)
+                self._populate_types()
+                self._populate_modes()
+        # 复用现有 populate 路径重建主版本项，保证下拉已填充后再精确选择
+        self._populate_majors(default=wanted)
+        index = self._major_combo.findData(wanted)
+        if index < 0 and self._major_combo.count():
+            majors = [
+                int(self._major_combo.itemData(i) or 0)
+                for i in range(self._major_combo.count())
+            ]
+            nearest = min(majors, key=lambda value: abs(value - wanted))
+            index = self._major_combo.findData(nearest)
+        if index >= 0:
+            self._major_combo.blockSignals(True)
+            self._major_combo.setCurrentIndex(index)
+            self._major_combo.blockSignals(False)
+        self.refresh()
+
+    # ------------------------------------------------------------------
+    def refresh(self, force: bool = False) -> None:
+        """按当前筛选异步获取版本列表；force=True 时忽略缓存。"""
+        dist = self._current_distribution()
+        major = self._current_major()
+        if dist is None or major is None:
+            return
+        pkg = self._current_package()
+        mode = self._current_mode()
+        self._request_key = f"{dist['id']}:{major}:{pkg}:{mode}"
+        self._refresh_btn.setEnabled(False)
+        type_text = "运行时 JRE" if pkg == "jre" else "完整 JDK"
+        mode_text = "安装程序" if mode == "installer" else "便携版"
+        self._status_label.setText(
+            f"正在获取 {dist['name']} Java {major} {type_text}（{mode_text}）版本…"
+        )
+        self._show_placeholder("正在获取版本…")
+
+        worker = ResolveWorker(
+            dist["id"], major, force=force, package=pkg, install_mode=mode, parent=self
+        )
+        worker.done.connect(self._on_versions)
+        worker.failed.connect(self._on_versions_failed)
+        worker.finished.connect(lambda w=worker: self._discard_worker(w))
+        self._workers.append(worker)
+        worker.start()
+
+    def shutdown(self) -> None:
+        """关闭页面：取消并等待仍在运行的查询 / 下载 worker。"""
+        for worker in list(self._workers):
+            cancel_event = getattr(worker, "cancel_event", None)
+            if cancel_event is not None:
+                try:
+                    cancel_event.set()
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                worker.requestInterruption()
+            except Exception:  # noqa: BLE001
+                pass
+        for worker in list(self._workers):
+            wait_thread(worker, 2000)
+        self._workers.clear()
+
+    def _discard_worker(self, worker: QThread) -> None:
+        if worker in self._workers:
+            self._workers.remove(worker)
+        worker.deleteLater()
+
+    # ------------------------------------------------------------------
+    def _show_placeholder(self, text: str) -> None:
+        self._versions = []
+        table = self._table
+        table.setRowCount(0)
+        table.insertRow(0)
+        item = QTableWidgetItem(text)
+        item.setForeground(Qt.GlobalColor.gray)
+        table.setItem(0, 0, item)
+
+    def _on_versions(self, key: str, versions: object) -> None:
+        if key != self._request_key:
+            return  # 已经切换到其他发行版 / 主版本，丢弃旧结果
+        self._refresh_btn.setEnabled(True)
+        rows = [
+            dict(item)
+            for item in (versions or [])
+            if isinstance(item, dict) and str(item.get("url") or "")
+        ] if isinstance(versions, list) else []
+        if not rows:
+            if self._current_mode() == "installer":
+                self._status_label.setText("该发行版暂未提供官方安装程序，请切换到 ZIP 便携版")
+                self._show_placeholder("没有可用的官方安装程序")
+            else:
+                self._status_label.setText("获取失败，暂无可用版本，请检查网络后重试")
+                self._show_placeholder("获取失败，请检查网络后重试")
+            return
+        self._versions = rows
+        if all(bool(row.get("fallback")) for row in rows):
+            self._status_label.setText("获取失败，已回退到默认下载（官方最新版）")
+        else:
+            channel = str(rows[0].get("channel") or "")
+            self._status_label.setText(f"已获取 {len(rows)} 个版本" + (f" · {channel}" if channel else ""))
+        self._populate(rows)
+
+    def _on_versions_failed(self, key: str, message: str) -> None:
+        if key != self._request_key:
+            return
+        self._refresh_btn.setEnabled(True)
+        self._status_label.setText("获取失败，已回退到默认下载")
+        self._show_placeholder("获取失败，已回退到默认下载")
+        self.ctx.bus.log.emit(f"[Java 中心] 获取版本失败：{message}")
+
+    def _populate(self, rows: list[dict]) -> None:
+        table = self._table
+        table.setRowCount(0)
+        for row, item in enumerate(rows):
+            table.insertRow(row)
+            version_text = str(item.get("version") or "")
+            if item.get("latest"):
+                version_text += "（最新）"
+            version_item = QTableWidgetItem(version_text)
+            version_item.setData(Qt.UserRole, item.get("url"))
+            version_item.setToolTip(str(item.get("name") or item.get("url") or ""))
+            table.setItem(row, 0, version_item)
+
+            size_item = QTableWidgetItem(_fmt_size(item.get("size")))
+            size_item.setTextAlignment(Qt.AlignCenter)
+            table.setItem(row, 1, size_item)
+
+            source_item = QTableWidgetItem(str(item.get("channel") or ""))
+            source_item.setToolTip(str(item.get("note") or ""))
+            table.setItem(row, 2, source_item)
+
+            installed = self._installed_path(item)
+            status_item = QTableWidgetItem("已安装" if installed else "可下载")
+            status_item.setTextAlignment(Qt.AlignCenter)
+            status_item.setForeground(
+                Qt.GlobalColor.green if installed else Qt.GlobalColor.cyan
+            )
+            status_item.setToolTip(installed)
+            table.setItem(row, 3, status_item)
+
+            actions = QWidget()
+            action_layout = QHBoxLayout(actions)
+            action_layout.setContentsMargins(4, 2, 4, 2)
+            action_layout.setSpacing(6)
+            install_btn = QPushButton("下载")
+            install_btn.setObjectName("Primary")
+            install_btn.setFixedHeight(26)
+            install_btn.clicked.connect(lambda _checked=False, data=item: self._install(data))
+            action_layout.addWidget(install_btn, 0, Qt.AlignCenter)
+            table.setCellWidget(row, 4, actions)
+
+    def _installed_path(self, item: dict) -> str:
+        major = int(item.get("major") or self._current_major() or 0)
+        if str(item.get("install") or "zip") == "installer":
+            # 安装程序装到系统默认位置，只有版本号对得上才算已安装
+            version = str(item.get("version") or "")
+            for info in self.ctx.javas:
+                if not major or info.major != major:
+                    continue
+                if version and (version in info.version or info.version in version):
+                    return info.path
+            return ""
+        name = java_runtime_name(
+            major,
+            str(item.get("id") or ""),
+            str(item.get("version") or ""),
+            package=str(item.get("package") or "jdk"),
+        )
+        return find_java_in(JAVA_ROOT / name)
+
+    # ------------------------------------------------------------------
+    def _install(self, item: dict) -> None:
+        if self._installed_path(item):
+            self.ctx.bus.toast.emit("该版本已安装，无需重复下载。")
+            return
+        url = str(item.get("url") or "")
+        if not url:
+            return
+        major = int(item.get("major") or self._current_major() or 0)
+        pkg = "jre" if str(item.get("package") or "jdk").lower() == "jre" else "jdk"
+        install_mode = "installer" if str(item.get("install") or "zip") == "installer" else "zip"
+        target_name = java_runtime_name(
+            major,
+            str(item.get("id") or ""),
+            str(item.get("version") or ""),
+            package=pkg,
+        )
+        dist_name = str(item.get("dist_name") or "")
+        version_label = str(item.get("version") or "")
+
+        def factory(task) -> QThread:
+            # 每次（含重试）都新建事件，避免取消后重试立即再次取消
+            cancel_event = threading.Event()
+            pause_event = threading.Event()
+            task.cancel = cancel_event.set
+            task.pause_event = pause_event
+            self._task_packages[task.id] = pkg
+            if install_mode == "installer":
+                worker: QThread = JavaInstallerWorker(
+                    item, task.id, cancel_event, pause_event, self
+                )
+            else:
+                worker = JavaCenterInstallWorker(
+                    major,
+                    JAVA_ROOT,
+                    task.id,
+                    cancel_event,
+                    pause_event,
+                    url,
+                    target_name,
+                    int(item.get("size") or 0),
+                    self,
+                )
+            worker.progress.connect(
+                lambda percent, speed, tid=task.id: self.ctx.downloads.update(
+                    tid,
+                    percent=percent,
+                    speed=speed,
+                    stage=(
+                        "安装向导进行中…"
+                        if install_mode == "installer" and percent >= 1.0
+                        else f"下载 Java {major}"
+                    ),
+                )
+            )
+            worker.done.connect(lambda info, tid=task.id: self._on_installed(tid, info))
+            worker.failed.connect(
+                lambda message, tid=task.id: self._on_install_failed(tid, message)
+            )
+            worker.finished.connect(lambda w=worker: self._discard_worker(w))
+            self._workers.append(worker)
+            return worker
+
+        detail = str(item.get("note") or item.get("channel") or "")
+        type_text = "JRE" if pkg == "jre" else "JDK"
+        mode_text = "安装程序" if install_mode == "installer" else "便携版"
+        display_name = f"{dist_name} Java {version_label} · {type_text} · {mode_text}"
+        self.ctx.downloads.submit(
+            kind="Java",
+            name=display_name,
+            factory=factory,
+            rebuild=factory,
+            target_dir=str(JAVA_ROOT),
+            detail=detail,
+        )
+        self.ctx.bus.toast.emit(f"已加入下载中心：{display_name}")
+
+    def _on_installed(self, task_id: str, info) -> None:
+        pkg = self._task_packages.pop(task_id, "jdk")
+        self.ctx.downloads.finish(task_id, ok=True)
+        found = detect_java_installed(self.ctx.config.java_scan_paths())
+        if info is not None:
+            found.append(info)
+        self.ctx.javas = merge_java_lists(self.ctx.javas, found)
+        self.ctx.config.remember_java_paths(java.path for java in self.ctx.javas)
+        self.ctx.bus.javas_changed.emit()
+        self.ctx.bus.toast.emit(
+            f"Java {getattr(info, 'version', '')} 已安装完成。"
+        )
+        if pkg == "jre":
+            # 安装轻量运行时意味着开始使用游戏环境，顺手按本机配置分配内存
+            self._apply_recommended_memory()
+        self.refresh()
+
+    def _apply_recommended_memory(self) -> None:
+        """按本机物理内存推荐值写入配置（内存条数量差异大的机器也能给出合适值）。"""
+        recommended = recommend_memory_mb()
+        if recommended <= 0:
+            return
+        current = int(getattr(self.ctx.config, "memory_mb", 0) or 0)
+        if current == recommended:
+            return
+        self.ctx.config.memory_mb = recommended
+        self.ctx.config.save_debounced()
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit(
+            f"已按本机配置自动分配内存：{recommended} MB（{recommended / 1024:.1f} GB）"
+        )
+
+    def _on_install_failed(self, task_id: str, message: str) -> None:
+        self._task_packages.pop(task_id, None)
+        self.ctx.downloads.finish(task_id, ok=False, message=message)
+        self.ctx.bus.log.emit(f"[Java 中心] Java 安装失败：{message}")
+        QMessageBox.warning(self, "Java 安装失败", message)

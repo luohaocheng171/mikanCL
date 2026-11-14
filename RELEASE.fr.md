@@ -1,8 +1,23 @@
-# MikanCL v5.3.1 — Notes de version
+# MikanCL v5.4.0 — Notes de version
 
 [中文](RELEASE.md) · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · **Français** · [日本語](RELEASE.ja.md)
 
 Date de publication : 2026-11-14
+
+## Nouveautés de la v5.4.0 : éditeur de sauvegarde (édition profonde multi-époques)
+
+- **Nouvelle page** : « Éditeur de sauvegarde » dans la barre latérale, avec les onglets État, Inventaire, Capacités, Monde et Outils ; il lit et écrit directement `level.dat`, `playerdata/<UUID>.dat`, `advancements/<UUID>.json`, `ops.json` du serveur et les fichiers de région.
+- **État** : position, faim et saturation, santé, niveau d'XP, mode de jeu, dimension et attributs. La « téléportation sûre » scanne les régions à l'enregistrement pour trouver la surface aux X/Z visés ; si le chunk n'est pas chargé, le Y d'origine est conservé avec un avertissement.
+- **Inventaire** : 27+9, armure, main secondaire et coffre de l'Ender. « Scanner les ID d'objet » lit les fichiers de langue des versions et mods locaux ; vous pouvez ensuite régler quantité, usure, enchantements, modificateurs d'attribut (dégâts / armure / vitesse / vitesse d'attaque / vie max) et NBT brut, sans perdre les noms, lore ni contenus de conteneurs existants.
+- **Capacités** : les attributs acceptent des modificateurs par entrée (addition / multiplication) ; les effets exposent ID, niveau, durée et masquage des particules.
+- **Monde** : heure, météo, 11 règles du jeu courantes (dont randomTickSpeed), taille et centre de la bordure du monde, point d'apparition.
+- **Outils** : cocher des succès un par un, éditer `ops.json` (niveaux 0-4), remplacement global de blocs, entrée de conversion d'ancien format, liste et restauration des sauvegardes.
+- **Multi-époques** : les sauvegardes depuis `rd-132211` (2009) sont d'abord converties en Anvil ; les ID aplatis (1.13+) et les composants d'objet (1.20.5+) sont détectés automatiquement et écrits avec les types NBT de l'époque ; les mondes non migrables en sécurité s'ouvrent en lecture seule.
+- **Limites vanilla** : santé 1024, enchantement 255, niveau d'XP 21863, vitesse de tick aléatoire 4000, sans dépassement.
+- **Sécurité** : vérification exclusive de `session.lock`, sauvegarde complète forcée avec manifeste SHA-256, écriture transactionnelle avec retour arrière ; un retour arrière échoué conserve le journal pour une récupération manuelle.
+- **Trois interfaces** : Classique (Qt), Améliorée (pywebview) et Autonome (Electron) partagent le même `creator_service`.
+- **Contrat** : version 1.10 avec les clauses sur l'édition du joueur, des succès, des OP et des chunks, la migration de types, le verrouillage et le retour arrière.
+- **Build allégé** : seuls les composants réellement utilisés sont livrés — traductions au format `.qm` uniquement, modules Qt non référencés (QtSvg / QtDBus / QtOpenGL, etc.) exclus, locales Electron limitées à zh-CN / en-US et bytecode compilé avec `--optimize 2`. L'exe unique fait environ 328 Mo, le paquet Electron environ 149 Mo.
 
 ## Nouveautés et corrections de la v5.3.1
 

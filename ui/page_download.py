@@ -1,0 +1,2177 @@
+"""下载页：版本列表 → 版本详情 → 原版与 Mod 加载器串行安装。"""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import threading
+import time
+from pathlib import Path
+
+from PySide6.QtCore import QSize, QStandardPaths, QThread, Qt, Signal
+from PySide6.QtGui import QColor, QGuiApplication
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QButtonGroup,
+    QComboBox,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .. import APP_NAME
+from ..auth import import_offline_skin
+from ..content import ContentError, pick_best_version
+from ..context import AppContext, wait_thread
+from ..installer import (
+    GameInstaller,
+    Progress,
+    estimate_remote_version_size,
+    estimate_version_size,
+)
+from ..java import pick_java
+from ..modloader import (
+    LOADER_LABELS,
+    LoaderError,
+    install_loader,
+    java_for_mc,
+    list_loader_versions,
+)
+from ..net import Cancelled, Candidate, DownloadError, Http
+from ..version import (
+    CATEGORY_LABELS,
+    VersionError,
+    load_version,
+    scan_installed_versions,
+    version_category,
+)
+from .theme import make_version_icon, make_version_pixmap
+from .widgets import Badge, Card, hline, page_header
+
+# 版本分类标签：默认只展示正式版，点击哪个标签才加载哪一类
+_CATEGORY_FILTERS = [
+    ("release", "正式版"),
+    ("snapshot", "测试版"),
+    ("old", "远古版"),
+    ("april", "愚人节"),
+]
+
+_LOADER_ORDER = ("forge", "neoforge", "fabric", "quilt", "liteloader")
+
+_LOADER_DESCRIPTIONS = {
+    "forge": "老牌加载器，兼容大量整合包",
+    "neoforge": "Forge 分支，面向 1.20.1+",
+    "fabric": "轻量快速，自动附带 Fabric API",
+    "quilt": "Fabric 衍生，兼容其 Mod",
+    "liteloader": "仅支持 1.12.2 及更早版本",
+}
+
+_ORIGINAL = ""
+
+
+def _safe_filename(text: str, fallback: str = "file") -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|\s]+', "-", str(text or "")).strip(".-")
+    return cleaned or fallback
+
+
+def _download_dir() -> Path:
+    try:
+        locations = QStandardPaths.standardLocations(QStandardPaths.DownloadLocation)
+        if locations:
+            return Path(locations[0])
+    except Exception:  # noqa: BLE001 - 取不到标准目录时退回用户目录
+        pass
+    return Path.home() / "Downloads"
+
+
+def _repolish(widget: QWidget) -> None:
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+
+
+# ---------------------------------------------------------------------------
+# 后台任务
+# ---------------------------------------------------------------------------
+class ManifestWorker(QThread):
+    """加载版本清单（网络请求，避免阻塞界面）。"""
+
+    loaded = Signal(object, object, bool)
+    failed = Signal(str)
+
+    def __init__(self, ctx: AppContext, force: bool, preferred_id: str, parent=None):
+        super().__init__(parent)
+        self.ctx = ctx
+        self.force = force
+        self.preferred_id = preferred_id
+
+    def run(self) -> None:
+        try:
+            payload, source_name, cached = self.ctx.sources.get_manifest(
+                force=self.force, preferred_id=self.preferred_id
+            )
+            self.loaded.emit(payload.get("data") or {}, source_name, cached)
+        except DownloadError as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
+class SizeEstimateWorker(QThread):
+    """本地没有版本 JSON 时，在线按清单估算安装所需磁盘空间。"""
+
+    done = Signal(int)
+
+    def __init__(self, ctx: AppContext, entry: dict, parent=None):
+        super().__init__(parent)
+        self.ctx = ctx
+        self.entry = dict(entry)
+        self._stopped = threading.Event()
+
+    def run(self) -> None:
+        need = 0
+        try:
+            need = estimate_remote_version_size(
+                str(self.entry.get("url") or ""),
+                self.ctx.sources,
+                self.ctx.config.assets_path,
+            )
+        except Exception:  # noqa: BLE001 - 估算失败不应阻止安装
+            need = 0
+        if not self._stopped.is_set():
+            self.done.emit(need)
+
+    def cancel(self) -> None:
+        self._stopped.set()
+
+
+class ClientJarSaveWorker(QThread):
+    """仅下载某个版本的客户端 Jar，不写入游戏目录。"""
+
+    progress = Signal(float, float, str)
+    log = Signal(str)
+    done = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, ctx: AppContext, entry: dict, dest: Path, parent=None):
+        super().__init__(parent)
+        self.ctx = ctx
+        self.entry = dict(entry)
+        self.dest = Path(dest)
+        self.cancel_event = threading.Event()
+        self.pause_event = threading.Event()
+
+    @staticmethod
+    def _client_of(raw) -> dict | None:
+        downloads = raw.get("downloads") if isinstance(raw, dict) else None
+        client = downloads.get("client") if isinstance(downloads, dict) else None
+        return client if isinstance(client, dict) else None
+
+    def _client_info(self, version_id: str) -> dict:
+        """优先读本地版本 JSON，其次按清单地址在线获取。"""
+        local = self.ctx.config.game_path / "versions" / version_id / f"{version_id}.json"
+        if local.is_file():
+            try:
+                raw = json.loads(local.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise VersionError(f"本地版本 JSON 无法解析：{local}\n{exc}") from exc
+            client = self._client_of(raw)
+            if client is not None and str(client.get("url") or ""):
+                self.log.emit(f"[下载] 使用本地版本信息：{local.name}")
+                return client
+        url = str(self.entry.get("url") or "")
+        if not url:
+            raise VersionError(f"版本 {version_id} 缺少版本 JSON 地址，无法获取客户端信息。")
+        errors: list[str] = []
+        fetched = False
+        for candidate in self.ctx.sources.resource_candidates(url):
+            try:
+                raw = Http(timeout=30).get_json(candidate)
+            except DownloadError as exc:
+                errors.append(f"{candidate.source_name}: {exc}")
+                continue
+            fetched = True
+            client = self._client_of(raw)
+            if client is not None and str(client.get("url") or ""):
+                return client
+        if fetched:
+            raise VersionError(
+                f"版本 {version_id} 的版本 JSON 中没有 downloads.client"
+                "（可能是旧版本或自定义版本），无法仅下载客户端 Jar。"
+            )
+        raise DownloadError(
+            f"无法获取版本 {version_id} 的版本 JSON：\n" + "\n".join(errors[-3:])
+        )
+
+    def run(self) -> None:
+        try:
+            version_id = str(self.entry.get("id") or "")
+            client = self._client_info(version_id)
+            url = str(client.get("url") or "")
+            if not url:
+                raise VersionError(
+                    f"版本 {version_id} 缺少 downloads.client，无法仅下载客户端 Jar。"
+                )
+            total = int(client.get("size") or 0)
+            self.dest.parent.mkdir(parents=True, exist_ok=True)
+            self.log.emit(f"[下载] {version_id} 客户端 → {self.dest}")
+            state = {"bytes": 0, "time": time.monotonic(), "sent": 0}
+
+            def report(count: int) -> None:
+                state["bytes"] += count
+                now = time.monotonic()
+                elapsed = now - state["time"]
+                if elapsed < 0.3:
+                    return
+                speed = (state["bytes"] - state["sent"]) / elapsed
+                state["time"] = now
+                state["sent"] = state["bytes"]
+                percent = state["bytes"] / total if total > 0 else 0.0
+                detail = f"{state['bytes'] / 1048576:.1f} MB"
+                if total > 0:
+                    detail += f" / {total / 1048576:.1f} MB"
+                self.progress.emit(min(0.99, percent), speed, detail)
+
+            Http(timeout=60).download_to_path(
+                self.ctx.sources.resource_candidates(url),
+                self.dest,
+                size=total,
+                sha1=str(client.get("sha1") or ""),
+                cancel=self.cancel_event,
+                pause=self.pause_event,
+                log=self.log.emit,
+                on_bytes=report,
+            )
+            self.progress.emit(1.0, 0.0, "下载完成")
+            self.done.emit(str(self.dest))
+        except Cancelled:
+            self.failed.emit("下载已取消。")
+        except (DownloadError, VersionError, OSError) as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001 - 统一回传可读原因
+            self.failed.emit(f"保存失败：{exc}")
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+
+class LoaderInstallerSaveWorker(QThread):
+    """仅下载某个 Mod 加载器的官方安装器 jar（Fabric / Quilt / Forge / NeoForge / LiteLoader）。"""
+
+    progress = Signal(float, float, str)
+    log = Signal(str)
+    done = Signal(str)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        kind: str,
+        mc_version: str,
+        loader_version: str,
+        dest: Path,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.kind = kind
+        self.mc_version = mc_version
+        self.loader_version = loader_version
+        self.dest = Path(dest)
+        self.cancel_event = threading.Event()
+        self.pause_event = threading.Event()
+
+    # ------------------------------------------------------------------
+    def _resolve_urls(self) -> list[tuple[str, str]]:
+        """解析官方安装器下载地址，返回 [(url, 来源名)]；失败抛 DownloadError。"""
+        kind = self.kind
+        mc = self.mc_version
+        ver = self.loader_version
+        http = Http(timeout=30)
+        if kind in ("fabric", "quilt"):
+            meta = (
+                "https://meta.fabricmc.net/v2/versions/installer"
+                if kind == "fabric"
+                else "https://meta.quiltmc.org/v3/versions/installer"
+            )
+            data = http.get_json_url(meta)
+            entries = [
+                item
+                for item in (data if isinstance(data, list) else [])
+                if isinstance(item, dict) and item.get("url")
+            ]
+            chosen = None
+            if ver:
+                chosen = next(
+                    (item for item in entries if str(item.get("version")) == ver), None
+                )
+            if chosen is None:
+                chosen = next((item for item in entries if item.get("stable")), None)
+            if chosen is None and entries:
+                chosen = entries[0]
+            if chosen is None:
+                raise DownloadError(
+                    f"{LOADER_LABELS.get(kind, kind)} 官方 meta 未返回安装器信息。"
+                )
+            return [(str(chosen["url"]), f"{LOADER_LABELS.get(kind, kind)} 官方")]
+        if kind == "forge":
+            if not ver:
+                raise DownloadError("请先填写 Forge 版本（如 49.1.0）。")
+            url = (
+                f"https://maven.minecraftforge.net/net/minecraftforge/forge/"
+                f"{mc}-{ver}/forge-{mc}-{ver}-installer.jar"
+            )
+            mirror = (
+                f"https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/"
+                f"{mc}-{ver}/forge-{mc}-{ver}-installer.jar"
+            )
+            return [(url, "Forge 官方"), (mirror, "BMCLAPI 镜像")]
+        if kind == "neoforge":
+            if not ver:
+                raise DownloadError("请先填写 NeoForge 版本（如 20.4.237）。")
+            parts = mc.split(".")
+            old = (
+                len(parts) >= 3
+                and parts[0] == "1"
+                and int(parts[1]) == 20
+                and int(parts[2]) <= 1
+            )
+            if old:
+                url = (
+                    f"https://maven.neoforged.net/releases/net/neoforged/forge/"
+                    f"{mc}-{ver}/forge-{mc}-{ver}-installer.jar"
+                )
+                mirror = (
+                    f"https://bmclapi2.bangbang93.com/maven/net/neoforged/forge/"
+                    f"{mc}-{ver}/forge-{mc}-{ver}-installer.jar"
+                )
+            else:
+                url = (
+                    f"https://maven.neoforged.net/releases/net/neoforged/neoforge/"
+                    f"{ver}/neoforge-{ver}-installer.jar"
+                )
+                mirror = (
+                    f"https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/"
+                    f"{ver}/neoforge-{ver}-installer.jar"
+                )
+            return [(url, "NeoForge 官方"), (mirror, "BMCLAPI 镜像")]
+        if kind == "liteloader":
+            data = None
+            last_error: Exception | None = None
+            for source_url in (
+                "https://www.liteloader.com/version.json",
+                "http://dl.liteloader.com/versions/versions.json",
+            ):
+                try:
+                    data = http.get_json_url(source_url)
+                    break
+                except DownloadError as exc:
+                    last_error = exc
+            if data is None:
+                raise DownloadError(f"获取 LiteLoader 版本列表失败：{last_error}")
+            url = _liteloader_jar_url(data, mc)
+            if not url:
+                raise DownloadError(
+                    f"LiteLoader 不支持 Minecraft {mc}（官方仅提供到 1.12.2），"
+                    "请修改 MC 版本后重试。"
+                )
+            return [(url, "LiteLoader 官方")]
+        raise DownloadError(f"未知的加载器：{kind}")
+
+    def run(self) -> None:
+        try:
+            urls = self._resolve_urls()
+            self.dest.parent.mkdir(parents=True, exist_ok=True)
+            self.log.emit(
+                f"[下载] {LOADER_LABELS.get(self.kind, self.kind)} 安装器 → {self.dest}"
+            )
+            state = {"bytes": 0, "time": time.monotonic(), "sent": 0}
+
+            def report(count: int) -> None:
+                state["bytes"] += count
+                now = time.monotonic()
+                elapsed = now - state["time"]
+                if elapsed < 0.3:
+                    return
+                speed = (state["bytes"] - state["sent"]) / elapsed
+                state["time"] = now
+                state["sent"] = state["bytes"]
+                detail = f"{state['bytes'] / 1048576:.1f} MB"
+                self.progress.emit(0.0, speed, detail)
+
+            Http(timeout=60).download_to_path(
+                [Candidate(url, {}, "official", name) for url, name in urls],
+                self.dest,
+                cancel=self.cancel_event,
+                pause=self.pause_event,
+                log=self.log.emit,
+                on_bytes=report,
+            )
+            self.progress.emit(1.0, 0.0, "下载完成")
+            self.done.emit(str(self.dest))
+        except Cancelled:
+            self.failed.emit("下载已取消。")
+        except (DownloadError, ContentError, OSError) as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001 - 统一回传可读原因
+            self.failed.emit(f"保存失败：{exc}")
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+
+def _liteloader_jar_url(data, mc_version: str) -> str:
+    """从 LiteLoader versions.json 中查找指定 MC 版本的 jar 下载地址。"""
+    versions = data.get("versions") if isinstance(data, dict) else None
+    if not isinstance(versions, dict):
+        return ""
+    node = versions.get(mc_version)
+    if not isinstance(node, dict):
+        return ""
+    for section in ("artefacts", "snapshots", "repo"):
+        block = node.get(section)
+        if not isinstance(block, dict):
+            continue
+        artefacts = block.get("com.mumfrey:liteloader")
+        if not isinstance(artefacts, dict):
+            continue
+        entries = [
+            value
+            for value in artefacts.values()
+            if isinstance(value, dict) and value.get("version")
+        ]
+        if not entries:
+            continue
+        entries.sort(
+            key=lambda v: (
+                int(v.get("lastSuccessfulBuild") or 0),
+                str(v.get("timestamp") or ""),
+            ),
+            reverse=True,
+        )
+        best = entries[0]
+        version = str(best["version"])
+        file_name = str(best.get("file") or f"liteloader-{version}.jar")
+        return f"http://dl.liteloader.com/versions/com/mumfrey/liteloader/{version}/{file_name}"
+    return ""
+
+
+def _loader_installer_file_name(kind: str, mc_version: str, loader_version: str) -> str:
+    """为「另存为」对话框生成默认文件名：项目名-版本.ext，非法字符换 -。"""
+    ver = _safe_filename(loader_version or "latest", "latest")
+    mc = _safe_filename(mc_version or "1.20.1", "1.20.1")
+    names = {
+        "fabric": f"fabric-installer-{ver}.jar",
+        "quilt": f"quilt-installer-{ver}.jar",
+        "forge": f"forge-{mc}-{ver}-installer.jar",
+        "neoforge": f"neoforge-{ver}-installer.jar",
+        "liteloader": f"liteloader-{mc}-{ver}.jar",
+    }
+    return names.get(kind, f"{kind}-installer-{ver}.jar")
+
+
+class LoaderScanWorker(QThread):
+    """依次检测 5 种加载器针对该 MC 版本的可用版本。"""
+
+    result = Signal(str, object)
+    failed = Signal(str, str)
+
+    def __init__(self, mc_version: str, parent=None):
+        super().__init__(parent)
+        self.mc_version = mc_version
+        self._cancelled = threading.Event()
+
+    def run(self) -> None:
+        for kind in _LOADER_ORDER:
+            if self._cancelled.is_set():
+                return
+            try:
+                versions = list_loader_versions(kind, self.mc_version)
+                self.result.emit(kind, list(versions or []))
+            except LoaderError as exc:
+                self.failed.emit(kind, str(exc))
+            except Exception as exc:  # noqa: BLE001
+                self.failed.emit(kind, str(exc))
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+
+
+class ChainInstallWorker(QThread):
+    """串行执行：安装原版 → 安装加载器 →（Fabric）安装 Fabric API。"""
+
+    progress = Signal(object)
+    log = Signal(str)
+    done = Signal(str)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        ctx: AppContext,
+        entry: dict,
+        kind: str,
+        loader_version: str,
+        pause: threading.Event | None = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.ctx = ctx
+        self.entry = entry
+        self.kind = kind
+        self.loader_version = loader_version
+        self.cancel_event = threading.Event()
+        self.pause_event = pause or threading.Event()
+
+    def run(self) -> None:
+        try:
+            config = self.ctx.config
+            game_dir = config.game_path
+            mc_version = str(self.entry.get("id") or "")
+            installer = GameInstaller(
+                config,
+                self.ctx.sources,
+                progress_cb=self.progress.emit,
+                log_cb=self.log.emit,
+                cancel=self.cancel_event,
+                pause=self.pause_event,
+            )
+            json_path = game_dir / "versions" / mc_version / f"{mc_version}.json"
+            if json_path.exists():
+                self.log.emit(f"[安装] 原版 {mc_version} 已存在，跳过下载。")
+                self.progress.emit(
+                    Progress(stage="检查原版", percent=0.05, detail=mc_version)
+                )
+            else:
+                self.log.emit(f"[安装] 开始安装原版 {mc_version}")
+                installer.install_version(self.entry)
+            if self.cancel_event.is_set():
+                raise Cancelled()
+
+            final_id = mc_version
+            if self.kind:
+                java, hint = pick_java(
+                    self.ctx.javas,
+                    java_for_mc(mc_version),
+                    str(config.java_path or ""),
+                )
+                if java is None:
+                    raise LoaderError(
+                        hint or "未找到可用的 Java，请前往设置页指定 Java 后再安装加载器。"
+                    )
+                if hint:
+                    self.log.emit(f"[加载器] {hint}")
+                label = LOADER_LABELS.get(self.kind, self.kind)
+                self.progress.emit(
+                    Progress(
+                        stage="安装加载器",
+                        percent=0.6,
+                        detail=f"{label} {self.loader_version}".strip(),
+                    )
+                )
+                final_id = install_loader(
+                    installer,
+                    self.kind,
+                    mc_version,
+                    self.loader_version,
+                    java.path,
+                    self.log.emit,
+                    self.cancel_event,
+                )
+                if self.kind == "fabric":
+                    self._install_fabric_api(mc_version)
+
+            self.progress.emit(Progress(stage="安装完成", percent=1.0, detail=final_id))
+            self.done.emit(final_id)
+        except Cancelled:
+            self.failed.emit("安装已取消。")
+        except (VersionError, DownloadError, LoaderError, ContentError, OSError) as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+    def _install_fabric_api(self, mc_version: str) -> None:
+        """Fabric 安装完成后自动附带 Fabric API；失败仅记录警告。"""
+        try:
+            self.progress.emit(
+                Progress(stage="安装 Fabric API", percent=0.9, detail="正在查找项目")
+            )
+            self.log.emit("[内容] 正在查找 Fabric API…")
+            projects = self.ctx.content.search(
+                "modrinth", "mod", "fabric api", mc_version, "fabric", 0, 10
+            )
+            project = next((p for p in projects if p.slug == "fabric-api"), None)
+            if project is None:
+                self.log.emit("[内容] 未找到 Fabric API 项目，已跳过。")
+                return
+            versions = self.ctx.content.versions("modrinth", project.id)
+            version = pick_best_version(versions, mc_version, "fabric", "fabric-api")
+            if version is None:
+                self.log.emit("[内容] 未找到匹配的 Fabric API 文件，已跳过。")
+                return
+            self.ctx.content.install_content(
+                project,
+                version,
+                self.ctx.config.game_path,
+                log=self.log.emit,
+                cancel=self.cancel_event,
+                pause=self.pause_event,
+            )
+            self.log.emit(f"[内容] Fabric API 已安装：{version.version_number}")
+        except (ContentError, DownloadError, OSError) as exc:
+            self.log.emit(f"[内容] Fabric API 安装失败（已忽略）：{exc}")
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+
+
+# ---------------------------------------------------------------------------
+# 加载器卡片
+# ---------------------------------------------------------------------------
+class LoaderCard(QFrame):
+    """可点击选中的加载器卡片，显示名称、状态与版本下拉。"""
+
+    clicked = Signal(str)
+
+    def __init__(
+        self,
+        kind: str,
+        title: str,
+        description: str,
+        with_combo: bool = True,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.kind = kind
+        self.setObjectName("LoaderCard")
+        self.setProperty("selected", False)
+        self.setProperty("unsupported", False)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumHeight(118)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 11, 12, 11)
+        layout.setSpacing(6)
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        name = QLabel(title)
+        name.setStyleSheet("font-weight: 700; font-size: 13px;")
+        head.addWidget(name, 1)
+        self.status = Badge("检测中", "gray")
+        head.addWidget(self.status)
+        layout.addLayout(head)
+
+        desc = QLabel(description)
+        desc.setObjectName("Tiny")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
+        layout.addStretch(1)
+
+        self.combo = QComboBox()
+        if with_combo:
+            self.combo.setEnabled(False)
+            self.combo.setToolTip("该加载器针对当前 Minecraft 版本的可用版本")
+            layout.addWidget(self.combo)
+        else:
+            self.combo.setVisible(False)
+            tip = QLabel("不安装任何 Mod 加载器")
+            tip.setObjectName("Tiny")
+            layout.addWidget(tip)
+
+    # ------------------------------------------------------------------
+    def set_selected(self, value: bool) -> None:
+        self.setProperty("selected", value)
+        _repolish(self)
+
+    def set_pending(self) -> None:
+        self.setProperty("unsupported", False)
+        self.status.setText("检测中")
+        self.status.set_kind("gray")
+        self.combo.clear()
+        self.combo.setEnabled(False)
+        _repolish(self)
+
+    def set_versions(self, versions: list[str]) -> None:
+        self.setProperty("unsupported", False)
+        self.status.setText("可选")
+        self.status.set_kind("green")
+        self.combo.clear()
+        self.combo.addItems(versions)
+        self.combo.setEnabled(True)
+        _repolish(self)
+
+    def set_unsupported(self, reason: str = "不支持") -> None:
+        self.setProperty("unsupported", True)
+        self.status.setText("不支持")
+        self.status.set_kind("orange")
+        self.combo.clear()
+        self.combo.setEnabled(False)
+        self.combo.setToolTip(reason)
+        _repolish(self)
+
+    @property
+    def is_unsupported(self) -> bool:
+        return bool(self.property("unsupported"))
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self.kind)
+        super().mousePressEvent(event)
+
+
+class LatestCard(QFrame):
+    """顶部「最新正式版 / 最新测试版」卡片，点击直接进入详情。"""
+
+    clicked = Signal()
+
+    def __init__(self, title: str, kind: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("LatestCard")
+        self.setCursor(Qt.PointingHandCursor)
+        self._entry: dict | None = None
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(10)
+        icon_label = QLabel()
+        icon_label.setPixmap(make_version_pixmap(kind, 32))
+        icon_label.setFixedSize(32, 32)
+        layout.addWidget(icon_label)
+
+        texts = QVBoxLayout()
+        texts.setSpacing(2)
+        caption = QLabel(title)
+        caption.setObjectName("Tiny")
+        texts.addWidget(caption)
+        self.version_label = QLabel("尚未获取")
+        self.version_label.setStyleSheet(
+            "font-size: 15px; font-weight: 600; color: #eaf4ec;"
+        )
+        texts.addWidget(self.version_label)
+        self.date_label = QLabel("")
+        self.date_label.setObjectName("Tiny")
+        texts.addWidget(self.date_label)
+        layout.addLayout(texts)
+        layout.addStretch(1)
+
+    def set_entry(self, entry: dict | None) -> None:
+        self._entry = entry
+        if not entry:
+            self.version_label.setText("尚未获取")
+            self.date_label.setText("")
+            self.setCursor(Qt.ArrowCursor)
+            return
+        self.setCursor(Qt.PointingHandCursor)
+        self.version_label.setText(str(entry.get("id") or "—"))
+        release = str(entry.get("releaseTime") or entry.get("time") or "")[:10]
+        self.date_label.setText(release or "未知时间")
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and self._entry is not None:
+            self.clicked.emit()
+            return
+        super().mousePressEvent(event)
+
+
+# ---------------------------------------------------------------------------
+# 页面
+# ---------------------------------------------------------------------------
+class DownloadPage(QWidget):
+    def __init__(self, ctx: AppContext, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.ctx = ctx
+        self._manifest: dict | None = None
+        self._entries: list[dict] = []
+        self._entries_by_id: dict[str, dict] = {}
+        self._installed_ids: set[str] = set()
+        self._detail_entry: dict | None = None
+        self._selected_kind: str = _ORIGINAL
+        self._loader_cards: dict[str, LoaderCard] = {}
+        self._manifest_worker: ManifestWorker | None = None
+        self._loader_scan: LoaderScanWorker | None = None
+        self._retired_scans: list[LoaderScanWorker] = []
+        self._install_worker: ChainInstallWorker | None = None
+        self._size_worker: SizeEstimateWorker | None = None
+        # 同一个页面最多同时安装 5 个版本，每个版本一份独立任务与 worker
+        self._install_jobs: dict[str, dict] = {}
+        self._progress_key = ""
+        self._client_worker: ClientJarSaveWorker | None = None
+        self._client_task_id = ""
+        self._client_pause = threading.Event()
+        self._pending_client_save: tuple[dict, Path] | None = None
+        self._loader_save_worker: LoaderInstallerSaveWorker | None = None
+        self._loader_save_task_id = ""
+        self._loader_save_pause = threading.Event()
+        self._pending_loader_save: tuple[str, str, str, Path] | None = None
+        self._loader_save_buttons: dict[str, QPushButton] = {}
+        self._loader_version_edited = False
+        # 不再写死版本号：默认留空表示「最新稳定版」，避免切换到旧版本时显示不匹配的加载器版本
+        self._loader_version_defaults = {
+            "fabric": "",
+            "quilt": "",
+            "forge": "",
+            "neoforge": "",
+            "liteloader": "",
+        }
+        self._installing_mc = ""
+        self._installing_kind = ""
+        self._updating_table = False
+        self._loaded = False
+        self._category = "release"
+
+        self._build()
+        self._connect()
+        self._reload_sources()
+        self.refresh()
+
+    # ------------------------------------------------------------------
+    # 构建界面
+    # ------------------------------------------------------------------
+    def _build(self) -> None:
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self.stack = QStackedWidget()
+        outer.addWidget(self.stack)
+        self.stack.addWidget(self._build_list_page())
+        self.stack.addWidget(self._build_detail_page())
+
+    def _build_list_page(self) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(26, 20, 26, 20)
+        outer.setSpacing(14)
+
+        header, header_layout = page_header(
+            "下载安装", "选择版本后自动检测可用的 Mod 加载器"
+        )
+        manage = QPushButton("下载源管理")
+        manage.setObjectName("Chip")
+        manage.clicked.connect(lambda: self.ctx.bus.navigate.emit("settings"))
+        header_layout.addWidget(manage)
+        outer.addWidget(header)
+
+        # 基岩版入口：与 Java 版一起下载与启动，单独标注「基岩版」
+        bedrock_card = Card(margins=14, spacing=8)
+        bedrock_row = QHBoxLayout()
+        bedrock_row.setSpacing(10)
+        bedrock_title = QLabel("基岩版（Bedrock Edition）")
+        bedrock_title.setObjectName("CardTitle")
+        bedrock_row.addWidget(bedrock_title)
+        bedrock_row.addWidget(Badge("基岩版", "green"))
+        bedrock_row.addStretch(1)
+        bedrock_open = QPushButton("打开基岩版下载")
+        bedrock_open.setObjectName("Chip")
+        bedrock_open.clicked.connect(lambda: self.ctx.bus.navigate.emit("bedrock"))
+        bedrock_row.addWidget(bedrock_open)
+        bedrock_card.body.addLayout(bedrock_row)
+        bedrock_hint = QLabel(
+            "与 Java 版共用下载中心：MCAPPX 历史版本与微软商店安装包，"
+            "安装后直接在启动页的版本列表里启动（标注为基岩版）。"
+        )
+        bedrock_hint.setObjectName("Tiny")
+        bedrock_hint.setWordWrap(True)
+        bedrock_card.body.addWidget(bedrock_hint)
+        outer.addWidget(bedrock_card)
+
+        latest_row = QHBoxLayout()
+        latest_row.setSpacing(12)
+        self.release_card = LatestCard("最新正式版", "release")
+        self.snapshot_card = LatestCard("最新测试版", "snapshot")
+        self.release_card.clicked.connect(lambda: self._open_latest("release"))
+        self.snapshot_card.clicked.connect(lambda: self._open_latest("snapshot"))
+        latest_row.addWidget(self.release_card, 1)
+        latest_row.addWidget(self.snapshot_card, 1)
+        outer.addLayout(latest_row)
+
+        tools = Card(margins=16, spacing=10)
+        row1 = QHBoxLayout()
+        row1.setSpacing(10)
+        source_label = QLabel("版本清单来源")
+        source_label.setObjectName("Muted")
+        row1.addWidget(source_label)
+        self.source_combo = QComboBox()
+        self.source_combo.setMinimumWidth(240)
+        row1.addWidget(self.source_combo)
+        self.refresh_button = QPushButton("刷新清单")
+        self.refresh_button.clicked.connect(lambda: self.refresh_manifest(force=True))
+        row1.addWidget(self.refresh_button)
+        row1.addStretch(1)
+        self.status_label = QLabel("尚未加载版本清单")
+        self.status_label.setObjectName("Tiny")
+        row1.addWidget(self.status_label)
+        tools.body.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.setSpacing(10)
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("搜索版本号，如 1.20.1")
+        self.search_edit.setClearButtonEnabled(True)
+        row2.addWidget(self.search_edit, 1)
+        self.count_label = QLabel("")
+        self.count_label.setObjectName("Tiny")
+        row2.addWidget(self.count_label)
+        tools.body.addLayout(row2)
+
+        row3 = QHBoxLayout()
+        row3.setSpacing(8)
+        category_label = QLabel("版本分类")
+        category_label.setObjectName("Muted")
+        row3.addWidget(category_label)
+        self.category_group = QButtonGroup(self)
+        self.category_buttons: dict[str, QPushButton] = {}
+        for key, text in _CATEGORY_FILTERS:
+            chip = QPushButton(text)
+            chip.setObjectName("Chip")
+            chip.setCheckable(True)
+            chip.setChecked(key == self._category)
+            chip.clicked.connect(lambda _checked=False, k=key: self._set_category(k))
+            self.category_group.addButton(chip)
+            self.category_buttons[key] = chip
+            row3.addWidget(chip)
+        row3.addStretch(1)
+        tools.body.addLayout(row3)
+        outer.addWidget(tools)
+
+        table_card = Card(margins=14, spacing=10)
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["版本", "类型", "发布时间", "状态"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setShowGrid(False)
+        self.table.setAlternatingRowColors(False)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
+        self.table.setColumnWidth(1, 96)
+        self.table.setColumnWidth(2, 108)
+        self.table.setColumnWidth(3, 88)
+        self.table.verticalHeader().setDefaultSectionSize(34)
+        self.table.setIconSize(QSize(18, 18))
+        self.table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        table_card.body.addWidget(self.table, 1)
+
+        bottom = QHBoxLayout()
+        bottom.setSpacing(10)
+        hint = QLabel("双击任意版本，或选中后点击右侧按钮进入详情")
+        hint.setObjectName("Tiny")
+        bottom.addWidget(hint)
+        bottom.addStretch(1)
+        self.detail_button = QPushButton("查看详情并安装")
+        self.detail_button.setObjectName("Primary")
+        self.detail_button.setEnabled(False)
+        self.detail_button.clicked.connect(self._open_selected_detail)
+        bottom.addWidget(self.detail_button)
+        table_card.body.addLayout(bottom)
+        outer.addWidget(table_card, 1)
+        return page
+
+    def _build_detail_page(self) -> QWidget:
+        page = QWidget()
+        outer = QHBoxLayout(page)
+        outer.setContentsMargins(26, 20, 26, 20)
+        outer.setSpacing(16)
+
+        left = QVBoxLayout()
+        left.setSpacing(10)
+        top_row = QHBoxLayout()
+        back = QPushButton("返回版本列表")
+        back.setObjectName("Ghost")
+        back.clicked.connect(self._back_to_list)
+        top_row.addWidget(back)
+        top_row.addStretch(1)
+        left.addLayout(top_row)
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        self.detail_title = QLabel("—")
+        self.detail_title.setObjectName("DetailTitle")
+        title_row.addWidget(self.detail_title)
+        self.detail_type_badge = Badge("未知", "gray")
+        title_row.addWidget(self.detail_type_badge)
+        self.detail_installed_badge = Badge("未安装", "gray")
+        title_row.addWidget(self.detail_installed_badge)
+        title_row.addStretch(1)
+        left.addLayout(title_row)
+        self.detail_date = QLabel("")
+        self.detail_date.setObjectName("Muted")
+        left.addWidget(self.detail_date)
+        left.addWidget(hline())
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.viewport().setAttribute(Qt.WA_OpaquePaintEvent, False)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 6, 0)
+        content_layout.setSpacing(12)
+
+        location = Card(margins=16, spacing=6)
+        location_title = QLabel("安装位置")
+        location_title.setObjectName("CardTitle")
+        location.body.addWidget(location_title)
+        self.location_label = QLabel(str(self.ctx.config.game_path))
+        self.location_label.setObjectName("Tiny")
+        self.location_label.setWordWrap(True)
+        location.body.addWidget(self.location_label)
+        location_note = QLabel("原版与加载器都会安装到该目录，可在设置页修改。")
+        location_note.setObjectName("Tiny")
+        location_note.setWordWrap(True)
+        location.body.addWidget(location_note)
+        content_layout.addWidget(location)
+
+        loaders = Card(margins=16, spacing=10)
+        loaders_title = QLabel("Mod 加载器（可选）")
+        loaders_title.setObjectName("CardTitle")
+        loaders.body.addWidget(loaders_title)
+        loaders_note = QLabel("默认安装原版；选择加载器后将自动匹配对应版本。")
+        loaders_note.setObjectName("Tiny")
+        loaders_note.setWordWrap(True)
+        loaders.body.addWidget(loaders_note)
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        original = LoaderCard(
+            _ORIGINAL,
+            "原版",
+            "纯净客户端，不包含任何 Mod 加载器",
+            with_combo=False,
+        )
+        original.status.setText("默认")
+        self._loader_cards[_ORIGINAL] = original
+        cards: list[LoaderCard] = [original]
+        for kind in _LOADER_ORDER:
+            card = LoaderCard(kind, LOADER_LABELS[kind], _LOADER_DESCRIPTIONS[kind])
+            self._loader_cards[kind] = card
+            cards.append(card)
+        for index, card in enumerate(cards):
+            grid.addWidget(card, index // 3, index % 3)
+        for column in range(3):
+            grid.setColumnStretch(column, 1)
+        loaders.body.addLayout(grid)
+        content_layout.addWidget(loaders)
+
+        loader_sources = Card(margins=16, spacing=10)
+        sources_title = QLabel("加载器源文件（另存为）")
+        sources_title.setObjectName("CardTitle")
+        loader_sources.body.addWidget(sources_title)
+        sources_note = QLabel(
+            "只下载官方安装器 jar 到指定位置，不安装。版本号可手动修改。"
+        )
+        sources_note.setObjectName("Tiny")
+        sources_note.setWordWrap(True)
+        loader_sources.body.addWidget(sources_note)
+        inputs = QHBoxLayout()
+        inputs.setSpacing(8)
+        mc_caption = QLabel("MC 版本")
+        mc_caption.setObjectName("Muted")
+        inputs.addWidget(mc_caption)
+        self.loader_mc_edit = QLineEdit("")
+        self.loader_mc_edit.setPlaceholderText("选择版本后自动填入")
+        self.loader_mc_edit.setFixedWidth(112)
+        inputs.addWidget(self.loader_mc_edit)
+        ver_caption = QLabel("加载器版本")
+        ver_caption.setObjectName("Muted")
+        inputs.addWidget(ver_caption)
+        self.loader_version_edit = QLineEdit("")
+        self.loader_version_edit.setPlaceholderText("留空=最新稳定版")
+        self.loader_version_edit.setFixedWidth(150)
+        inputs.addWidget(self.loader_version_edit)
+        inputs.addStretch(1)
+        loader_sources.body.addLayout(inputs)
+        self.loader_version_edit.textEdited.connect(
+            lambda _text: setattr(self, "_loader_version_edited", True)
+        )
+        for kind in _LOADER_ORDER:
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            label = QLabel(LOADER_LABELS.get(kind, kind))
+            label.setStyleSheet("font-weight: 600;")
+            row.addWidget(label)
+            row.addStretch(1)
+            button = QPushButton("下载源文件")
+            button.setObjectName("Ghost")
+            button.clicked.connect(
+                lambda _checked=False, k=kind: self._save_loader_installer(k)
+            )
+            row.addWidget(button)
+            self._loader_save_buttons[kind] = button
+            loader_sources.body.addLayout(row)
+        content_layout.addWidget(loader_sources)
+        content_layout.addStretch(1)
+        scroll.setWidget(content)
+        left.addWidget(scroll, 1)
+        outer.addLayout(left, 1)
+
+        side = Card(margins=18, spacing=10)
+        side.setFixedWidth(330)
+        side_title = QLabel("安装所选版本")
+        side_title.setObjectName("CardTitle")
+        side.body.addWidget(side_title)
+        self.selection_label = QLabel("当前选择：原版")
+        self.selection_label.setObjectName("Muted")
+        self.selection_label.setWordWrap(True)
+        side.body.addWidget(self.selection_label)
+        self.install_button = QPushButton("安装所选版本")
+        self.install_button.setObjectName("Primary")
+        self.install_button.clicked.connect(self._start_install)
+        side.body.addWidget(self.install_button)
+
+        self.client_jar_button = QPushButton("仅下载客户端 Jar")
+        self.client_jar_button.setObjectName("Ghost")
+        self.client_jar_button.setToolTip("只把原版客户端 jar 保存到指定位置，不安装到游戏目录")
+        self.client_jar_button.setEnabled(False)
+        self.client_jar_button.clicked.connect(self._save_client_jar)
+        side.body.addWidget(self.client_jar_button)
+
+        self.progress_box = QWidget()
+        progress_layout = QVBoxLayout(self.progress_box)
+        progress_layout.setContentsMargins(0, 4, 0, 0)
+        progress_layout.setSpacing(6)
+        stage_row = QHBoxLayout()
+        self.progress_stage = QLabel("准备安装")
+        self.progress_stage.setStyleSheet("font-weight: 600;")
+        stage_row.addWidget(self.progress_stage, 1)
+        self.cancel_button = QPushButton("取消")
+        self.cancel_button.setObjectName("Danger")
+        self.cancel_button.clicked.connect(self._cancel_install)
+        stage_row.addWidget(self.cancel_button)
+        progress_layout.addLayout(stage_row)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 1000)
+        self.progress_bar.setTextVisible(False)
+        progress_layout.addWidget(self.progress_bar)
+        self.progress_detail = QLabel("")
+        self.progress_detail.setObjectName("Tiny")
+        progress_layout.addWidget(self.progress_detail)
+        self.progress_box.setVisible(False)
+        side.body.addWidget(self.progress_box)
+
+        log_title = QLabel("安装日志")
+        log_title.setObjectName("Tiny")
+        side.body.addWidget(log_title)
+        self.log_view = QPlainTextEdit()
+        self.log_view.setObjectName("Console")
+        self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(800)
+        self.log_view.setMinimumHeight(160)
+        side.body.addWidget(self.log_view, 1)
+        note = QLabel(
+            "安装会先补全原版客户端，再写入所选加载器。\n"
+            "速度慢时可在设置中启用 BMCLAPI 镜像或自定义下载源。"
+        )
+        note.setObjectName("Tiny")
+        note.setWordWrap(True)
+        side.body.addWidget(note)
+        outer.addWidget(side)
+        return page
+
+    def _connect(self) -> None:
+        self.source_combo.currentIndexChanged.connect(self._on_source_changed)
+        self.search_edit.textChanged.connect(lambda _: self._populate())
+        self.table.itemSelectionChanged.connect(self._on_selection_changed)
+        self.table.cellDoubleClicked.connect(lambda _row, _col: self._open_selected_detail())
+        for card in self._loader_cards.values():
+            card.clicked.connect(self._select_loader)
+        self.ctx.bus.config_changed.connect(self._reload_sources)
+        self.ctx.bus.config_changed.connect(self.refresh)
+        self.ctx.bus.versions_changed.connect(self.refresh)
+
+    # ------------------------------------------------------------------
+    # 版本清单
+    # ------------------------------------------------------------------
+    def _reload_sources(self) -> None:
+        config = self.ctx.config
+        sources = [s for s in config.sources if s.enabled and s.manifest_url]
+        sources.sort(key=lambda s: s.priority)
+        self.source_combo.blockSignals(True)
+        self.source_combo.clear()
+        for source in sources:
+            label = source.name
+            if source.api_key.strip():
+                label += " · API Key"
+            self.source_combo.addItem(label, source.id)
+        index = self.source_combo.findData(config.selected_source_id)
+        if index >= 0:
+            self.source_combo.setCurrentIndex(index)
+        elif self.source_combo.count():
+            self.source_combo.setCurrentIndex(0)
+            config.selected_source_id = str(self.source_combo.itemData(0))
+            config.save()
+        self.source_combo.blockSignals(False)
+
+    def _on_source_changed(self, index: int) -> None:
+        source_id = str(self.source_combo.itemData(index) or "")
+        if not source_id or source_id == self.ctx.config.selected_source_id:
+            return
+        self.ctx.config.select_source(source_id)
+        self.refresh_manifest(force=True)
+
+    def refresh_manifest(self, force: bool = False) -> None:
+        if self._manifest_worker is not None and self._manifest_worker.isRunning():
+            return
+        self._loaded = True
+        self.refresh_button.setEnabled(False)
+        self.refresh_button.setText("加载中…")
+        self.status_label.setText("正在获取版本清单…")
+        self.status_label.setStyleSheet("color: #8aa192;")
+        self._manifest_worker = ManifestWorker(
+            self.ctx, force, self.ctx.config.selected_source_id, self
+        )
+        self._manifest_worker.loaded.connect(self._on_manifest_loaded)
+        self._manifest_worker.failed.connect(self._on_manifest_failed)
+        self._manifest_worker.finished.connect(self._on_manifest_finished)
+        self._manifest_worker.start()
+
+    def _on_manifest_loaded(self, manifest: dict, source_name: str, cached: bool) -> None:
+        versions = manifest.get("versions") if isinstance(manifest, dict) else None
+        if not isinstance(versions, list):
+            self._on_manifest_failed("版本清单格式不正确。")
+            return
+        self._manifest = manifest
+        self._entries = [v for v in versions if isinstance(v, dict) and v.get("id")]
+        self._entries_by_id = {str(v["id"]): v for v in self._entries}
+        suffix = "（缓存）" if cached else ""
+        self.status_label.setText(f"{source_name}{suffix} · {len(self._entries)} 个版本")
+        self.status_label.setStyleSheet("color: #8fe89b;")
+        self.status_label.setToolTip("")
+        self._populate()
+        self._append_log(f"[清单] 已加载 {len(self._entries)} 个版本（{source_name}{suffix}）")
+
+    def _on_manifest_failed(self, message: str) -> None:
+        self.status_label.setText("版本清单获取失败")
+        self.status_label.setStyleSheet("color: #e8909a;")
+        self.status_label.setToolTip(message)
+        self._append_log(f"[清单] 获取失败：{message}")
+        if self._manifest is None:
+            self._populate()
+        self.ctx.bus.toast.emit("版本清单获取失败，请检查网络或下载源设置。")
+
+    def _on_manifest_finished(self) -> None:
+        self.refresh_button.setEnabled(True)
+        self.refresh_button.setText("刷新清单")
+        worker = self._manifest_worker
+        self._manifest_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    # ------------------------------------------------------------------
+    # 列表与筛选
+    # ------------------------------------------------------------------
+    def refresh(self) -> None:
+        """重新扫描已安装版本并刷新列表状态。"""
+        self._installed_ids = {
+            v.id for v in scan_installed_versions(self.ctx.config.game_path)
+        }
+        self._populate()
+        if self._detail_entry is not None:
+            self._update_detail_header()
+
+    def _set_category(self, category: str) -> None:
+        """切换到某个版本分类标签（默认只加载被点击的那一类）。"""
+        if category == self._category:
+            return
+        self._category = category
+        chip = self.category_buttons.get(category)
+        if chip is not None and not chip.isChecked():
+            chip.setChecked(True)
+        self._populate()
+
+    def _latest_of(self, category: str) -> dict | None:
+        """取该分类中发布时间最新的一条版本清单条目。"""
+        best: dict | None = None
+        best_time = ""
+        for entry in self._entries:
+            version_id = str(entry.get("id") or "")
+            if version_category(version_id, str(entry.get("type") or "")) != category:
+                continue
+            stamp = str(entry.get("releaseTime") or entry.get("time") or "")
+            if best is None or stamp > best_time:
+                best = entry
+                best_time = stamp
+        return best
+
+    def _update_latest_cards(self) -> None:
+        self.release_card.set_entry(self._latest_of("release"))
+        self.snapshot_card.set_entry(self._latest_of("snapshot"))
+
+    def _open_latest(self, category: str) -> None:
+        entry = self._latest_of(category)
+        if entry is not None:
+            self._open_detail(entry)
+
+    def _populate(self) -> None:
+        if self._updating_table:
+            return
+        self._updating_table = True
+        try:
+            self._update_latest_cards()
+            needle = self.search_edit.text().strip().lower()
+            category = self._category
+            selected_id = self._selected_version_id()
+            visible: list[dict] = []
+            for entry in self._entries:
+                version_id = str(entry.get("id") or "")
+                if needle and needle not in version_id.lower():
+                    continue
+                if version_category(
+                    version_id, str(entry.get("type") or "")
+                ) != category:
+                    continue
+                visible.append(entry)
+
+            self.table.blockSignals(True)
+            self.table.setRowCount(0)
+            for entry in visible:
+                version_id = str(entry.get("id") or "")
+                entry_type = str(entry.get("type") or "")
+                kind = version_category(version_id, entry_type)
+                row = self.table.rowCount()
+                self.table.insertRow(row)
+                id_item = QTableWidgetItem(version_id)
+                id_item.setData(Qt.UserRole, version_id)
+                id_item.setToolTip(str(entry.get("url") or ""))
+                id_item.setIcon(make_version_icon(kind, 16))
+                self.table.setItem(row, 0, id_item)
+
+                type_item = QTableWidgetItem(CATEGORY_LABELS.get(kind, entry_type or "未知"))
+                type_item.setTextAlignment(Qt.AlignCenter)
+                self.table.setItem(row, 1, type_item)
+
+                release = str(entry.get("releaseTime") or entry.get("time") or "")[:10]
+                date_item = QTableWidgetItem(release or "未知")
+                date_item.setTextAlignment(Qt.AlignCenter)
+                self.table.setItem(row, 2, date_item)
+
+                installed = version_id in self._installed_ids
+                status_item = QTableWidgetItem("已安装" if installed else "未安装")
+                status_item.setTextAlignment(Qt.AlignCenter)
+                status_item.setForeground(QColor("#8fe89b" if installed else "#7f9689"))
+                self.table.setItem(row, 3, status_item)
+
+            self.count_label.setText(f"共 {len(self._entries)} 个 · 显示 {len(visible)} 个")
+            self.table.blockSignals(False)
+            self._updating_table = False
+
+            row = self._row_of(selected_id) if selected_id else -1
+            if row < 0:
+                row = self._first_visible_row(visible)
+            if row >= 0:
+                self.table.selectRow(row)
+            self._on_selection_changed()
+        finally:
+            self._updating_table = False
+
+    def _first_visible_row(self, visible: list[dict]) -> int:
+        """优先选中第一个正式版，否则选中第一行。"""
+        for entry in visible:
+            if str(entry.get("type")) == "release":
+                return self._row_of(str(entry.get("id") or ""))
+        return 0 if visible else -1
+
+    def _row_of(self, version_id: str) -> int:
+        if not version_id:
+            return -1
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item is not None and item.data(Qt.UserRole) == version_id:
+                return row
+        return -1
+
+    def _selected_version_id(self) -> str:
+        rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
+        if not rows:
+            return ""
+        item = self.table.item(rows[0].row(), 0)
+        return str(item.data(Qt.UserRole)) if item is not None else ""
+
+    def _on_selection_changed(self) -> None:
+        if self._updating_table:
+            return
+        self.detail_button.setEnabled(bool(self._selected_version_id()))
+
+    def _open_selected_detail(self) -> None:
+        version_id = self._selected_version_id()
+        entry = self._entries_by_id.get(version_id)
+        if entry is not None:
+            self._open_detail(entry)
+
+    def _open_detail(self, entry: dict) -> None:
+        self._detail_entry = entry
+        self._selected_kind = _ORIGINAL
+        self._update_detail_header()
+        self.location_label.setText(str(self.ctx.config.game_path))
+        self._select_loader(_ORIGINAL)
+        self._loader_version_edited = False
+        self.loader_mc_edit.setText(str(entry.get("id") or ""))
+        self.loader_version_edit.setText("")
+        self._start_loader_scan(str(entry.get("id") or ""))
+        self.stack.setCurrentIndex(1)
+
+    def _back_to_list(self) -> None:
+        self.stack.setCurrentIndex(0)
+        self._retire_loader_scan()
+
+    def _update_detail_header(self) -> None:
+        entry = self._detail_entry
+        if entry is None:
+            return
+        version_id = str(entry.get("id") or "")
+        entry_type = str(entry.get("type") or "")
+        category = version_category(version_id, entry_type)
+        self.detail_title.setText(version_id or "—")
+        self.detail_type_badge.setText(CATEGORY_LABELS.get(category, entry_type or "未知"))
+        self.detail_type_badge.set_kind(
+            "green"
+            if category == "release"
+            else ("orange" if category in ("snapshot", "april") else "gray")
+        )
+        installed = version_id in self._installed_ids
+        self.detail_installed_badge.setText("已安装" if installed else "未安装")
+        self.detail_installed_badge.set_kind("green" if installed else "gray")
+        release = str(entry.get("releaseTime") or entry.get("time") or "")[:10]
+        self.detail_date.setText(f"发布时间：{release or '未知'}")
+        self.location_label.setText(str(self.ctx.config.game_path))
+
+    # ------------------------------------------------------------------
+    # 加载器检测
+    # ------------------------------------------------------------------
+    def _start_loader_scan(self, mc_version: str) -> None:
+        self._retire_loader_scan()
+        for kind, card in self._loader_cards.items():
+            if kind == _ORIGINAL:
+                continue
+            card.set_pending()
+        worker = LoaderScanWorker(mc_version, self)
+        worker.result.connect(
+            lambda kind, versions, w=worker: self._on_loader_versions(w, kind, versions)
+        )
+        worker.failed.connect(
+            lambda kind, message, w=worker: self._on_loader_failed(w, kind, message)
+        )
+        worker.finished.connect(lambda w=worker: self._on_loader_scan_finished(w))
+        self._loader_scan = worker
+        worker.start()
+
+    def _retire_loader_scan(self) -> None:
+        """中止并解绑旧的检测线程，避免旧结果回填到当前版本。"""
+        worker = self._loader_scan
+        self._loader_scan = None
+        if worker is None:
+            return
+        worker.cancel()
+        # 只断开本页连接的槽，避免误伤其他地方对同一信号的连接
+        for signal in (worker.result, worker.failed, worker.finished):
+            try:
+                signal.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+        if worker.isRunning():
+            self._retired_scans.append(worker)
+        else:
+            worker.deleteLater()
+
+    def _on_loader_versions(
+        self, worker: LoaderScanWorker, kind: str, versions: list[str]
+    ) -> None:
+        if worker is not self._loader_scan:
+            return
+        card = self._loader_cards.get(kind)
+        if card is None:
+            return
+        values = [str(v) for v in (versions or []) if str(v)]
+        if values:
+            card.set_versions(values)
+        else:
+            card.set_unsupported("该 Minecraft 版本没有可用的加载器版本。")
+
+    def _on_loader_failed(self, worker: LoaderScanWorker, kind: str, message: str) -> None:
+        if worker is not self._loader_scan:
+            return
+        card = self._loader_cards.get(kind)
+        if card is None:
+            return
+        card.set_unsupported(message or "检测失败")
+        self._append_log(f"[检测] {LOADER_LABELS.get(kind, kind)} 不可用：{message}")
+        self._ensure_selection_valid()
+
+    def _on_loader_scan_finished(self, worker: LoaderScanWorker) -> None:
+        if worker is not self._loader_scan:
+            return
+        self._loader_scan = None
+        for kind, card in self._loader_cards.items():
+            if kind == _ORIGINAL:
+                continue
+            if card.status.text() == "检测中":
+                card.set_unsupported("未检测到可用版本。")
+        self._ensure_selection_valid()
+        worker.deleteLater()
+
+    def _ensure_selection_valid(self) -> None:
+        """所选加载器变为不支持时自动回落到原版。"""
+        card = self._loader_cards.get(self._selected_kind)
+        if self._selected_kind != _ORIGINAL and (card is None or card.is_unsupported):
+            self._select_loader(_ORIGINAL)
+            return
+        self._select_loader(self._selected_kind)
+
+    def _select_loader(self, kind: str) -> None:
+        card = self._loader_cards.get(kind)
+        if card is None or card.is_unsupported:
+            return
+        self._selected_kind = kind
+        for key, item in self._loader_cards.items():
+            item.set_selected(key == kind)
+        if kind == _ORIGINAL:
+            self.selection_label.setText("当前选择：原版（不安装加载器）")
+        else:
+            label = LOADER_LABELS.get(kind, kind)
+            version = card.combo.currentText()
+            self.selection_label.setText(
+                f"当前选择：{label}{(' ' + version) if version else ''}"
+            )
+        self._update_install_button()
+
+    def _update_install_button(self) -> None:
+        estimating = self._size_worker is not None and self._size_worker.isRunning()
+        selected = str((self._detail_entry or {}).get("id") or "")
+        selected_active = self._install_job_active(selected)
+        self.install_button.setEnabled(
+            not estimating
+            and self._detail_entry is not None
+            and not selected_active
+            and self._active_install_count() < 5
+        )
+        saving = self._client_worker is not None and self._client_worker.isRunning()
+        self.client_jar_button.setEnabled(
+            self._detail_entry is not None and not saving
+        )
+        saving_loader = (
+            self._loader_save_worker is not None and self._loader_save_worker.isRunning()
+        )
+        for button in self._loader_save_buttons.values():
+            button.setEnabled(not saving_loader)
+
+    def _install_job_active(self, version_id: str) -> bool:
+        """该版本是否已有未结束的安装任务。"""
+        job = self._install_jobs.get(version_id)
+        if not job:
+            return False
+        task = self.ctx.downloads.find(job.get("task_id", ""))
+        if task is not None and not task.finished:
+            return True
+        worker = job.get("worker")
+        return bool(worker is not None and worker.isRunning())
+
+    def _active_install_count(self) -> int:
+        return sum(
+            1 for version_id in self._install_jobs if self._install_job_active(version_id)
+        )
+
+    # ------------------------------------------------------------------
+    # 并发安装（最多 5 个版本同时进行）
+    # ------------------------------------------------------------------
+    def _local_install_size(self, version_id: str) -> int | None:
+        """本地已有版本 JSON 时直接估算；没有（全新安装）返回 None。"""
+        try:
+            merged = load_version(self.ctx.config.game_path, version_id)
+        except (VersionError, OSError):
+            return None
+        need = estimate_version_size(merged, self.ctx.config.assets_path)
+        return need if need > 0 else None
+
+    def _confirm_disk_space(self, need: int) -> bool:
+        """空间不足时提示并默认取消，充足则静默继续。"""
+        if need <= 0:
+            return True
+        try:
+            free = int(shutil.disk_usage(str(self.ctx.config.versions_path)).free)
+        except OSError:
+            return True
+        if need <= free:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "磁盘空间不足",
+            f"该版本约需 {need / 1024 ** 3:.1f} GB，当前剩余 {free / 1024 ** 3:.1f} GB。\n"
+            "继续安装可能因空间不足失败，是否仍要安装？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
+
+    def _start_install(self) -> None:
+        entry = self._detail_entry
+        if entry is None:
+            return
+        version_id = str(entry.get("id") or "")
+        if self._install_job_active(version_id):
+            QMessageBox.information(
+                self, APP_NAME, f"{version_id} 已在安装中，请等待完成或先取消。"
+            )
+            return
+        if self._active_install_count() >= 5:
+            QMessageBox.information(
+                self,
+                APP_NAME,
+                "最多同时安装 5 个版本，请等待已有任务完成或先取消其中一个。",
+            )
+            return
+        if self._size_worker is not None and self._size_worker.isRunning():
+            return
+        kind = self._selected_kind
+        loader_version = ""
+        if kind != _ORIGINAL:
+            card = self._loader_cards.get(kind)
+            if card is None or card.is_unsupported or not card.combo.isEnabled():
+                return
+            loader_version = str(card.combo.currentData() or card.combo.currentText())
+            if kind != "liteloader" and not loader_version:
+                QMessageBox.warning(self, "缺少加载器版本", "请先选择一个加载器版本。")
+                return
+
+        need = self._local_install_size(version_id)
+        if need is None:
+            # 全新安装：本地没有版本 JSON，改为在线按清单估算后再继续
+            self._start_size_estimate(dict(entry), kind, loader_version)
+            return
+        if not self._confirm_disk_space(need):
+            return  # 磁盘空间不足且用户选择取消
+        self._begin_install(dict(entry), kind, loader_version)
+
+    def _start_size_estimate(self, entry: dict, kind: str, loader_version: str) -> None:
+        """在线估算磁盘占用（不阻塞界面），完成后自动继续安装流程。"""
+        worker = SizeEstimateWorker(self.ctx, entry, self)
+        worker.done.connect(
+            lambda need: self._on_size_estimated(need, entry, kind, loader_version)
+        )
+        worker.finished.connect(self._on_size_worker_finished)
+        self._size_worker = worker
+        self.selection_label.setText("正在估算磁盘占用…")
+        self._update_install_button()
+        worker.start()
+
+    def _on_size_estimated(
+        self, need: int, entry: dict, kind: str, loader_version: str
+    ) -> None:
+        if self._size_worker is None:
+            return  # 页面已收尾，忽略迟到的结果
+        if self._selected_kind != kind:
+            # 估算期间用户已改选加载器：放弃本次安装，避免把选择回退
+            self._select_loader(self._selected_kind)
+            self._update_install_button()
+            return
+        self._select_loader(kind)  # 恢复“当前选择”文案与按钮状态
+        if not self._confirm_disk_space(need):
+            return
+        self._begin_install(entry, kind, loader_version)
+
+    def _on_size_worker_finished(self) -> None:
+        worker = self._size_worker
+        self._size_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        self._update_install_button()
+
+    def _begin_install(self, entry: dict, kind: str, loader_version: str) -> None:
+        version_id = str(entry.get("id") or "")
+        if self._install_job_active(version_id) or self._active_install_count() >= 5:
+            return
+        self._installing_mc = version_id
+        self._installing_kind = kind
+        job = self._install_jobs.get(version_id)
+        if job is None:
+            job = {"pause": threading.Event()}
+            self._install_jobs[version_id] = job
+        job.update(
+            entry=dict(entry),
+            kind=kind,
+            loader_version=loader_version,
+            task_id="",
+            worker=None,
+            fresh=True,
+        )
+        job["pause"].clear()
+        self._progress_key = version_id
+        self.progress_box.setVisible(True)
+        self.progress_stage.setText("准备安装")
+        self.progress_bar.setValue(0)
+        self.progress_detail.setText("")
+        self.cancel_button.setEnabled(True)
+        label = LOADER_LABELS.get(kind, kind) if kind != _ORIGINAL else "原版"
+        task = self.ctx.downloads.submit(
+            "版本",
+            f"{version_id} · {label}",
+            lambda _task, key=version_id: self._spawn_install(key, _task.id),
+            cancel=lambda key=version_id: self._cancel_job(key),
+            pause=job["pause"],
+            rebuild=lambda _task, key=version_id: self._spawn_install(key, _task.id),
+            detail="准备安装",
+        )
+        job["task_id"] = task.id
+        self._update_install_button()
+
+    def _spawn_install(self, key: str, task_id: str = "") -> ChainInstallWorker:
+        """为指定版本创建（或重试时重建）安装线程。"""
+        job = self._install_jobs.get(key)
+        if job is None or not job.get("entry"):
+            raise RuntimeError("没有待安装的版本")
+        task_id = task_id or job.get("task_id", "")
+        if task_id:
+            job["task_id"] = task_id
+        if not self._progress_key:
+            self._progress_key = key
+        if key == self._progress_key:
+            self.progress_box.setVisible(True)
+            self.progress_stage.setText("准备安装")
+            self.progress_bar.setValue(0)
+            self.progress_detail.setText("")
+            self.cancel_button.setEnabled(True)
+        if not job.get("fresh", False):
+            self._append_log("[安装] 重新开始安装流程。")
+        job["fresh"] = False
+        worker = ChainInstallWorker(
+            self.ctx,
+            job["entry"],
+            job["kind"],
+            job["loader_version"],
+            job["pause"],
+            self,
+        )
+        worker.progress.connect(lambda progress, k=key: self._on_progress(k, progress))
+        worker.log.connect(self._append_log)
+        worker.done.connect(lambda final, k=key: self._on_install_done(k, final))
+        worker.failed.connect(lambda message, k=key: self._on_install_failed(k, message))
+        worker.finished.connect(lambda k=key: self._on_install_finished(k))
+        job["worker"] = worker
+        self._install_worker = worker if key == self._progress_key else self._install_worker
+        self._update_install_button()
+        return worker
+
+    def _cancel_job(self, key: str) -> None:
+        job = self._install_jobs.get(key)
+        if not job:
+            return
+        worker = job.get("worker")
+        if worker is not None and worker.isRunning():
+            worker.cancel()
+        elif job.get("task_id"):
+            self.ctx.downloads.cancel(job["task_id"])
+
+    def _cancel_install(self) -> None:
+        key = self._progress_key
+        if not key or not self._install_job_active(key):
+            key = next(
+                (item for item in self._install_jobs if self._install_job_active(item)), ""
+            )
+        if not key:
+            return
+        self._cancel_job(key)
+        self._append_log("[安装] 已请求取消。")
+        self.cancel_button.setEnabled(False)
+
+    def _on_progress(self, key: str, progress: Progress) -> None:
+        job = self._install_jobs.get(key)
+        task_id = job.get("task_id", "") if job else ""
+        if task_id:
+            detail = progress.detail
+            if progress.speed > 0:
+                detail += f" · {progress.speed / 1048576:.1f} MB/s"
+            if progress.files_total > 0:
+                detail += f" · 剩余 {max(0, progress.files_total - progress.files_done)} 个文件"
+            self.ctx.downloads.update(
+                task_id,
+                percent=progress.percent,
+                status="安装中",
+                stage=progress.stage,
+                detail=detail,
+                speed=progress.speed,
+                files_done=progress.files_done,
+                files_total=progress.files_total,
+            )
+        if key != self._progress_key and self._progress_key:
+            return
+        self._progress_key = key
+        self.progress_box.setVisible(True)
+        self.progress_stage.setText(progress.stage)
+        self.progress_bar.setValue(int(progress.percent * 1000))
+        detail = progress.detail
+        if progress.speed > 0:
+            detail += f" · {progress.speed / 1048576:.1f} MB/s"
+        if progress.files_total > 0:
+            detail += f" · 剩余 {max(0, progress.files_total - progress.files_done)} 个文件"
+        self.progress_detail.setText(detail)
+
+    def _on_install_done(self, key: str, final_version_id: str) -> None:
+        job = self._install_jobs.get(key) or {}
+        mc_version = str((job.get("entry") or {}).get("id") or key)
+        loader_label = (
+            LOADER_LABELS.get(job.get("kind", ""), job.get("kind", ""))
+            if job.get("kind")
+            else "原版"
+        )
+        self._append_log(f"[安装] {final_version_id} 安装完成。")
+        config = self.ctx.config
+        # instance_list() 包含动态构造的默认实例（config.instances 里没有），
+        # 否则同一个版本再次安装会重复登记一条实例记录
+        if not any(i.version_id == final_version_id for i in config.instance_list()):
+            instance = config.add_instance(
+                name=final_version_id,
+                game_dir=str(config.game_path),
+                version_id=final_version_id,
+                loader=loader_label,
+                mc_version=mc_version,
+            )
+            config.select_instance(instance.id)
+            self.ctx.bus.instances_changed.emit()
+        self._import_offline_skin(final_version_id)
+        self.refresh()
+        self.ctx.bus.versions_changed.emit()
+        self.ctx.bus.toast.emit(f"{final_version_id} 安装完成，可在主页启动。")
+        if job.get("task_id"):
+            self.ctx.downloads.finish(job["task_id"], True, final_version_id)
+        if key == self._progress_key:
+            self._progress_key = ""
+            self.progress_box.setVisible(False)
+            self.cancel_button.setEnabled(True)
+
+    def _import_offline_skin(self, version_id: str) -> None:
+        """新版本安装完成后，把当前离线账号的皮肤自动导入新游戏目录。
+
+        没有材质包文件夹时由 import_offline_skin() 自动生成。
+        """
+        account = self.ctx.current_account()
+        config = self.ctx.config
+        # 全部隔离时皮肤需要主目录与隔离目录各写一份，规则已收敛到 resolve_game_dirs
+        dirs = config.resolve_game_dirs(version_id).skin_targets()
+        for game_dir in dirs:
+            paths = import_offline_skin(
+                account, game_dir, log=self.ctx.bus.log.emit, version_id=version_id
+            )
+            if paths:
+                self.ctx.bus.log.emit(
+                    f"[皮肤] 已自动导入离线皮肤到 {version_id}：{paths[-1]}"
+                )
+
+    def _on_install_failed(self, key: str, message: str) -> None:
+        job = self._install_jobs.get(key) or {}
+        worker = job.get("worker")
+        task_id = job.get("task_id", "")
+        was_current = key == self._progress_key
+        if was_current:
+            self._progress_key = ""
+            self.progress_box.setVisible(False)
+            self.cancel_button.setEnabled(True)
+        if worker is not None and worker.cancel_event.is_set():
+            # 用户取消：不当作安装失败
+            self._append_log("[安装] 已取消。")
+            if task_id:
+                self.ctx.downloads.finish_cancelled(task_id, "安装已取消。")
+            self.ctx.bus.toast.emit("安装已取消。")
+            return
+        self._append_log(f"[安装] 失败：{message}")
+        if task_id:
+            self.ctx.downloads.finish(task_id, False, message)
+        if not was_current:
+            self.ctx.bus.toast.emit(f"{key} 安装失败，详情见下载中心与日志。")
+            return
+        # 安装日志自动复制到剪贴板，方便用户直接反馈给开发者
+        QGuiApplication.clipboard().setText(self.log_view.toPlainText())
+        QMessageBox.critical(
+            self,
+            "安装失败",
+            f"{message}\n\n安装日志已复制到剪贴板，请反馈给开发者。",
+        )
+
+    def _on_install_finished(self, key: str) -> None:
+        job = self._install_jobs.get(key)
+        if not job:
+            return
+        worker = job.get("worker")
+        job["worker"] = None
+        if worker is not None:
+            if self._install_worker is worker:
+                self._install_worker = None
+            worker.deleteLater()
+        self._update_install_button()
+
+    # ------------------------------------------------------------------
+    # 仅下载客户端 Jar
+    # ------------------------------------------------------------------
+    def _save_client_jar(self) -> None:
+        entry = self._detail_entry
+        if entry is None:
+            return
+        if self._client_worker is not None and self._client_worker.isRunning():
+            QMessageBox.information(self, APP_NAME, "已有客户端 Jar 下载任务正在进行，请稍候。")
+            return
+        version_id = str(entry.get("id") or "")
+        default_name = f"Minecraft-{_safe_filename(version_id, 'version')}-client.jar"
+        path, _filter = QFileDialog.getSaveFileName(
+            self,
+            "仅下载客户端 Jar",
+            str(_download_dir() / default_name),
+            "Jar 文件 (*.jar);;所有文件 (*)",
+        )
+        if not path:
+            return
+        dest = Path(path)
+        if not dest.suffix:
+            dest = dest.with_suffix(".jar")
+        self._pending_client_save = (dict(entry), dest)
+        self._client_pause.clear()
+        task = self.ctx.downloads.submit(
+            "纯下载",
+            dest.name,
+            lambda item: self._spawn_client_save(item.id),
+            cancel=lambda: self._client_worker.cancel() if self._client_worker else None,
+            pause=self._client_pause,
+            rebuild=lambda item: self._spawn_client_save(item.id),
+            target_dir=str(dest.parent),
+            detail=f"另存为：{dest.name}",
+        )
+        self._client_task_id = task.id
+        self._append_log(f"[下载] 另存为 {dest}")
+        self._update_install_button()
+
+    def _spawn_client_save(self, task_id: str = "") -> ClientJarSaveWorker:
+        """创建（或重试时重建）客户端 Jar 下载线程。"""
+        if self._pending_client_save is None:
+            raise RuntimeError("没有待保存的客户端 Jar")
+        entry, dest = self._pending_client_save
+        worker = ClientJarSaveWorker(self.ctx, entry, dest, self)
+        worker.pause_event = self._client_pause
+        worker.log.connect(self._append_log)
+        worker.log.connect(self.ctx.bus.log.emit)
+        worker.progress.connect(
+            lambda value, speed, detail, tid=task_id: self.ctx.downloads.update(
+                tid, percent=value, status="下载中", detail=detail, speed=speed
+            )
+            if tid
+            else None
+        )
+        worker.done.connect(
+            lambda path, tid=task_id: self._on_client_done(tid, path)
+        )
+        worker.failed.connect(
+            lambda message, tid=task_id, w=worker: self._on_client_failed(tid, message, w)
+        )
+        worker.finished.connect(lambda w=worker: self._on_client_finished(w))
+        self._client_worker = worker
+        if task_id:
+            self._client_task_id = task_id
+        self._update_install_button()
+        return worker
+
+    def _on_client_done(self, task_id: str, path: str) -> None:
+        self._append_log(f"[下载] 文件已保存至：{path}")
+        self.ctx.bus.log.emit(f"[下载] 文件已保存至：{path}")
+        self.ctx.bus.toast.emit(f"文件已保存至：{path}")
+        if task_id:
+            self.ctx.downloads.finish(task_id, True, f"已保存至：{path}")
+
+    def _on_client_failed(
+        self, task_id: str, message: str, worker: ClientJarSaveWorker
+    ) -> None:
+        self._append_log(f"[下载] 失败：{message}")
+        if task_id:
+            if worker.cancel_event.is_set():
+                self.ctx.downloads.finish_cancelled(task_id, "下载已取消。")
+            else:
+                self.ctx.downloads.finish(task_id, False, message)
+        if worker.cancel_event.is_set():
+            self.ctx.bus.toast.emit("下载已取消。")
+            return
+        self.ctx.bus.log.emit(f"[错误] {message}")
+        QMessageBox.warning(self, "仅下载失败", message)
+
+    def _on_client_finished(self, worker: ClientJarSaveWorker) -> None:
+        if worker is not self._client_worker:
+            worker.deleteLater()
+            return
+        self._client_worker = None
+        worker.deleteLater()
+        self._update_install_button()
+
+    # ------------------------------------------------------------------
+    # 加载器源文件下载（另存为）
+    # ------------------------------------------------------------------
+    def _save_loader_installer(self, kind: str) -> None:
+        if self._loader_save_worker is not None and self._loader_save_worker.isRunning():
+            QMessageBox.information(self, APP_NAME, "已有加载器源文件下载任务正在进行，请稍候。")
+            return
+        if not self._loader_version_edited:
+            card = self._loader_cards.get(kind)
+            self.loader_version_edit.setText(card.combo.currentText() if card and card.combo.count() else "")
+        mc = self.loader_mc_edit.text().strip() or str((self._detail_entry or {}).get("id") or "")
+        ver = self.loader_version_edit.text().strip()
+        default_name = _loader_installer_file_name(kind, mc, ver)
+        path, _filter = QFileDialog.getSaveFileName(
+            self,
+            f"下载{LOADER_LABELS.get(kind, kind)}安装器",
+            str(_download_dir() / default_name),
+            "Jar 文件 (*.jar);;所有文件 (*)",
+        )
+        if not path:
+            return
+        dest = Path(path)
+        if not dest.suffix:
+            dest = dest.with_suffix(".jar")
+        self._pending_loader_save = (kind, mc, ver, dest)
+        self._loader_save_pause.clear()
+        task = self.ctx.downloads.submit(
+            "纯下载",
+            dest.name,
+            lambda item: self._spawn_loader_save(item.id),
+            cancel=lambda: self._loader_save_worker.cancel() if self._loader_save_worker else None,
+            pause=self._loader_save_pause,
+            rebuild=lambda item: self._spawn_loader_save(item.id),
+            target_dir=str(dest.parent),
+            detail=f"另存为：{dest.name}",
+        )
+        self._loader_save_task_id = task.id
+        self._append_log(f"[下载] 另存为 {dest}")
+        self._update_install_button()
+
+    def _spawn_loader_save(self, task_id: str = "") -> LoaderInstallerSaveWorker:
+        """创建（或重试时重建）加载器安装器下载线程。"""
+        if self._pending_loader_save is None:
+            raise RuntimeError("没有待保存的加载器安装器")
+        kind, mc, ver, dest = self._pending_loader_save
+        worker = LoaderInstallerSaveWorker(kind, mc, ver, dest, self)
+        worker.pause_event = self._loader_save_pause
+        worker.log.connect(self._append_log)
+        worker.log.connect(self.ctx.bus.log.emit)
+        worker.progress.connect(
+            lambda value, speed, detail, tid=task_id: self.ctx.downloads.update(
+                tid, percent=value, status="下载中", detail=detail, speed=speed
+            )
+            if tid
+            else None
+        )
+        worker.done.connect(
+            lambda path, tid=task_id: self._on_loader_save_done(tid, path)
+        )
+        worker.failed.connect(
+            lambda message, tid=task_id, w=worker: self._on_loader_save_failed(
+                tid, message, w
+            )
+        )
+        worker.finished.connect(lambda w=worker: self._on_loader_save_finished(w))
+        self._loader_save_worker = worker
+        if task_id:
+            self._loader_save_task_id = task_id
+        self._update_install_button()
+        return worker
+
+    def _on_loader_save_done(self, task_id: str, path: str) -> None:
+        self._append_log(f"[下载] 文件已保存至：{path}")
+        self.ctx.bus.log.emit(f"[下载] 文件已保存至：{path}")
+        self.ctx.bus.toast.emit(f"文件已保存至：{path}")
+        if task_id:
+            self.ctx.downloads.finish(task_id, True, f"已保存至：{path}")
+
+    def _on_loader_save_failed(
+        self, task_id: str, message: str, worker: LoaderInstallerSaveWorker
+    ) -> None:
+        self._append_log(f"[下载] 失败：{message}")
+        if task_id:
+            if worker.cancel_event.is_set():
+                self.ctx.downloads.finish_cancelled(task_id, "下载已取消。")
+            else:
+                self.ctx.downloads.finish(task_id, False, message)
+        if worker.cancel_event.is_set():
+            self.ctx.bus.toast.emit("下载已取消。")
+            return
+        self.ctx.bus.log.emit(f"[错误] {message}")
+        QMessageBox.warning(
+            self,
+            "下载失败",
+            message
+            + "\n可修改上方的 MC 版本 / 加载器版本后重试。"
+            if "版本" in message
+            else message,
+        )
+
+    def _on_loader_save_finished(self, worker: LoaderInstallerSaveWorker) -> None:
+        if worker is not self._loader_save_worker:
+            worker.deleteLater()
+            return
+        self._loader_save_worker = None
+        worker.deleteLater()
+        self._update_install_button()
+
+    def _append_log(self, line: str) -> None:
+        self.log_view.appendPlainText(line)
+        bar = self.log_view.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    # ------------------------------------------------------------------
+    # 生命周期
+    # ------------------------------------------------------------------
+    def ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        if self._manifest is None and not (
+            self._manifest_worker is not None and self._manifest_worker.isRunning()
+        ):
+            self.refresh_manifest(force=False)
+
+    def shutdown(self) -> None:
+        """取消并等待所有后台线程，避免 QThread 析构崩溃。"""
+        self._retire_loader_scan()
+        self._manifest_worker_cleanup()
+        workers: list[QThread] = [*self._retired_scans]
+        self._retired_scans = []
+        install_workers: list[QThread] = []
+        for job in self._install_jobs.values():
+            worker = job.get("worker")
+            job["worker"] = None
+            if worker is not None:
+                worker.cancel()
+                install_workers.append(worker)
+        self._install_jobs.clear()
+        self._install_worker = None
+        workers.extend(install_workers)
+        size_worker = self._size_worker
+        self._size_worker = None
+        if size_worker is not None:
+            size_worker.cancel()
+            workers.append(size_worker)
+        client_worker = self._client_worker
+        self._client_worker = None
+        if client_worker is not None:
+            client_worker.cancel()
+            workers.append(client_worker)
+        loader_save_worker = self._loader_save_worker
+        self._loader_save_worker = None
+        if loader_save_worker is not None:
+            loader_save_worker.cancel()
+            workers.append(loader_save_worker)
+        for worker in workers:
+            wait_thread(worker, 2000)
+            if not worker.isRunning():
+                worker.deleteLater()
+
+    def _manifest_worker_cleanup(self) -> None:
+        worker = self._manifest_worker
+        self._manifest_worker = None
+        if worker is not None:
+            wait_thread(worker, 2000)
+            if not worker.isRunning():
+                worker.deleteLater()

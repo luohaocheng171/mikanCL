@@ -1,0 +1,1486 @@
+"""全局配置、目录与下载源定义。"""
+
+from __future__ import annotations
+
+import copy
+import json
+import os
+import re
+import sys
+import threading
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from . import APP_NAME, APP_VERSION
+
+
+def _is_packaged() -> bool:
+    # PyInstaller 会设置 sys.frozen；Nuitka 不设，但在编译过的模块里注入 __compiled__
+    return bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()
+
+
+def _app_root() -> Path:
+    """用户双击的 exe 所在目录（打包后 data/ 就放在这里）。
+
+    Electron 等外部宿主可以通过 MIKAN_APP_ROOT 显式指定数据根目录。
+    Nuitka 单文件模式下 ``sys.executable`` 与 ``__file__`` 都指向缓存目录里解包后的
+    副本，直接取它们会把 data/（配置、实例、账号）建到 %LOCALAPPDATA% 的临时缓存，
+    换个版本就等于丢数据。Nuitka 在编译模块里注入的 ``__compiled__.original_argv0``
+    保存了用户实际启动的那个 exe（引导程序还会把目录写进 ``NUITKA_ONEFILE_DIRECTORY``）。
+    """
+    override = os.environ.get("MIKAN_APP_ROOT", "").strip()
+    if override:
+        return Path(override).resolve()
+    if not IS_PACKAGED:
+        return Path(__file__).resolve().parent.parent
+    info = globals().get("__compiled__")
+    original = getattr(info, "original_argv0", None)
+    for candidate in (original, sys.argv[0]):
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.suffix.lower() == ".exe" and path.is_file():
+            return path.resolve().parent
+    onefile_dir = os.environ.get("NUITKA_ONEFILE_DIRECTORY")
+    if onefile_dir:
+        return Path(onefile_dir)
+    return Path(sys.executable).resolve().parent
+
+
+IS_PACKAGED = _is_packaged()
+APP_ROOT = _app_root()
+EXE_PATH = (
+    APP_ROOT / Path(sys.executable).name if IS_PACKAGED else Path(sys.executable)
+)
+DATA_DIR = APP_ROOT / "data"
+CACHE_DIR = DATA_DIR / "cache"
+LOG_DIR = DATA_DIR / "logs"
+BROWSER_DIR = DATA_DIR / "browser"
+INSTANCES_DIR = DATA_DIR / "instances"
+WIKI_DIR = DATA_DIR / "wiki"
+CONFIG_PATH = DATA_DIR / "config.json"
+
+for _d in (DATA_DIR, CACHE_DIR, LOG_DIR, BROWSER_DIR, INSTANCES_DIR, WIKI_DIR):
+    _d.mkdir(parents=True, exist_ok=True)
+
+OFFICIAL_MANIFEST = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json"
+BMCLAPI_BASE = "https://bmclapi2.bangbang93.com"
+BMCLAPI_MANIFEST = f"{BMCLAPI_BASE}/mc/game/version_manifest_v2.json"
+
+# 内容平台（Modrinth / CurseForge）默认地址与镜像
+MODRINTH_API_BASE = "https://api.modrinth.com/v2"
+MODRINTH_CDN_BASE = "https://cdn.modrinth.com"
+CURSEFORGE_API_BASE = "https://api.curseforge.com/v1"
+CURSEFORGE_CDN_HOSTS = ("edge.forgecdn.net", "mediafilez.forgecdn.net")
+DEFAULT_CURSEFORGE_API_KEY = (
+    "$2a$10$/UCgt8suCFEwQ.BcCi.Wp..QgRMI35CEL2tIVCn9iQZr7yGhbUnNy"
+)
+DEFAULT_MICROSOFT_CLIENT_ID = "00000000402b5328"
+AUTHLIB_INJECTOR_LATEST = "https://authlib-injector.yushi.moe/artifact/latest.json"
+
+SOURCE_MAPPINGS = {
+    "bmclapi": "BMCLAPI 兼容（推荐）",
+    "direct": "同路径镜像",
+    "none": "不重写（仅用于清单）",
+}
+
+# 功能开关默认值：标签页 key 与主窗口 nav_items 对齐（设置页不可关闭，不含在内），
+# 另加功能入口开关（离线登录 / 离线皮肤）。
+FEATURE_DEFAULTS: dict[str, bool] = {
+    "home": True,
+    "download": True,
+    "downloads": True,
+    "download_accel": True,
+    "content": True,
+    "modpack": True,
+    "account": True,
+    "control": True,
+    "loaders": True,
+    "multiplayer": True,
+    "browser": True,
+    "forbric": True,
+    "java": True,
+    "deps": True,
+    "modgraph": True,
+    "wiki": True,
+    "bedrock": True,
+    "offline_login": True,
+    "offline_skin": True,
+    "skin_factory": True,
+    "skin_pack": True,
+    "seed_terrain": True,
+    "gallery": True,
+    "creator": True,
+    "crash": True,
+}
+# 可在设置里开关的侧边栏标签页（顺序与主窗口导航一致）
+FEATURE_PAGE_KEYS: tuple[str, ...] = (
+    "home",
+    "download",
+    "downloads",
+    "download_accel",
+    "content",
+    "modpack",
+    "account",
+    "control",
+    "loaders",
+    "multiplayer",
+    "browser",
+    "forbric",
+    "java",
+    "deps",
+    "modgraph",
+    "wiki",
+    "bedrock",
+    "skin_factory",
+    "skin_pack",
+    "seed_terrain",
+    "gallery",
+    "creator",
+    "crash",
+)
+
+
+def default_game_dir() -> Path:
+    """默认使用官方/HMCL 通用的 %APPDATA%\\.minecraft。"""
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return Path(appdata) / ".minecraft"
+    return Path.home() / ".minecraft"
+
+
+@dataclass
+class DownloadSource:
+    id: str
+    name: str
+    manifest_url: str
+    mapping: str = "none"
+    download_base: str = ""
+    api_key_header: str = "X-API-Key"
+    api_key: str = ""
+    headers: dict[str, str] = field(default_factory=dict)
+    enabled: bool = True
+    priority: int = 100
+    builtin: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "manifest_url": self.manifest_url,
+            "mapping": self.mapping,
+            "download_base": self.download_base,
+            "api_key_header": self.api_key_header,
+            "api_key": self.api_key,
+            "headers": dict(self.headers),
+            "enabled": self.enabled,
+            "priority": self.priority,
+            "builtin": self.builtin,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], fallback_id: str = "") -> "DownloadSource":
+        headers = data.get("headers") or {}
+        if not isinstance(headers, dict):
+            headers = {}
+        return cls(
+            id=str(data.get("id") or fallback_id),
+            name=str(data.get("name") or "未命名源"),
+            manifest_url=str(data.get("manifest_url") or ""),
+            mapping=str(data.get("mapping") or "none"),
+            download_base=str(data.get("download_base") or ""),
+            api_key_header=str(data.get("api_key_header") or "X-API-Key"),
+            api_key=str(data.get("api_key") or ""),
+            headers={str(k): str(v) for k, v in headers.items()},
+            enabled=bool(data.get("enabled", True)),
+            priority=int(data.get("priority", 100) or 100),
+            builtin=bool(data.get("builtin", False)),
+        )
+
+    def request_headers(self) -> dict[str, str]:
+        headers = {str(k): str(v) for k, v in self.headers.items()}
+        if self.api_key.strip():
+            headers[self.api_key_header.strip() or "X-API-Key"] = self.api_key.strip()
+        return headers
+
+    def copy_new_id(self, new_id: str) -> "DownloadSource":
+        data = self.to_dict()
+        data.update({"id": new_id, "builtin": False})
+        return DownloadSource.from_dict(data, new_id)
+
+
+def builtin_sources() -> list[DownloadSource]:
+    return [
+        DownloadSource(
+            id="official",
+            name="Mojang 官方源",
+            manifest_url=OFFICIAL_MANIFEST,
+            mapping="none",
+            priority=10,
+            builtin=True,
+        ),
+        DownloadSource(
+            id="bmclapi",
+            name="BMCLAPI 镜像（国内加速）",
+            manifest_url=BMCLAPI_MANIFEST,
+            mapping="bmclapi",
+            download_base=BMCLAPI_BASE,
+            priority=20,
+            builtin=True,
+        ),
+    ]
+
+
+ISOLATION_LABELS = {
+    "none": "不隔离（共用模组与存档）",
+    "mods": "仅隔离模组（mods 独立）",
+    "saves": "仅隔离存档（saves 独立）",
+    "all": "全部隔离（独立游戏目录）",
+}
+PROCESS_PRIORITIES = {
+    "high": "高",
+    "above_normal": "高于正常",
+    "normal": "正常",
+    "below_normal": "低于正常",
+    "low": "低",
+}
+AFTER_LAUNCH_ACTIONS = {
+    "nothing": "启动后保持显示",
+    "hide": "启动后隐藏启动器",
+    "close": "启动后关闭启动器",
+}
+
+# 影响启动的关键配置：启动成功时存档，也用于 .mikan 配置片段分享。
+# download_threads 只在导出/导入时参与，不进入「上次能启动」快照。
+LAUNCH_CONFIG_FIELDS: tuple[str, ...] = (
+    "memory_mb",
+    "extra_jvm_args",
+    "extra_game_args",
+    "smart_jvm",
+    "opt_fixed_heap",
+    "opt_pre_touch",
+    "isolation_mode",
+    "window_title",
+    "server",
+    "priority",
+    "java_path",
+    "proxy_enabled",
+    "proxy_url",
+    "download_threads",
+)
+# .mikan 配置片段里 config 部分的格式标识
+LAUNCH_CONFIG_FORMAT = "mikan/config-fragment"
+
+
+@dataclass
+class GameDir:
+    """一个 Minecraft 数据目录（可添加多个并快速切换）。"""
+
+    id: str
+    name: str
+    path: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"id": self.id, "name": self.name, "path": self.path}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], fallback_id: str = "") -> "GameDir":
+        return cls(
+            id=str(data.get("id") or fallback_id),
+            name=str(data.get("name") or "未命名目录"),
+            path=str(data.get("path") or ""),
+        )
+
+
+def detect_game_root(path: str | Path) -> Path:
+    """把用户选择的目录归一成 Minecraft 根目录。
+
+    兼容常见的几种选择：根目录（含 ``versions/``）、``versions`` 目录本身、
+    某个版本文件夹（``versions/<id>``），以及外层包了一层 ``.minecraft`` 的目录；
+    都不匹配时原样返回。
+    """
+    root = Path(os.path.expandvars(str(path))).expanduser()
+    if not root.is_dir():
+        return root
+
+    def _has_version_dirs(folder: Path) -> bool:
+        versions = folder / "versions"
+        if not versions.is_dir():
+            return False
+        try:
+            return any(item.is_dir() for item in os.scandir(versions))
+        except OSError:
+            return False
+
+    if _has_version_dirs(root):
+        return root
+    if root.name.lower() == "versions":
+        return root.parent
+    if root.parent.name.lower() == "versions":
+        return root.parent.parent
+    nested = root / ".minecraft"
+    if nested.is_dir() and _has_version_dirs(nested):
+        return nested
+    return root
+
+
+@dataclass
+class VersionSettings:
+    """单个 Minecraft 版本的启动覆盖项，空值表示跟随全局设置。"""
+
+    isolation: str = ""
+    extra_jvm_args: str = ""
+    extra_game_args: str = ""
+    auto_connect: bool = False
+    server: str = ""
+    port: int = 25565
+    window_title: str = ""
+    memory_mb: int = 0
+    priority: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "isolation": self.isolation,
+            "extra_jvm_args": self.extra_jvm_args,
+            "extra_game_args": self.extra_game_args,
+            "auto_connect": bool(self.auto_connect),
+            "server": self.server,
+            "port": int(self.port),
+            "window_title": self.window_title,
+            "memory_mb": int(self.memory_mb),
+            "priority": self.priority,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "VersionSettings":
+        try:
+            port = int(data.get("port") or 25565)
+        except (TypeError, ValueError):
+            port = 25565
+        try:
+            memory = int(data.get("memory_mb") or 0)
+        except (TypeError, ValueError):
+            memory = 0
+        return cls(
+            isolation=str(data.get("isolation") or ""),
+            extra_jvm_args=str(data.get("extra_jvm_args") or ""),
+            extra_game_args=str(data.get("extra_game_args") or ""),
+            auto_connect=bool(data.get("auto_connect", False)),
+            server=str(data.get("server") or ""),
+            port=port,
+            window_title=str(data.get("window_title") or ""),
+            memory_mb=max(0, memory),
+            priority=str(data.get("priority") or ""),
+        )
+
+
+@dataclass
+class Instance:
+    """独立游戏实例（整合包或手动创建），拥有自己的 .minecraft 目录结构。"""
+
+    id: str
+    name: str
+    game_dir: str
+    version_id: str = ""
+    loader: str = ""
+    mc_version: str = ""
+    modpack: str = ""
+    loader_version: str = ""
+    memory_mb: int = 0
+    window_title: str = ""
+    extra_jvm_args: str = ""
+    created_at: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "game_dir": self.game_dir,
+            "version_id": self.version_id,
+            "loader": self.loader,
+            "mc_version": self.mc_version,
+            "modpack": self.modpack,
+            "loader_version": self.loader_version,
+            "memory_mb": int(self.memory_mb),
+            "window_title": self.window_title,
+            "extra_jvm_args": self.extra_jvm_args,
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], fallback_id: str = "") -> "Instance":
+        try:
+            memory_mb = int(data.get("memory_mb") or 0)
+        except (TypeError, ValueError):
+            memory_mb = 0
+        return cls(
+            id=str(data.get("id") or fallback_id),
+            name=str(data.get("name") or "未命名实例"),
+            game_dir=str(data.get("game_dir") or ""),
+            version_id=str(data.get("version_id") or ""),
+            loader=str(data.get("loader") or ""),
+            mc_version=str(data.get("mc_version") or ""),
+            modpack=str(data.get("modpack") or ""),
+            loader_version=str(data.get("loader_version") or ""),
+            memory_mb=memory_mb,
+            window_title=str(data.get("window_title") or ""),
+            extra_jvm_args=str(data.get("extra_jvm_args") or ""),
+            created_at=float(data.get("created_at") or 0.0),
+        )
+
+
+@dataclass
+class ServerEntry:
+    """收藏的服务器地址，供主页快速选择并自动连接。"""
+
+    id: str
+    name: str
+    host: str
+    port: int = 25565
+    note: str = ""
+    favorite: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "host": self.host,
+            "port": int(self.port),
+            "note": self.note,
+            "favorite": bool(self.favorite),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], fallback_id: str = "") -> "ServerEntry":
+        try:
+            port = int(data.get("port") or 25565)
+        except (TypeError, ValueError):
+            port = 25565
+        return cls(
+            id=str(data.get("id") or fallback_id),
+            name=str(data.get("name") or data.get("host") or "未命名服务器"),
+            host=str(data.get("host") or ""),
+            port=min(65535, max(1, port)),
+            note=str(data.get("note") or ""),
+            favorite=bool(data.get("favorite", False)),
+        )
+
+
+def _clean_path_list(raw: object) -> list[str]:
+    """读取配置里的路径列表：去空、去重、保持原有顺序。"""
+    result: list[str] = []
+    seen: set[str] = set()
+    if isinstance(raw, list):
+        for item in raw:
+            text = str(item or "").strip().strip('"')
+            key = os.path.normcase(os.path.normpath(text)) if text else ""
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            result.append(text)
+    return result
+
+
+@dataclass
+class Config:
+    game_dir: str = field(default_factory=lambda: str(default_game_dir()))
+    game_dirs: list[GameDir] = field(
+        default_factory=lambda: [
+            GameDir(id="default", name="默认目录", path=str(default_game_dir()))
+        ]
+    )
+    active_game_dir: str = "default"
+    player_name: str = "Steve"
+    java_path: str = ""
+    # 手动添加的 Java 路径与历史扫描结果：合并持久化，避免刷新时互相覆盖丢失
+    java_manual_paths: list[str] = field(default_factory=list)
+    java_known_paths: list[str] = field(default_factory=list)
+    memory_mb: int = 4096
+    smart_jvm: bool = True   # 按 Java 版本自动启用 G1GC 等调优参数
+    opt_pre_touch: bool = True    # 大堆（≥4GB）启用 AlwaysPreTouch，稳定内存布局
+    opt_fixed_heap: bool = False  # -Xms 与 -Xmx 相同，避免运行中扩堆
+    width: int = 0
+    height: int = 0
+    extra_jvm_args: str = ""
+    extra_game_args: str = ""
+    hide_after_launch: bool = False
+    after_launch_action: str = "nothing"
+    keep_launcher_on_game_exit: bool = True
+    close_to_tray: bool = False
+    start_animation: bool = True
+    selected_source_id: str = "official"
+    sources: list[DownloadSource] = field(default_factory=builtin_sources)
+
+    # ---- 用户协议（同意状态与启动前提示开关） ----
+    agreement_version: str = ""
+    agreement_accepted_at: str = ""
+    agreement_prompt: bool = True
+
+    # ---- 功能开关（标签页隐藏 + 离线登录/皮肤入口，见 FEATURE_DEFAULTS） ----
+    features: dict[str, bool] = field(default_factory=lambda: dict(FEATURE_DEFAULTS))
+
+    # ---- 界面 ----
+    language: str = "zh_CN"
+    accent_color: str = "#65d46e"
+    theme_name: str = "晨光"   # 主题方案名（内置或 data/themes/*.json）
+    text_color: str = ""        # 自定义字体颜色（空 = 跟随主题）
+    color_mode: str = "light"  # 明暗模式：light（明亮）/ dark（黑暗）
+    light_theme_name: str = "晨光"  # 明亮模式下记住的主题
+    dark_theme_name: str = "森林绿"  # 黑暗模式下记住的主题
+    background_image: str = ""
+    dynamic_wallpaper: str = ""  # 动态壁纸（MP4/WebM/GIF/WebP，循环静音播放）
+    extensions_disabled: list[str] = field(default_factory=list)  # 已禁用的扩展 id
+    ui_animations: bool = True   # 页面切换淡入淡出等动画（关闭可降低 GPU 占用）
+    glass_effect: bool = True     # 美化版半透明毛玻璃（低配显卡可关闭，退化为不透明底色）
+    glass_see_through: bool = False  # 毛玻璃透视桌面：窗口背景透明 + DWM 模糊，开启时忽略背景图与动态壁纸
+    glass_strength: int = 62     # 毛玻璃强度 0~100（0 几乎全透明，100 几乎不透明）
+    glass_blur: int = 20         # 毛玻璃模糊半径（px，0~64），0 几乎不模糊，64 几乎看不到背景
+    ui_brightness: int = 100     # 背景亮度 70~130（100 = 原始亮度）
+    ui_radius: int = 16          # 卡片 / 面板圆角（px，0~24）
+    ui_scale: int = 100          # 按钮与控件尺寸 85~120（100 = 默认大小）
+    ui_acrylic: bool = False     # 毛玻璃背景（依赖 Windows DWM 合成，GPU 加速、低 CPU）
+    ui_mode: str = "classic"     # 界面运行模式：classic（经典稳定）/ visual（视觉增强）
+    ui_mode_asked: bool = False  # 是否已在首次启动时询问过界面模式
+    frame_mode: str = "classic"  # 界面框架：classic（Qt）/ webview（pywebview + WebView2）/ electron（独立版）
+    frame_mode_asked: bool = False  # 是否已在首次启动时询问过界面框架
+    frame_locked: bool = False  # 兼容旧配置保留的字段：5.3.0 起框架可双向切换，不再锁定
+
+    # ---- 版本隔离与单版本设置 ----
+    isolation_mode: str = "all"
+    process_priority: str = "normal"
+    window_title: str = ""
+    version_settings: dict[str, VersionSettings] = field(default_factory=dict)
+
+    # ---- 代理 ----
+    proxy_enabled: bool = False
+    proxy_url: str = ""
+    proxy_jvm: bool = True
+
+    # ---- 上次成功启动的配置快照（供「恢复到上次能启动的配置」使用） ----
+    last_good_config: dict[str, Any] = field(default_factory=dict)
+
+    # ---- 多人游戏 / 自动连服 ----
+    auto_connect_enabled: bool = False
+    auto_connect_server: str = ""
+    auto_connect_port: int = 25565
+    servers: list[ServerEntry] = field(default_factory=list)
+    active_server_id: str = ""
+
+    # ---- 内容平台与镜像 ----
+    modrinth_api_base: str = MODRINTH_API_BASE
+    modrinth_cdn_mirror: str = ""
+    curseforge_api_base: str = CURSEFORGE_API_BASE
+    curseforge_api_key: str = DEFAULT_CURSEFORGE_API_KEY
+    curseforge_cdn_mirror: str = ""
+    download_threads: int = 16
+    download_speed_limit: int = 0  # 全局下载限速，单位 KB/s，0 表示不限速
+    download_accel_dir: str = ""  # 下载加速页上次使用的保存目录
+    download_dir: str = ""        # 手动下载 / 另存为的目录，空表示系统下载文件夹
+
+    # ---- 启动统计 / 存档备份 ----
+    launch_count: int = 0           # 累计启动次数，用于「支持正版」提示节奏
+    support_prompt_every: int = 10  # 每 N 次启动提示一次支持正版
+    auto_backup_saves: bool = True  # 启动游戏前自动备份存档
+    backup_dir: str = ""            # 存档备份目录，空表示 data/backups
+
+    # ---- JVM 预加载（实验性） ----
+    preload_jvm: bool = False
+    preload_java_path: str = ""
+
+    # ---- 账号 / 外置登录 ----
+    selected_account_id: str = ""
+    microsoft_client_id: str = DEFAULT_MICROSOFT_CLIENT_ID
+    authlib_injector_url: str = AUTHLIB_INJECTOR_LATEST
+    authlib_injector_path: str = ""
+
+    # ---- 实例 ----
+    instances: list[Instance] = field(default_factory=list)
+    selected_instance_id: str = "default"
+    default_version_id: str = ""
+    # 版本列表自定义排序（存版本 id，拖拽排序后写回；未列出的按原顺序排在后面）
+    version_order: list[str] = field(default_factory=list)
+
+    # ---- 运行时 ----
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+    # 防抖写盘：计时器与创建/取消它的锁都在这里声明，避免运行时临时挂属性
+    _save_timer: threading.Timer | None = field(default=None, repr=False, compare=False)
+    _save_guard: threading.Lock = field(
+        default_factory=threading.Lock, repr=False, compare=False
+    )
+
+    # ------------------------------------------------------------------
+    # 功能开关
+    def feature_enabled(self, key: str) -> bool:
+        """未知 key 默认开启，避免新增功能被旧配置误判为关闭。"""
+        return bool(self.features.get(key, FEATURE_DEFAULTS.get(key, True)))
+
+    def set_feature(self, key: str, enabled: bool) -> None:
+        self.features[str(key)] = bool(enabled)
+        self.save()
+
+    def source_list(self) -> list[DownloadSource]:
+        """启用中的源，按 priority 升序。"""
+        return sorted(
+            [s for s in self.sources if s.enabled and s.manifest_url],
+            key=lambda s: (s.priority, s.name),
+        )
+
+    def get_source(self, source_id: str) -> DownloadSource | None:
+        for source in self.sources:
+            if source.id == source_id:
+                return source
+        return None
+
+    def select_source(self, source_id: str) -> None:
+        if self.get_source(source_id):
+            self.selected_source_id = source_id
+            self.save()
+
+    # ------------------------------------------------------------------
+    # Java 路径记录（手动添加 + 历史扫描结果）
+    def java_scan_paths(self) -> list[str]:
+        """供扫描使用的额外路径：手动路径优先，其次历史扫描结果。"""
+        merged = _clean_path_list(list(self.java_manual_paths) + list(self.java_known_paths))
+        return merged
+
+    def add_manual_java_path(self, path: str) -> None:
+        text = str(path or "").strip().strip('"')
+        if not text:
+            return
+        self.java_manual_paths = _clean_path_list(list(self.java_manual_paths) + [text])
+        self.java_known_paths = _clean_path_list(list(self.java_known_paths) + [text])
+        self.save_debounced()
+
+    def remember_java_paths(self, paths) -> None:
+        """记录已探测到的 Java 路径，后续扫描时可再次尝试，避免临时漏检。"""
+        known = _clean_path_list(list(self.java_known_paths) + [str(p) for p in paths or []])
+        if known != self.java_known_paths:
+            self.java_known_paths = known
+            self.save_debounced()
+
+    @property
+    def game_path(self) -> Path:
+        return Path(os.path.expandvars(self.game_dir)).expanduser()
+
+    @property
+    def versions_path(self) -> Path:
+        return self.game_path / "versions"
+
+    @property
+    def libraries_path(self) -> Path:
+        return self.game_path / "libraries"
+
+    @property
+    def assets_path(self) -> Path:
+        return self.game_path / "assets"
+
+    # ------------------------------------------------------------------
+    # 数据目录切换
+    def active_game_entry(self) -> GameDir:
+        for entry in self.game_dirs:
+            if entry.id == self.active_game_dir:
+                return entry
+        if self.game_dirs:
+            return self.game_dirs[0]
+        entry = GameDir(id="default", name="默认目录", path=str(default_game_dir()))
+        self.game_dirs = [entry]
+        return entry
+
+    def select_game_dir(self, dir_id: str) -> bool:
+        for entry in self.game_dirs:
+            if entry.id == dir_id and entry.path:
+                self.active_game_dir = dir_id
+                self.game_dir = entry.path
+                self.save()
+                return True
+        return False
+
+    def new_game_dir_id(self) -> str:
+        used = {entry.id for entry in self.game_dirs}
+        n = 1
+        while f"dir_{n}" in used:
+            n += 1
+        return f"dir_{n}"
+
+    def add_game_dir(self, name: str, path: str) -> GameDir:
+        entry = GameDir(id=self.new_game_dir_id(), name=name or "新目录", path=str(Path(path)))
+        self.game_dirs.append(entry)
+        self.save()
+        return entry
+
+    def remove_game_dir(self, dir_id: str) -> bool:
+        if len(self.game_dirs) <= 1:
+            return False
+        remaining = [entry for entry in self.game_dirs if entry.id != dir_id]
+        if len(remaining) == len(self.game_dirs):
+            return False
+        self.game_dirs = remaining
+        if self.active_game_dir == dir_id:
+            self.active_game_dir = remaining[0].id
+            self.game_dir = remaining[0].path
+        self.save()
+        return True
+
+    # ------------------------------------------------------------------
+    # 单版本设置
+    def version_setting(self, version_id: str) -> VersionSettings:
+        return self.version_settings.get(version_id) or VersionSettings()
+
+    def ensure_version_setting(self, version_id: str) -> VersionSettings:
+        setting = self.version_settings.get(version_id)
+        if setting is None:
+            setting = VersionSettings()
+            self.version_settings[version_id] = setting
+        return setting
+
+    def isolation_for(self, version_id: str) -> str:
+        setting = self.version_settings.get(version_id)
+        mode = (setting.isolation if setting and setting.isolation else self.isolation_mode) or "all"
+        return mode if mode in ISOLATION_LABELS else "all"
+
+    def resolve_game_dirs(self, version_id: str, root: Path | None = None):
+        """收敛隔离目录判断：返回主目录 + 隔离目录，供皮肤/Mod/存档/导出脚本统一使用。"""
+        from .launcher import resolve_game_dirs as _resolve
+
+        base = Path(root) if root is not None else self.game_path
+        return _resolve(base, version_id, self.isolation_for(version_id))
+
+    @property
+    def backup_root(self) -> Path:
+        """存档备份目录（配置为空时使用 data/backups）。"""
+        text = (self.backup_dir or "").strip()
+        if text:
+            return Path(os.path.expandvars(text)).expanduser()
+        return DATA_DIR / "backups"
+
+    @property
+    def download_path(self) -> Path:
+        """用户下载目录：另存为、只下载不安装的文件都放这里。"""
+        text = (self.download_dir or "").strip()
+        if text:
+            return Path(os.path.expandvars(text)).expanduser()
+        folder = Path.home() / "Downloads"
+        return folder if folder.is_dir() else Path.home()
+
+    @property
+    def effective_proxy(self) -> str:
+        return self.proxy_url.strip() if self.proxy_enabled else ""
+
+    # ------------------------------------------------------------------
+    # 启动配置快照 / .mikan 配置片段
+    def launch_config_snapshot(self) -> dict[str, Any]:
+        """影响启动的关键配置（不含下载线程数，线程数只用于配置分享）。"""
+        return {
+            "memory_mb": int(self.memory_mb),
+            "extra_jvm_args": str(self.extra_jvm_args or ""),
+            "extra_game_args": str(self.extra_game_args or ""),
+            "smart_jvm": bool(self.smart_jvm),
+            "opt_fixed_heap": bool(self.opt_fixed_heap),
+            "opt_pre_touch": bool(self.opt_pre_touch),
+            "isolation_mode": str(self.isolation_mode or "all"),
+            "window_title": str(self.window_title or ""),
+            "server": str(self.auto_connect_server or ""),
+            "priority": str(self.process_priority or "normal"),
+            "java_path": str(self.java_path or ""),
+            "proxy_enabled": bool(self.proxy_enabled),
+            "proxy_url": str(self.proxy_url or ""),
+        }
+
+    def remember_last_good_config(self) -> None:
+        """启动成功后覆盖快照；启动失败路径不会调用本方法。"""
+        self.last_good_config = self.launch_config_snapshot()
+        self.save()
+
+    def apply_launch_config(self, data: dict[str, Any]) -> list[str]:
+        """把快照/导入片段写回配置并做范围钳制，返回实际写入的字段名。"""
+        applied: list[str] = []
+        if not isinstance(data, dict):
+            return applied
+
+        if "memory_mb" in data:
+            raw = data["memory_mb"]
+            if not isinstance(raw, bool):
+                try:
+                    memory = int(raw)
+                except (TypeError, ValueError):
+                    memory = 0
+                if memory > 0:
+                    limit = 65536
+                    try:
+                        from .hardware import total_memory_mb
+
+                        total = total_memory_mb()
+                    except Exception:  # noqa: BLE001 - 探测失败按未知处理
+                        total = 0
+                    if total > 0:
+                        limit = min(limit, max(512, total))
+                    self.memory_mb = max(512, min(limit, memory))
+                    applied.append("memory_mb")
+
+        if "download_threads" in data:
+            raw = data["download_threads"]
+            if not isinstance(raw, bool):
+                try:
+                    threads = int(raw)
+                except (TypeError, ValueError):
+                    threads = 0
+                if threads > 0:
+                    # 分享片段按 1~64 钳制，避免他人的机器配置把本机拖满
+                    self.download_threads = max(1, min(64, threads))
+                    applied.append("download_threads")
+
+        for key in ("extra_jvm_args", "extra_game_args", "window_title", "java_path", "proxy_url"):
+            if key in data and isinstance(data[key], str):
+                setattr(self, key, data[key].strip()[:4000])
+                applied.append(key)
+
+        # 快照里的 server 对应本机的自动连服地址
+        if "server" in data and isinstance(data["server"], str):
+            self.auto_connect_server = data["server"].strip()[:255]
+            applied.append("server")
+
+        for key in ("smart_jvm", "opt_fixed_heap", "opt_pre_touch", "proxy_enabled"):
+            if key in data and isinstance(data[key], bool):
+                setattr(self, key, data[key])
+                applied.append(key)
+
+        if data.get("isolation_mode") in ISOLATION_LABELS:
+            self.isolation_mode = str(data["isolation_mode"])
+            applied.append("isolation_mode")
+        if data.get("priority") in PROCESS_PRIORITIES:
+            self.process_priority = str(data["priority"])
+            applied.append("priority")
+        return applied
+
+    # ------------------------------------------------------------------
+    # 服务器列表
+    def new_server_id(self) -> str:
+        used = {entry.id for entry in self.servers}
+        n = 1
+        while f"server_{n}" in used:
+            n += 1
+        return f"server_{n}"
+
+    def add_server(self, name: str, host: str, port: int = 25565, note: str = "") -> ServerEntry:
+        entry = ServerEntry(
+            id=self.new_server_id(),
+            name=name or host or "新服务器",
+            host=(host or "").strip(),
+            port=int(port or 25565),
+            note=note,
+        )
+        self.servers.append(entry)
+        self.save()
+        return entry
+
+    def remove_server(self, server_id: str) -> bool:
+        remaining = [entry for entry in self.servers if entry.id != server_id]
+        if len(remaining) == len(self.servers):
+            return False
+        self.servers = remaining
+        if self.active_server_id == server_id:
+            self.active_server_id = ""
+        self.save()
+        return True
+
+    def active_server(self) -> ServerEntry | None:
+        for entry in self.servers:
+            if entry.id == self.active_server_id:
+                return entry
+        return None
+
+    # ------------------------------------------------------------------
+    # 实例
+    def default_instance(self) -> Instance:
+        return Instance(
+            id="default",
+            name="默认实例",
+            game_dir=str(self.game_path),
+            version_id=self.default_version_id,
+            modpack="",
+        )
+
+    def instance_list(self) -> list[Instance]:
+        result = [self.default_instance()]
+        result.extend(i for i in self.instances if i.id != "default" and i.game_dir)
+        return result
+
+    def get_instance(self, instance_id: str) -> Instance | None:
+        for instance in self.instance_list():
+            if instance.id == instance_id:
+                return instance
+        return None
+
+    def selected_instance(self) -> Instance:
+        return self.get_instance(self.selected_instance_id) or self.default_instance()
+
+    def instance_path(self, instance_id: str) -> Path:
+        instance = self.get_instance(instance_id)
+        if instance:
+            return Path(os.path.expandvars(instance.game_dir)).expanduser()
+        return self.game_path
+
+    def select_instance(self, instance_id: str) -> None:
+        if self.get_instance(instance_id):
+            self.selected_instance_id = instance_id
+            self.save()
+
+    def new_instance_id(self) -> str:
+        used = {"default"} | {i.id for i in self.instances}
+        n = 1
+        while f"instance_{n}" in used:
+            n += 1
+        return f"instance_{n}"
+
+    def add_instance(
+        self,
+        name: str,
+        game_dir: str,
+        version_id: str = "",
+        loader: str = "",
+        mc_version: str = "",
+        modpack: str = "",
+        loader_version: str = "",
+        memory_mb: int = 0,
+        window_title: str = "",
+        extra_jvm_args: str = "",
+    ) -> Instance:
+        instance = Instance(
+            id=self.new_instance_id(),
+            name=name or "新实例",
+            game_dir=str(Path(game_dir)),
+            version_id=version_id,
+            loader=loader,
+            mc_version=mc_version,
+            modpack=modpack,
+            loader_version=loader_version,
+            memory_mb=int(memory_mb or 0),
+            window_title=window_title,
+            extra_jvm_args=extra_jvm_args,
+            created_at=time.time(),
+        )
+        self.instances.append(instance)
+        self.save()
+        return instance
+
+    def remove_instance(self, instance_id: str) -> None:
+        if instance_id == "default":
+            return
+        self.instances = [i for i in self.instances if i.id != instance_id]
+        if self.selected_instance_id == instance_id:
+            self.selected_instance_id = "default"
+        self.save()
+
+    def with_game_dir(self, game_dir: str | Path) -> "Config":
+        """复制一份配置用于指定目录的安装，不影响当前选择。"""
+        clone = Config(
+            game_dir=str(game_dir),
+            game_dirs=[GameDir(id="default", name="安装目标", path=str(game_dir))],
+            active_game_dir="default",
+            player_name=self.player_name,
+            java_path=self.java_path,
+            memory_mb=self.memory_mb,
+            smart_jvm=self.smart_jvm,
+            width=self.width,
+            height=self.height,
+            extra_jvm_args=self.extra_jvm_args,
+            extra_game_args=self.extra_game_args,
+            hide_after_launch=self.hide_after_launch,
+            after_launch_action=self.after_launch_action,
+            keep_launcher_on_game_exit=self.keep_launcher_on_game_exit,
+            close_to_tray=self.close_to_tray,
+            start_animation=self.start_animation,
+            selected_source_id=self.selected_source_id,
+            sources=list(self.sources),
+            accent_color=self.accent_color,
+            theme_name=self.theme_name,
+            text_color=self.text_color,
+            color_mode=self.color_mode,
+            light_theme_name=self.light_theme_name,
+            dark_theme_name=self.dark_theme_name,
+            background_image=self.background_image,
+            dynamic_wallpaper=self.dynamic_wallpaper,
+            extensions_disabled=list(self.extensions_disabled),
+            ui_animations=self.ui_animations,
+            glass_effect=self.glass_effect,
+            glass_see_through=self.glass_see_through,
+            glass_strength=self.glass_strength,
+            glass_blur=self.glass_blur,
+            ui_acrylic=self.ui_acrylic,
+            ui_mode=self.ui_mode,
+            ui_mode_asked=self.ui_mode_asked,
+            frame_mode=self.frame_mode,
+            frame_mode_asked=self.frame_mode_asked,
+            frame_locked=self.frame_locked,
+            isolation_mode=self.isolation_mode,
+            process_priority=self.process_priority,
+            window_title=self.window_title,
+            proxy_enabled=self.proxy_enabled,
+            proxy_url=self.proxy_url,
+            proxy_jvm=self.proxy_jvm,
+            auto_connect_enabled=self.auto_connect_enabled,
+            auto_connect_server=self.auto_connect_server,
+            auto_connect_port=self.auto_connect_port,
+            modrinth_api_base=self.modrinth_api_base,
+            modrinth_cdn_mirror=self.modrinth_cdn_mirror,
+            curseforge_api_base=self.curseforge_api_base,
+            curseforge_api_key=self.curseforge_api_key,
+            curseforge_cdn_mirror=self.curseforge_cdn_mirror,
+            download_threads=self.download_threads,
+            download_accel_dir=self.download_accel_dir,
+            selected_account_id=self.selected_account_id,
+            microsoft_client_id=self.microsoft_client_id,
+            authlib_injector_url=self.authlib_injector_url,
+            authlib_injector_path=self.authlib_injector_path,
+            features=dict(self.features),
+        )
+        return clone
+
+    def save(self) -> None:
+        with self._lock:
+            data = {
+                "config_version": 3,
+                "app_version": APP_VERSION,
+                "game_dir": self.game_dir,
+                "game_dirs": [entry.to_dict() for entry in self.game_dirs],
+                "active_game_dir": self.active_game_dir,
+                "player_name": self.player_name,
+                "java_path": self.java_path,
+                "java_manual_paths": list(self.java_manual_paths),
+                "java_known_paths": list(self.java_known_paths),
+                "memory_mb": int(self.memory_mb),
+                "width": int(self.width),
+                "height": int(self.height),
+                "extra_jvm_args": self.extra_jvm_args,
+                "extra_game_args": self.extra_game_args,
+                "hide_after_launch": bool(self.hide_after_launch),
+                "after_launch_action": self.after_launch_action,
+                "keep_launcher_on_game_exit": bool(self.keep_launcher_on_game_exit),
+                "close_to_tray": bool(self.close_to_tray),
+                "start_animation": bool(self.start_animation),
+                "agreement_version": self.agreement_version,
+                "agreement_accepted_at": self.agreement_accepted_at,
+                "agreement_prompt": bool(self.agreement_prompt),
+                "features": {str(k): bool(v) for k, v in self.features.items()},
+                "language": self.language,
+                "accent_color": self.accent_color,
+                "theme_name": self.theme_name,
+                "text_color": self.text_color,
+                "color_mode": self.color_mode,
+                "light_theme_name": self.light_theme_name,
+                "dark_theme_name": self.dark_theme_name,
+                "background_image": self.background_image,
+                "dynamic_wallpaper": self.dynamic_wallpaper,
+                "extensions_disabled": list(self.extensions_disabled),
+                "ui_animations": bool(self.ui_animations),
+                "glass_effect": bool(self.glass_effect),
+                "glass_see_through": bool(self.glass_see_through),
+                "glass_strength": int(self.glass_strength),
+                "glass_blur": int(self.glass_blur),
+                "ui_acrylic": bool(self.ui_acrylic),
+                "ui_mode": self.ui_mode,
+                "ui_mode_asked": bool(self.ui_mode_asked),
+                "frame_mode": self.frame_mode,
+                "frame_mode_asked": bool(self.frame_mode_asked),
+                "frame_locked": bool(self.frame_locked),
+                "smart_jvm": bool(self.smart_jvm),
+                "opt_pre_touch": bool(self.opt_pre_touch),
+                "opt_fixed_heap": bool(self.opt_fixed_heap),
+                "selected_source_id": self.selected_source_id,
+                "sources": [s.to_dict() for s in self.sources],
+                "isolation_mode": self.isolation_mode,
+                "process_priority": self.process_priority,
+                "window_title": self.window_title,
+                "version_settings": {
+                    str(key): value.to_dict()
+                    for key, value in self.version_settings.items()
+                },
+                "proxy_enabled": bool(self.proxy_enabled),
+                "proxy_url": self.proxy_url,
+                "proxy_jvm": bool(self.proxy_jvm),
+                "last_good_config": dict(self.last_good_config),
+                "auto_connect_enabled": bool(self.auto_connect_enabled),
+                "auto_connect_server": self.auto_connect_server,
+                "auto_connect_port": int(self.auto_connect_port),
+                "servers": [entry.to_dict() for entry in self.servers],
+                "active_server_id": self.active_server_id,
+                "modrinth_api_base": self.modrinth_api_base,
+                "modrinth_cdn_mirror": self.modrinth_cdn_mirror,
+                "curseforge_api_base": self.curseforge_api_base,
+                "curseforge_api_key": self.curseforge_api_key,
+                "curseforge_cdn_mirror": self.curseforge_cdn_mirror,
+                "download_threads": int(self.download_threads),
+                "download_speed_limit": int(self.download_speed_limit),
+                "download_accel_dir": self.download_accel_dir,
+                "launch_count": int(self.launch_count),
+                "support_prompt_every": int(self.support_prompt_every),
+                "auto_backup_saves": bool(self.auto_backup_saves),
+                "backup_dir": self.backup_dir,
+                "preload_jvm": bool(self.preload_jvm),
+                "preload_java_path": self.preload_java_path,
+                "selected_account_id": self.selected_account_id,
+                "microsoft_client_id": self.microsoft_client_id,
+                "authlib_injector_url": self.authlib_injector_url,
+                "authlib_injector_path": self.authlib_injector_path,
+                "instances": [i.to_dict() for i in self.instances],
+                "selected_instance_id": self.selected_instance_id,
+                "default_version_id": self.default_version_id,
+                "version_order": list(self.version_order),
+            }
+            CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = CONFIG_PATH.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, CONFIG_PATH)
+
+    def save_debounced(self, delay: float = 0.4) -> None:
+        """高频设置变更（输入框、滑块）合并写盘，退出时仍用同步 save()。"""
+        with self._save_guard:
+            if self._save_timer is not None:
+                self._save_timer.cancel()
+            timer = threading.Timer(delay, self._flush_debounced_save)
+            timer.daemon = True
+            self._save_timer = timer
+            timer.start()
+
+    def cancel_debounced_save(self) -> None:
+        """取消尚未触发的防抖写盘，退出前调用以免与同步 save() 争用临时文件。"""
+        with self._save_guard:
+            timer = self._save_timer
+            self._save_timer = None
+        if timer is not None:
+            timer.cancel()
+
+    def _flush_debounced_save(self) -> None:
+        """防抖回调：先清掉计时器引用再落盘，保证状态与 cancel_debounced_save 一致。"""
+        with self._save_guard:
+            self._save_timer = None
+        self.save()
+
+    @classmethod
+    def load(cls) -> "Config":
+        cfg = cls()
+        if not CONFIG_PATH.exists():
+            cfg.save()
+            return cfg
+        try:
+            data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return cfg
+
+        cfg.game_dir = str(data.get("game_dir") or cfg.game_dir)
+        raw_dirs = data.get("game_dirs")
+        loaded_dirs: list[GameDir] = []
+        if isinstance(raw_dirs, list):
+            for index, raw in enumerate(raw_dirs):
+                if isinstance(raw, dict) and str(raw.get("path") or "").strip():
+                    loaded_dirs.append(GameDir.from_dict(raw, fallback_id=f"dir_{index + 1}"))
+        if not loaded_dirs:
+            loaded_dirs = [GameDir(id="default", name="默认目录", path=cfg.game_dir)]
+        # 去重并保证 id 唯一
+        seen_ids: set[str] = set()
+        seen_paths: set[str] = set()
+        unique_dirs: list[GameDir] = []
+        for entry in loaded_dirs:
+            key = os.path.normcase(os.path.normpath(entry.path))
+            if key in seen_paths:
+                continue
+            base_id = entry.id or f"dir_{len(unique_dirs) + 1}"
+            new_id = base_id
+            suffix = 1
+            while new_id in seen_ids:
+                suffix += 1
+                new_id = f"{base_id}_{suffix}"
+            entry.id = new_id
+            seen_ids.add(new_id)
+            seen_paths.add(key)
+            unique_dirs.append(entry)
+        cfg.game_dirs = unique_dirs
+        cfg.active_game_dir = str(data.get("active_game_dir") or unique_dirs[0].id)
+        active = next(
+            (entry for entry in unique_dirs if entry.id == cfg.active_game_dir), unique_dirs[0]
+        )
+        cfg.active_game_dir = active.id
+        cfg.game_dir = active.path
+        cfg.player_name = str(data.get("player_name") or cfg.player_name)
+        cfg.java_path = str(data.get("java_path") or "")
+        cfg.java_manual_paths = _clean_path_list(data.get("java_manual_paths"))
+        cfg.java_known_paths = _clean_path_list(data.get("java_known_paths"))
+        try:
+            cfg.memory_mb = max(512, int(data.get("memory_mb", cfg.memory_mb)))
+        except (TypeError, ValueError):
+            cfg.memory_mb = 4096
+        cfg.smart_jvm = bool(data.get("smart_jvm", True))
+        cfg.opt_pre_touch = bool(data.get("opt_pre_touch", True))
+        cfg.opt_fixed_heap = bool(data.get("opt_fixed_heap", False))
+        cfg.width = int(data.get("width") or 0)
+        cfg.height = int(data.get("height") or 0)
+        cfg.extra_jvm_args = str(data.get("extra_jvm_args") or "")
+        cfg.extra_game_args = str(data.get("extra_game_args") or "")
+        cfg.hide_after_launch = bool(data.get("hide_after_launch", False))
+        cfg.keep_launcher_on_game_exit = bool(data.get("keep_launcher_on_game_exit", True))
+        cfg.close_to_tray = bool(data.get("close_to_tray", False))
+        cfg.start_animation = bool(data.get("start_animation", True))
+        cfg.agreement_version = str(data.get("agreement_version") or "")
+        cfg.agreement_accepted_at = str(data.get("agreement_accepted_at") or "")
+        cfg.agreement_prompt = bool(data.get("agreement_prompt", True))
+        raw_features = data.get("features")
+        if isinstance(raw_features, dict):
+            for key, value in raw_features.items():
+                cfg.features[str(key)] = bool(value)
+        # 延迟导入，避免 config 模块在导入时就依赖 Qt
+        from .i18n import SUPPORTED_LANGUAGES
+
+        cfg.language = str(data.get("language") or "zh_CN")
+        if cfg.language not in SUPPORTED_LANGUAGES:
+            cfg.language = "zh_CN"
+        cfg.accent_color = str(data.get("accent_color") or "#65d46e")
+        cfg.theme_name = str(data.get("theme_name") or "森林绿")
+        text_color = str(data.get("text_color") or "").strip()
+        cfg.text_color = text_color if re.fullmatch(r"#[0-9a-fA-F]{6}", text_color) else ""
+        cfg.light_theme_name = str(data.get("light_theme_name") or "晨光")
+        cfg.dark_theme_name = str(data.get("dark_theme_name") or "森林绿")
+        raw_mode = str(data.get("color_mode") or "").lower()
+        if raw_mode in ("light", "dark"):
+            cfg.color_mode = raw_mode
+        else:
+            # 旧配置没有明暗字段：默认回到明亮模式，并把原先的主题记成黑暗模式主题
+            cfg.color_mode = "light"
+            cfg.dark_theme_name = cfg.theme_name
+            cfg.theme_name = cfg.light_theme_name
+        cfg.background_image = str(data.get("background_image") or "")
+        cfg.dynamic_wallpaper = str(data.get("dynamic_wallpaper") or "")
+        disabled = data.get("extensions_disabled") or []
+        cfg.extensions_disabled = [str(item) for item in disabled] if isinstance(disabled, list) else []
+        cfg.ui_animations = bool(data.get("ui_animations", True))
+        cfg.glass_effect = bool(data.get("glass_effect", True))
+        cfg.glass_see_through = bool(data.get("glass_see_through", False))
+        try:
+            cfg.glass_strength = max(0, min(100, int(data.get("glass_strength", 62))))
+        except (TypeError, ValueError):
+            cfg.glass_strength = 62
+        try:
+            cfg.glass_blur = max(0, min(64, int(data.get("glass_blur", 20))))
+        except (TypeError, ValueError):
+            cfg.glass_blur = 20
+        cfg.ui_acrylic = bool(data.get("ui_acrylic", False))
+        mode = str(data.get("ui_mode") or "classic")
+        cfg.ui_mode = mode if mode in ("classic", "visual") else "classic"
+        cfg.ui_mode_asked = bool(data.get("ui_mode_asked", False))
+        frame = str(data.get("frame_mode") or "classic")
+        cfg.frame_mode = frame if frame in ("classic", "webview", "electron") else "classic"
+        cfg.frame_mode_asked = bool(data.get("frame_mode_asked", False))
+        # 5.3.0 起经典版 / 美化版可随时双向切换，旧配置里的 frame_locked 不再生效
+        cfg.frame_locked = False
+        cfg.after_launch_action = str(data.get("after_launch_action") or "")
+        if cfg.after_launch_action not in AFTER_LAUNCH_ACTIONS:
+            cfg.after_launch_action = "hide" if cfg.hide_after_launch else "nothing"
+        cfg.isolation_mode = str(data.get("isolation_mode") or "all")
+        if cfg.isolation_mode not in ISOLATION_LABELS:
+            cfg.isolation_mode = "all"
+        cfg.process_priority = str(data.get("process_priority") or "normal")
+        if cfg.process_priority not in PROCESS_PRIORITIES:
+            cfg.process_priority = "normal"
+        cfg.window_title = str(data.get("window_title") or "")
+        cfg.proxy_enabled = bool(data.get("proxy_enabled", False))
+        cfg.proxy_url = str(data.get("proxy_url") or "")
+        cfg.proxy_jvm = bool(data.get("proxy_jvm", True))
+        raw_snapshot = data.get("last_good_config")
+        if isinstance(raw_snapshot, dict):
+            # 旧配置没有该字段；损坏的条目直接忽略，保证启动快照只含简单类型
+            cfg.last_good_config = {
+                str(key): value
+                for key, value in raw_snapshot.items()
+                if isinstance(value, (str, int, float, bool))
+            }
+        else:
+            cfg.last_good_config = {}
+        raw_version_settings = data.get("version_settings")
+        if isinstance(raw_version_settings, dict):
+            for key, raw in raw_version_settings.items():
+                if isinstance(raw, dict):
+                    cfg.version_settings[str(key)] = VersionSettings.from_dict(raw)
+        cfg.selected_source_id = str(data.get("selected_source_id") or "official")
+
+        cfg.auto_connect_enabled = bool(data.get("auto_connect_enabled", False))
+        cfg.auto_connect_server = str(data.get("auto_connect_server") or "")
+        try:
+            cfg.auto_connect_port = int(data.get("auto_connect_port") or 25565)
+        except (TypeError, ValueError):
+            cfg.auto_connect_port = 25565
+
+        raw_servers = data.get("servers")
+        loaded_servers: list[ServerEntry] = []
+        if isinstance(raw_servers, list):
+            for index, raw in enumerate(raw_servers):
+                if isinstance(raw, dict) and str(raw.get("host") or "").strip():
+                    loaded_servers.append(
+                        ServerEntry.from_dict(raw, fallback_id=f"server_{index + 1}")
+                    )
+        cfg.servers = loaded_servers
+        cfg.active_server_id = str(data.get("active_server_id") or "")
+        if cfg.active_server_id and cfg.active_server() is None:
+            cfg.active_server_id = ""
+
+        cfg.modrinth_api_base = str(data.get("modrinth_api_base") or MODRINTH_API_BASE)
+        cfg.modrinth_cdn_mirror = str(data.get("modrinth_cdn_mirror") or "")
+        cfg.curseforge_api_base = str(data.get("curseforge_api_base") or CURSEFORGE_API_BASE)
+        cfg.curseforge_api_key = str(
+            data.get("curseforge_api_key") or DEFAULT_CURSEFORGE_API_KEY
+        )
+        cfg.curseforge_cdn_mirror = str(data.get("curseforge_cdn_mirror") or "")
+        try:
+            cfg.download_threads = max(1, min(328, int(data.get("download_threads") or 16)))
+            cfg.download_speed_limit = max(
+                0, int(data.get("download_speed_limit") or 0)
+            )
+            cfg.launch_count = max(0, int(data.get("launch_count") or 0))
+            cfg.support_prompt_every = max(
+                1, min(1000, int(data.get("support_prompt_every") or 10))
+            )
+            cfg.auto_backup_saves = bool(data.get("auto_backup_saves", True))
+            cfg.backup_dir = str(data.get("backup_dir") or "")
+        except (TypeError, ValueError):
+            cfg.download_threads = 16
+        cfg.preload_jvm = bool(data.get("preload_jvm", False))
+        cfg.preload_java_path = str(data.get("preload_java_path") or "")
+        cfg.download_accel_dir = str(data.get("download_accel_dir") or "")
+
+        cfg.selected_account_id = str(data.get("selected_account_id") or "")
+        cfg.microsoft_client_id = str(
+            data.get("microsoft_client_id") or DEFAULT_MICROSOFT_CLIENT_ID
+        )
+        cfg.authlib_injector_url = str(
+            data.get("authlib_injector_url") or AUTHLIB_INJECTOR_LATEST
+        )
+        cfg.authlib_injector_path = str(data.get("authlib_injector_path") or "")
+
+        raw_instances = data.get("instances")
+        if isinstance(raw_instances, list):
+            for i, raw in enumerate(raw_instances):
+                if isinstance(raw, dict) and raw.get("id") != "default":
+                    cfg.instances.append(
+                        Instance.from_dict(raw, fallback_id=f"instance_{i + 1}")
+                    )
+        cfg.selected_instance_id = str(data.get("selected_instance_id") or "default")
+        cfg.default_version_id = str(data.get("default_version_id") or "")
+        raw_version_order = data.get("version_order")
+        cfg.version_order = (
+            [str(v) for v in raw_version_order if v]
+            if isinstance(raw_version_order, list)
+            else []
+        )
+        if not cfg.get_instance(cfg.selected_instance_id):
+            cfg.selected_instance_id = "default"
+
+        loaded_sources: list[DownloadSource] = []
+        raw_sources = data.get("sources")
+        if isinstance(raw_sources, list):
+            for i, raw in enumerate(raw_sources):
+                if not isinstance(raw, dict):
+                    continue
+                source = DownloadSource.from_dict(raw, fallback_id=f"custom_{i + 1}")
+                source.builtin = source.id in {"official", "bmclapi"}
+                if source.builtin:
+                    if source.id == "official":
+                        source.manifest_url = source.manifest_url or OFFICIAL_MANIFEST
+                        source.mapping = "none"
+                        source.name = "Mojang 官方源" if source.id == "official" else source.name
+                    else:
+                        source.manifest_url = source.manifest_url or BMCLAPI_MANIFEST
+                        source.mapping = "bmclapi"
+                        source.download_base = source.download_base or BMCLAPI_BASE
+                        source.name = source.name or "BMCLAPI 镜像（国内加速）"
+                loaded_sources.append(source)
+        cfg.sources = loaded_sources or builtin_sources()
+
+        # 补齐内置源，避免用户误删后失去官方/镜像能力
+        for builtin in builtin_sources():
+            if not any(s.id == builtin.id for s in cfg.sources):
+                cfg.sources.insert(0, builtin)
+
+        # 保证优先级唯一且递增，便于排序显示
+        cfg.sources.sort(key=lambda s: s.priority)
+        for index, source in enumerate(cfg.sources, start=1):
+            if source.priority <= 0 or source.priority > 999:
+                source.priority = index * 10
+        if not cfg.get_source(cfg.selected_source_id):
+            cfg.selected_source_id = cfg.sources[0].id if cfg.sources else "official"
+        return cfg
+
+    def new_source_id(self) -> str:
+        used = {s.id for s in self.sources}
+        n = 1
+        while f"custom_{n}" in used:
+            n += 1
+        return f"custom_{n}"
+
+    def clone_source(self, source: DownloadSource) -> DownloadSource:
+        data = copy.deepcopy(source.to_dict())
+        data.update({"id": self.new_source_id(), "name": source.name + " 副本", "builtin": False})
+        return DownloadSource.from_dict(data)
+
+
+INSTANCE_MANIFEST = "instance.json"
+
+
+def write_instance_manifest(instance: Instance, game_dir: str | Path) -> Path:
+    """在实例目录写入可分享/恢复的 instance.json。"""
+    folder = Path(game_dir)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / INSTANCE_MANIFEST
+    payload = {"format": "mikan/1", "instance": instance.to_dict()}
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def read_instance_manifest(folder: str | Path) -> dict[str, Any] | None:
+    path = Path(folder) / INSTANCE_MANIFEST
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+__all__ = [
+    "APP_ROOT",
+    "DATA_DIR",
+    "CACHE_DIR",
+    "LOG_DIR",
+    "BROWSER_DIR",
+    "INSTANCES_DIR",
+    "CONFIG_PATH",
+    "INSTANCE_MANIFEST",
+    "write_instance_manifest",
+    "read_instance_manifest",
+    "DownloadSource",
+    "GameDir",
+    "ServerEntry",
+    "VersionSettings",
+    "Instance",
+    "Config",
+    "builtin_sources",
+    "default_game_dir",
+    "ISOLATION_LABELS",
+    "PROCESS_PRIORITIES",
+    "AFTER_LAUNCH_ACTIONS",
+    "LAUNCH_CONFIG_FIELDS",
+    "LAUNCH_CONFIG_FORMAT",
+    "OFFICIAL_MANIFEST",
+    "BMCLAPI_BASE",
+    "BMCLAPI_MANIFEST",
+    "SOURCE_MAPPINGS",
+    "FEATURE_DEFAULTS",
+    "FEATURE_PAGE_KEYS",
+    "MODRINTH_API_BASE",
+    "MODRINTH_CDN_BASE",
+    "CURSEFORGE_API_BASE",
+    "CURSEFORGE_CDN_HOSTS",
+    "DEFAULT_CURSEFORGE_API_KEY",
+    "DEFAULT_MICROSOFT_CLIENT_ID",
+    "AUTHLIB_INJECTOR_LATEST",
+]
