@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import os
 import shutil
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -24,7 +28,10 @@ from ..context import AppContext, wait_thread
 from ..installer import GameInstaller
 from ..java import pick_java
 from ..modloader import install_loader, java_for_mc
-from .widgets import Badge, Card, page_header
+from ..net import Cancelled
+from ..config import INSTANCES_DIR
+from ..modpack_pipeline import ModpackPipeline
+from .widgets import Badge, Card, ModpackInstallModeDialog, page_header
 
 LOADER_LABELS = {
     "forge": "Forge",
@@ -104,6 +111,105 @@ class RepairWorker(QThread):
             self.failed.emit(f"修复失败：{exc}")
 
 
+class LocalInstallWorker(QThread):
+    """从本地压缩包安装整合包：新建实例，或附加到已有版本。"""
+
+    progress = Signal(float, str)
+    log = Signal(str)
+    ok = Signal(str)
+    failed = Signal(str)
+    cancelled = Signal(str)
+
+    def __init__(
+        self,
+        ctx: AppContext,
+        path: Path,
+        attach: dict | None = None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.ctx = ctx
+        self.path = Path(path)
+        self.attach = attach
+        self.cancel_event = threading.Event()
+        self.pause_event = threading.Event()
+
+    def _emit(self, value: float, detail: str = "", stage: str = "") -> None:
+        text = f"{stage} · {detail}" if stage and detail else (detail or stage)
+        self.progress.emit(max(0.0, min(1.0, value)), text)
+
+    def run(self) -> None:
+        pipeline = None
+        try:
+            meta = self.ctx.content.parse_modpack(self.path, self.log.emit)
+            if not meta.mc_version:
+                raise ContentError("整合包缺少 Minecraft 版本信息，无法安装。")
+            if self.attach:
+                version_id = str(self.attach.get("version_id") or "")
+                raw_root = str(self.attach.get("game_dir") or "")
+                root = Path(raw_root) if raw_root else None
+                target = self.ctx.config.resolve_game_dirs(
+                    version_id, root=root
+                ).primary
+                pipeline = ModpackPipeline(
+                    self.ctx,
+                    target,
+                    log=self.log.emit,
+                    cancel=self.cancel_event,
+                    pause=self.pause_event,
+                    progress=lambda value, detail, stage, _s, _d, _t: self._emit(
+                        value, detail, stage
+                    ),
+                )
+                pipeline.attach_files(
+                    version_id,
+                    self.path,
+                    meta,
+                    root=root,
+                    target_mc=str(self.attach.get("mc_version") or ""),
+                    target_loader=str(self.attach.get("loader") or ""),
+                )
+                self.ok.emit(
+                    f"整合包「{meta.name or self.path.stem}」已附加到版本 {version_id}。"
+                )
+                return
+
+            from .dropinstall import _pack_slug
+
+            slug = _pack_slug(meta.name or self.path.stem, self.path)
+            target = INSTANCES_DIR / slug
+            target.mkdir(parents=True, exist_ok=True)
+            pipeline = ModpackPipeline(
+                self.ctx,
+                target,
+                log=self.log.emit,
+                cancel=self.cancel_event,
+                pause=self.pause_event,
+                progress=lambda value, detail, stage, _s, _d, _t: self._emit(
+                    value, detail, stage
+                ),
+            )
+            version_id = pipeline.prepare(
+                meta.mc_version, meta.loader, meta.loader_version
+            )
+            pipeline.install_files(self.path, meta)
+            instance = pipeline.register_instance(
+                meta.name or self.path.stem,
+                version_id=version_id,
+                loader=meta.loader,
+                mc_version=meta.mc_version,
+                modpack=meta.name or self.path.stem,
+                loader_version=meta.loader_version,
+            )
+            self.ok.emit(f"整合包「{instance.name}」安装完成，已切换到该实例。")
+        except Cancelled:
+            self.cancelled.emit("安装已取消，已下载的文件会保留。")
+        except ContentError as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001 - 统一反馈到界面
+            self.failed.emit(f"安装失败：{exc}")
+
+
 class ModpackPage(QWidget):
     """整合包实例列表。"""
 
@@ -114,6 +220,8 @@ class ModpackPage(QWidget):
         self.ctx = ctx
         self._rows: list[tuple[str, str]] = []  # (instance_id, version_id)
         self._repair_worker: RepairWorker | None = None
+        self._install_worker: LocalInstallWorker | None = None
+        self._install_progress: QProgressDialog | None = None
         self._build_ui()
         self.ctx.bus.instances_changed.connect(self.refresh)
         self.refresh()
@@ -130,6 +238,11 @@ class ModpackPage(QWidget):
         self.count_badge = Badge("0 个", "green")
         header_layout.addWidget(self.count_badge)
         header_layout.addStretch(1)
+        install_button = QPushButton("安装整合包文件…")
+        install_button.setObjectName("Primary")
+        install_button.setToolTip("选择本地整合包压缩包，可新建实例或附加到已有版本")
+        install_button.clicked.connect(self._install_from_file)
+        header_layout.addWidget(install_button)
         layout.addWidget(header)
 
         card = Card()
@@ -159,6 +272,75 @@ class ModpackPage(QWidget):
         self.empty_label.setAlignment(Qt.AlignCenter)
         card.body.addWidget(self.empty_label)
         layout.addWidget(card, 1)
+
+    # ------------------------------------------------------------------
+    def _install_from_file(self) -> None:
+        """从本地整合包文件安装，支持新建实例或附加到已有版本。"""
+        if self._install_worker is not None and self._install_worker.isRunning():
+            QMessageBox.information(self, "请稍候", "整合包安装任务还在进行中。")
+            return
+        path_text, _selected = QFileDialog.getOpenFileName(
+            self,
+            "选择整合包文件",
+            "",
+            "整合包 (*.zip *.mrpack *.mikan);;所有文件 (*)",
+        )
+        if not path_text:
+            return
+        from .page_content import scan_targets
+
+        installed = [item for item in scan_targets(self.ctx) if item.get("version_id")]
+        dialog = ModpackInstallModeDialog(installed, "安装整合包", self)
+        if dialog.exec() != QDialog.Accepted:
+            self.ctx.bus.toast.emit("已取消整合包安装。")
+            return
+        attach = dict(dialog.selected or {}) if dialog.mode == "attach" else None
+        worker = LocalInstallWorker(self.ctx, Path(path_text), attach, self)
+        progress = QProgressDialog("正在准备整合包…", "取消", 0, 100, self)
+        progress.setWindowTitle("安装整合包")
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.canceled.connect(worker.cancel_event.set)
+
+        def on_progress(value: float, detail: str) -> None:
+            progress.setValue(int(max(0.0, min(1.0, value)) * 100))
+            if detail:
+                progress.setLabelText(detail)
+
+        def close_progress() -> None:
+            progress.close()
+            progress.deleteLater()
+
+        def on_ok(message: str) -> None:
+            close_progress()
+            self.refresh()
+            QMessageBox.information(self, "安装完成", message)
+
+        def on_failed(message: str) -> None:
+            close_progress()
+            QMessageBox.warning(self, "安装失败", message)
+
+        def on_cancelled(message: str) -> None:
+            close_progress()
+            QMessageBox.information(self, "已取消", message)
+
+        worker.progress.connect(on_progress)
+        worker.log.connect(lambda line: self.ctx.bus.log.emit(line))
+        worker.ok.connect(on_ok)
+        worker.failed.connect(on_failed)
+        worker.cancelled.connect(on_cancelled)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(self._clear_install_worker)
+        self._install_worker = worker
+        self._install_progress = progress
+        progress.show()
+        worker.start()
+
+    def _clear_install_worker(self) -> None:
+        self._install_worker = None
+        self._install_progress = None
 
     # ------------------------------------------------------------------
     def refresh(self) -> None:
@@ -290,3 +472,6 @@ class ModpackPage(QWidget):
     # ------------------------------------------------------------------
     def shutdown(self) -> None:
         wait_thread(self._repair_worker, 3000)
+        if self._install_worker is not None:
+            self._install_worker.cancel_event.set()
+            wait_thread(self._install_worker, 3000)

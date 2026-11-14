@@ -873,11 +873,12 @@ class ContentClient:
         self,
         source: str,
         ids: list[str],
+        project_type: str = "mod",
         log: Callable[[str], None] | None = None,
     ) -> list[ContentProject]:
-        """按项目 id 批量解析前置 Mod 的项目信息。
+        """按项目 id 批量解析项目信息（前置 Mod、整合包安装等都会用到）。
 
-        网络失败、id 非法或平台不支持时一律跳过对应条目（返回空列表而不抛异常），
+        network 失败、id 非法或平台不支持时一律跳过对应条目（返回空列表而不抛异常），
         保证详情页的前置区块可以安全降级。
         """
         wanted: list[str] = []
@@ -890,13 +891,16 @@ class ContentClient:
         if not wanted:
             return []
         if source == "curseforge":
-            return self._curseforge_projects_by_ids(wanted, log)
+            return self._curseforge_projects_by_ids(wanted, project_type, log)
         if source == "modrinth":
-            return self._modrinth_projects_by_ids(wanted, log)
+            return self._modrinth_projects_by_ids(wanted, project_type, log)
         return []
 
     def _modrinth_projects_by_ids(
-        self, ids: list[str], log: Callable[[str], None] | None = None
+        self,
+        ids: list[str],
+        project_type: str = "mod",
+        log: Callable[[str], None] | None = None,
     ) -> list[ContentProject]:
         def fetch(project_id: str) -> ContentProject | None:
             try:
@@ -905,7 +909,11 @@ class ContentClient:
                 if log:
                     log(f"[前置] 解析 Modrinth 项目 {project_id} 失败：{exc}")
                 return None
-            return _project_from_modrinth(data, "mod") if isinstance(data, dict) else None
+            return (
+                _project_from_modrinth(data, project_type)
+                if isinstance(data, dict)
+                else None
+            )
 
         projects: list[ContentProject] = []
         with ThreadPoolExecutor(max_workers=max(1, min(4, len(ids)))) as pool:
@@ -915,7 +923,10 @@ class ContentClient:
         return projects
 
     def _curseforge_projects_by_ids(
-        self, ids: list[str], log: Callable[[str], None] | None = None
+        self,
+        ids: list[str],
+        project_type: str = "mod",
+        log: Callable[[str], None] | None = None,
     ) -> list[ContentProject]:
         projects: list[ContentProject] = []
         for start in range(0, len(ids), 100):
@@ -945,7 +956,7 @@ class ContentClient:
                     if isinstance(row, dict):
                         rows.append(row)
             for row in rows:
-                project = _project_from_curseforge(row)
+                project = _project_from_curseforge(row, project_type)
                 if project is not None:
                     projects.append(project)
         return projects

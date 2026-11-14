@@ -1,10 +1,22 @@
-# MikanCL v5.2.0 — Notes de version
+# MikanCL v5.3.1 — Notes de version
 
 [中文](RELEASE.md) · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · **Français** · [日本語](RELEASE.ja.md)
 
-Date de publication : 2026-11-13
+Date de publication : 2026-11-14
 
-## Nouveautés de la v5.2.0
+## Nouveautés et corrections de la v5.3.1
+
+- **Version autonome intégrée à l'exe unique** : le moteur Electron est embarqué sous forme d'archive compressée dans `MikanCL.exe`, plus besoin de build ni de téléchargement séparé. Au premier basculement il est extrait vers `data/electron/app`, puis réutilisé tel quel
+- **Correction du basculement « Version autonome »** : le backend empaqueté de la v5.2.0 ne reconnaissait pas la valeur `electron`, affichait « paramètre d'interface invalide » puis revenait à la version classique. La v5.3.1 reconstruit les trois entrées : premier démarrage, réglages Qt et réglages web
+- **Retour au lanceur principal** : choisir Classique / Embellie depuis Electron relance le lanceur principal ; s'il est introuvable, un message clair s'affiche au lieu de redémarrer Electron
+- **Boîte de dialogue lisible au premier démarrage** : fond sombre ajouté pour rester lisible sur un thème système clair
+- **Journal de diagnostic** : les étapes d'extraction et de lancement sont écrites dans `data/logs/electron.log`
+- **Plus volumineux mais autonome** : l'exe unique fait environ 160 Mo de plus que la v5.2.0, mais embarque les trois interfaces
+- **Forbric aligné sur la version classique** : une fois l'installateur terminé, l'interface web crée et sélectionne automatiquement une instance « Forbric 26.2 » et privilégie Java 21
+- **Correctif du plantage au redémarrage depuis l'application** : le nouveau processus héritait des variables `_PYI_*` de PyInstaller et réutilisait le dossier d'extraction déjà supprimé, d'où « Failed to load Python DLL … python315.dll ». Ces variables sont désormais retirées avant chaque redémarrage, y compris le retour depuis l'édition autonome et la réouverture après mise à jour. Le lancement manuel de l'exe fonctionnait déjà car l'Explorateur fournit un environnement propre
+- **Premier choix plus clair** : toute la carte est cliquable et la boîte de dialogue affiche le choix courant (« ✓ Classique · Qt ») ; l'interface réellement lancée est écrite dans `data/logs/launcher.log`
+
+## Nouveautés de la v5.2.0 (historique)
 
 - **Page « Paramètres de version » autonome dans la version embellie** : reprise complète des 7 onglets de la version classique (Aperçu, Paramètres de jeu, Mods, Packs de ressources, Packs de shaders, Modpacks, Gestion des versions), y compris l'export de script de lancement, le bilan de santé et la réparation par lot, l'export de configuration par lot, les sauvegardes, ainsi que les outils graine de monde / captures / rapports de crash / graphe de mods / dépendances ; les instances et versions se changent en haut
 - **Conversion de format de sauvegarde et import d'anciens mondes** : conversion multithread de 2009 Classic / Indev / Alpha / McRegion → Anvil → version cible, avec remappage des ID de blocs et sauvegarde automatique ; les anciens noms (`server_level.dat`, `*.mine`, un `level.dat` unique dans une archive Classic) sont détectés, convertis et importés en un clic

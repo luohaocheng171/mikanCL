@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .widgets import Card, page_header
+from .widgets import Card, page_header, related_features_row
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".gif"}
 
@@ -103,6 +103,7 @@ class GalleryPage(QWidget):
         splitter.setStretchFactor(1, 2)
         card.body.addWidget(splitter, 1)
         layout.addWidget(card, 1)
+        layout.addWidget(related_features_row(self.ctx, "gallery"))
 
     # ------------------------------------------------------------------
     def _screenshots_dir(self) -> Path:

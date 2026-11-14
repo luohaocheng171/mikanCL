@@ -126,7 +126,22 @@ EN_SUPPLEMENTS: dict[str, dict[str, str]] = {
         "自定义主题是 data/themes/*.json，改完点「导入主题」即可生效；只换主题色时用下方色块。": "Custom themes are data/themes/*.json; import to apply. Use the swatches below to change only the accent color.",
         "界面框架": "UI framework",
         "经典版（Qt，功能完整）": "Classic (Qt, full features)",
+        "经典版（Qt，省内存）": "Classic (Qt, low memory)",
         "美化版（pywebview + WebView2）": "Enhanced (pywebview + WebView2)",
+        "美化版（pywebview + WebView2，推荐）": "Enhanced (pywebview + WebView2, recommended)",
+        "独立版（Electron，自带 Chromium，占用较高）": "Standalone (Electron, bundled Chromium, higher resource use)",
+        "经典版 / 美化版 / 独立版可随时切换，三套界面共用同一套启动、下载、账号与联机内核；"
+        "修改后重启启动器生效，不会丢失下载进度或设置。"
+        "独立版自带 Chromium、不依赖 WebView2，占用更高；单文件版已内置独立版，首次切换会自动释放。": "Classic / Enhanced / Standalone can be switched anytime; all three share the same launch, download, account and multiplayer engine. "
+        "Restart the launcher to apply, without losing download progress or settings. "
+        "Standalone bundles Chromium and needs no WebView2; the single-file build includes it and extracts on first switch.",
+        "未检测到独立版（Electron）。\n"
+        "单文件版应已内置独立版，第一次切换会自动释放；"
+        "若使用源码运行，请先运行 build_electron.py --all 生成。\n\n"
+        "仍要切换吗？": "No standalone (Electron) build was found.\n"
+        "The single-file build should include it and extract on first switch.\n"
+        "When running from source, run build_electron.py --all first.\n\n"
+        "Switch anyway?",
         "美化版用 Edge WebView2（Chromium）渲染玻璃拟态界面。"
         "选定美化版后框架即锁定，不能切回经典版；缺少运行时启动时会引导安装。": "The enhanced UI renders with Edge WebView2 (Chromium) glassmorphism. "
         "Choosing it locks the framework; you cannot switch back to Classic. Missing runtime is handled with an install prompt at startup.",
@@ -155,6 +170,14 @@ EN_SUPPLEMENTS: dict[str, dict[str, str]] = {
         "所有页面（下载、内容、联机、工具、设置）全部可用": "All pages (downloads, content, multiplayer, tools, settings) are available",
         "启动最快，适合 4 代 i5 / 核显等老机器": "Fastest startup; ideal for older PCs",
         "美化版 · pywebview": "Enhanced · pywebview",
+        "美化版 · pywebview（推荐）": "Enhanced · pywebview (recommended)",
+        "独立版 · Electron": "Standalone · Electron",
+        "脱离依赖 · 自带 Chromium · 占用较高": "No runtime dependency · bundled Chromium · higher resource use",
+        "自带 Chromium 内核，不依赖 WebView2，装不上运行时的电脑也能用": "Bundles its own Chromium, needs no WebView2, works on PCs where the runtime cannot be installed",
+        "界面与美化版完全一致，共用同一套 HTML / CSS / JS": "Identical to the enhanced UI, sharing the same HTML / CSS / JS",
+        "缺点：安装包与内存占用都比前两种更高": "Trade-off: larger installer and higher memory use than the other two",
+        "独立版已内置，首次切换会自动释放": "Standalone is bundled and extracts on first switch",
+        "未检测到独立版（源码运行需先构建，缺失时自动退回）": "No standalone build found (build it when running from source; falls back automatically)",
         "Chromium 渲染 · 玻璃拟态 · 参考主流启动器": "Chromium rendering · glassmorphism · inspired by popular launchers",
         "Edge WebView2（Chromium）渲染，CSS 动画与视觉上限更高": "Rendered by Edge WebView2 (Chromium) with higher CSS/animation ceiling",
         "竖排图标侧栏 + 悬浮玻璃卡片，前端可深度定制主题": "Vertical icon rail + floating glass cards; deeply customizable themes",
@@ -165,6 +188,16 @@ EN_SUPPLEMENTS: dict[str, dict[str, str]] = {
         "美化版依赖 WebView2 Runtime。Win10/11 通常随 Edge 预装；缺失时启动器会引导下载并退出，"
         "也可把运行时解包到安装目录 webview2 文件夹使用内置版本。": "The enhanced UI requires WebView2 Runtime. It ships with Edge on most Win10/11 PCs; if missing the launcher guides you to download and then exits. "
         "You can also unpack a runtime into the webview2 folder next to the executable.",
+        "默认推荐美化版：Chromium 渲染，视觉与动画更完整；经典版更省内存；"
+        "独立版自带 Chromium，完全不依赖系统组件，但占用更高。"
+        "三套界面共用同一套启动、下载、账号与联机内核，随时可在设置页切换。": "Enhanced is recommended by default: Chromium rendering with richer visuals and animation. Classic uses less memory. "
+        "Standalone bundles Chromium and depends on nothing, at the cost of higher resource use. "
+        "All three share the same launch, download, account and multiplayer engine and can be switched in Settings.",
+        "美化版依赖 WebView2 Runtime。Win10/11 通常随 Edge 预装；缺失时启动器会引导下载并退出，"
+        "也可把运行时解包到安装目录 webview2 文件夹使用内置版本。"
+        "独立版不需要 WebView2。单文件版已内置独立版，选中后会释放到 data/electron/app，之后直接复用。": "The enhanced UI requires WebView2 Runtime. It ships with Edge on most Win10/11 PCs; if missing the launcher guides you to download and then exits. "
+        "You can also unpack a runtime into the webview2 folder next to the executable. "
+        "Standalone needs no WebView2; the single-file build includes it and extracts it to data/electron/app on first use.",
         "使用此框架": "Use this framework",
     },
     "MainWindow": {

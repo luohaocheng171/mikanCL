@@ -1264,6 +1264,30 @@ class HomePage(QWidget):
         # 等主窗口把 bus.log 接到控制台后再写入，保证日志既显示也落盘
         QTimer.singleShot(0, lambda: self._append_log(f"[{APP_NAME}] 启动器已就绪。双击版本即可启动游戏。"))
 
+    def set_recent_pages(self, items: list[dict]) -> None:
+        """刷新顶部「最近使用」快捷入口（由主窗口在页面切换后调用）。"""
+        while self.recent_buttons.count():
+            layout_item = self.recent_buttons.takeAt(0)
+            widget = layout_item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        shown = 0
+        for entry in items[:5]:
+            key = str(entry.get("key") or "")
+            label = str(entry.get("label") or "")
+            if not key or not label:
+                continue
+            button = QPushButton(label if len(label) <= 10 else label[:9] + "…")
+            button.setObjectName("Chip")
+            button.setCursor(Qt.PointingHandCursor)
+            button.setToolTip(label)
+            button.clicked.connect(
+                lambda _checked=False, page=key: self.ctx.bus.navigate.emit(page)
+            )
+            self.recent_buttons.addWidget(button)
+            shown += 1
+        self.recent_bar.setVisible(bool(shown))
+
     # ------------------------------------------------------------------
     def _build(self) -> None:
         outer = QVBoxLayout(self)
@@ -1286,6 +1310,20 @@ class HomePage(QWidget):
         nbt_button.clicked.connect(self._open_nbt_editor)
         header_layout.addWidget(nbt_button)
         outer.addWidget(header)
+
+        self.recent_bar = QWidget()
+        recent_layout = QHBoxLayout(self.recent_bar)
+        recent_layout.setContentsMargins(0, 0, 0, 0)
+        recent_layout.setSpacing(8)
+        recent_caption = QLabel(self.tr("最近使用："))
+        recent_caption.setObjectName("Tiny")
+        recent_layout.addWidget(recent_caption)
+        self.recent_buttons = QHBoxLayout()
+        self.recent_buttons.setSpacing(6)
+        recent_layout.addLayout(self.recent_buttons)
+        recent_layout.addStretch(1)
+        self.recent_bar.setVisible(False)
+        outer.addWidget(self.recent_bar)
 
         body = QHBoxLayout()
         body.setSpacing(16)
@@ -1648,12 +1686,15 @@ class HomePage(QWidget):
             icon.setPixmap(make_avatar("Alex", 48))
             icon.setAlignment(Qt.AlignCenter)
             empty_layout.addWidget(icon)
-            label = QLabel(self.tr("还没有安装任何版本"))
+            label = QLabel(self.tr("下一步：安装一个游戏版本"))
             label.setAlignment(Qt.AlignCenter)
             label.setStyleSheet("font-size: 15px; font-weight: 600;")
             empty_layout.addWidget(label)
             hint = QLabel(
-                self.tr("前往下载页安装一个正式版，或用 HMCL 安装后指向同一个游戏目录。")
+                self.tr(
+                    "点下面的按钮选择版本在线安装；也可以直接把 .jar、mods 文件夹或整合包"
+                    "拖进窗口，会弹出导入向导。"
+                )
             )
             hint.setObjectName("Muted")
             hint.setAlignment(Qt.AlignCenter)
@@ -1664,6 +1705,20 @@ class HomePage(QWidget):
             button.setMaximumWidth(180)
             button.clicked.connect(lambda: self.ctx.bus.navigate.emit("download"))
             empty_layout.addWidget(button, alignment=Qt.AlignHCenter)
+            extra_row = QHBoxLayout()
+            extra_row.setSpacing(8)
+            extra_row.addStretch(1)
+            pack_button = QPushButton(self.tr("导入整合包"))
+            pack_button.setMaximumWidth(150)
+            pack_button.clicked.connect(lambda: self.ctx.bus.navigate.emit("modpack"))
+            extra_row.addWidget(pack_button)
+            wiki_button = QPushButton(self.tr("看安装教程"))
+            wiki_button.setObjectName("Ghost")
+            wiki_button.setMaximumWidth(150)
+            wiki_button.clicked.connect(lambda: self.ctx.bus.navigate.emit("wiki"))
+            extra_row.addWidget(wiki_button)
+            extra_row.addStretch(1)
+            empty_layout.addLayout(extra_row)
             self._empty_versions = empty
             self.version_layout.addWidget(empty)
             self.version_layout.addStretch(1)
@@ -2601,6 +2656,16 @@ class HomePage(QWidget):
         self.launch_button.setEnabled(True)
         self.launch_info.setText(t("HomePage", "游戏运行中：{0}", self._selected_id))
         self._append_log("[启动] 游戏进程已启动。")
+        summary = getattr(session, "launch_summary", "")
+        if summary:
+            self._append_log(f"[启动] {summary}")
+            self.ctx.bus.toast.emit(summary)
+            self.launch_info.setToolTip(summary)
+        # 只有通过早退检测后才会走到这里，因此失败启动不会覆盖「上次能启动」快照
+        try:
+            self.ctx.config.remember_last_good_config()
+        except OSError as exc:
+            self._append_log(f"[配置] 保存上次可启动配置失败：{exc}")
         self.start_anim.finish()
         action = self.ctx.config.after_launch_action
         if action == "hide":

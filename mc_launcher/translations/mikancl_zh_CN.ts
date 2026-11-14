@@ -8,8 +8,8 @@
             <translation>选择界面框架</translation>
         </message>
         <message>
-            <source>两套界面共用同一套启动、下载、账号与联机内核，功能完全对齐。只加载所选框架，未选中的模块不会占用内存。随时可在设置页双向切换，无需重新选择。</source>
-            <translation>两套界面共用同一套启动、下载、账号与联机内核，功能完全对齐。只加载所选框架，未选中的模块不会占用内存。随时可在设置页双向切换，无需重新选择。</translation>
+            <source>默认推荐美化版：Chromium 渲染，视觉与动画更完整；经典版更省内存；独立版自带 Chromium，完全不依赖系统组件，但占用更高。三套界面共用同一套启动、下载、账号与联机内核，随时可在设置页切换。</source>
+            <translation>默认推荐美化版：Chromium 渲染，视觉与动画更完整；经典版更省内存；独立版自带 Chromium，完全不依赖系统组件，但占用更高。三套界面共用同一套启动、下载、账号与联机内核，随时可在设置页切换。</translation>
         </message>
         <message>
             <source>经典版 · Qt</source>
@@ -28,16 +28,32 @@
             <translation>未检测到 WebView2 Runtime（首次使用会引导安装）</translation>
         </message>
         <message>
-            <source>美化版 · pywebview</source>
-            <translation>美化版 · pywebview</translation>
+            <source>美化版 · pywebview（推荐）</source>
+            <translation>美化版 · pywebview（推荐）</translation>
         </message>
         <message>
             <source>Chromium 渲染 · 玻璃拟态 · 参考主流启动器</source>
             <translation>Chromium 渲染 · 玻璃拟态 · 参考主流启动器</translation>
         </message>
         <message>
-            <source>美化版依赖 WebView2 Runtime。Win10/11 通常随 Edge 预装；缺失时启动器会引导下载并退出，也可把运行时解包到安装目录 webview2 文件夹使用内置版本。</source>
-            <translation>美化版依赖 WebView2 Runtime。Win10/11 通常随 Edge 预装；缺失时启动器会引导下载并退出，也可把运行时解包到安装目录 webview2 文件夹使用内置版本。</translation>
+            <source>独立版已内置，首次切换会自动释放</source>
+            <translation>独立版已内置，首次切换会自动释放</translation>
+        </message>
+        <message>
+            <source>未检测到独立版（源码运行需先构建，缺失时自动退回）</source>
+            <translation>未检测到独立版（源码运行需先构建，缺失时自动退回）</translation>
+        </message>
+        <message>
+            <source>独立版 · Electron</source>
+            <translation>独立版 · Electron</translation>
+        </message>
+        <message>
+            <source>脱离依赖 · 自带 Chromium · 占用较高</source>
+            <translation>脱离依赖 · 自带 Chromium · 占用较高</translation>
+        </message>
+        <message>
+            <source>美化版依赖 WebView2 Runtime。Win10/11 通常随 Edge 预装；缺失时启动器会引导下载并退出，也可把运行时解包到安装目录 webview2 文件夹使用内置版本。独立版不需要 WebView2。单文件版已内置独立版，选中后会释放到 data/electron/app，之后直接复用。</source>
+            <translation>美化版依赖 WebView2 Runtime。Win10/11 通常随 Edge 预装；缺失时启动器会引导下载并退出，也可把运行时解包到安装目录 webview2 文件夹使用内置版本。独立版不需要 WebView2。单文件版已内置独立版，选中后会释放到 data/electron/app，之后直接复用。</translation>
         </message>
         <message>
             <source>使用此框架</source>
@@ -66,6 +82,18 @@
         <message>
             <source>可随时在设置页切回经典版；缺少运行时按提示安装</source>
             <translation>可随时在设置页切回经典版；缺少运行时按提示安装</translation>
+        </message>
+        <message>
+            <source>自带 Chromium 内核，不依赖 WebView2，装不上运行时的电脑也能用</source>
+            <translation>自带 Chromium 内核，不依赖 WebView2，装不上运行时的电脑也能用</translation>
+        </message>
+        <message>
+            <source>界面与美化版完全一致，共用同一套 HTML / CSS / JS</source>
+            <translation>界面与美化版完全一致，共用同一套 HTML / CSS / JS</translation>
+        </message>
+        <message>
+            <source>缺点：安装包与内存占用都比前两种更高</source>
+            <translation>缺点：安装包与内存占用都比前两种更高</translation>
         </message>
     </context>
     <context>
@@ -509,8 +537,12 @@
             <translation>皮肤厂</translation>
         </message>
         <message>
-            <source>皮肤包</source>
-            <translation>皮肤包</translation>
+            <source>皮肤包 / UI 材质包</source>
+            <translation>皮肤包 / UI 材质包</translation>
+        </message>
+        <message>
+            <source>UI 包</source>
+            <translation>UI 包</translation>
         </message>
         <message>
             <source>世界种子</source>
@@ -684,6 +716,10 @@
         <message>
             <source>纤细（Slim / Alex）</source>
             <translation>纤细（Slim / Alex）</translation>
+        </message>
+        <message>
+            <source>覆盖所有已安装版本（新装的版本也会自动补做适配包）</source>
+            <translation>覆盖所有已安装版本（新装的版本也会自动补做适配包）</translation>
         </message>
         <message>
             <source>上传皮肤…</source>
@@ -1403,6 +1439,10 @@
             <translation>NBT 编辑器…</translation>
         </message>
         <message>
+            <source>最近使用：</source>
+            <translation>最近使用：</translation>
+        </message>
+        <message>
             <source>离线模式</source>
             <translation>离线模式</translation>
         </message>
@@ -1501,6 +1541,14 @@
         <message>
             <source>安装新版本</source>
             <translation>安装新版本</translation>
+        </message>
+        <message>
+            <source>UI 材质包一键替换</source>
+            <translation>UI 材质包一键替换</translation>
+        </message>
+        <message>
+            <source>为当前选中的版本生成半透明毛玻璃 UI 材质包并自动启用，重复执行会替换旧包</source>
+            <translation>为当前选中的版本生成半透明毛玻璃 UI 材质包并自动启用，重复执行会替换旧包</translation>
         </message>
         <message>
             <source>版本文件夹</source>
@@ -1623,6 +1671,14 @@
             <translation>MOTD / 版本</translation>
         </message>
         <message>
+            <source>最近皮肤</source>
+            <translation>最近皮肤</translation>
+        </message>
+        <message>
+            <source>点击即可切换到该皮肤</source>
+            <translation>点击即可切换到该皮肤</translation>
+        </message>
+        <message>
             <source>启动配置</source>
             <translation>启动配置</translation>
         </message>
@@ -1631,16 +1687,24 @@
             <translation>Java、内存与窗口</translation>
         </message>
         <message>
-            <source>还没有安装任何版本</source>
-            <translation>还没有安装任何版本</translation>
+            <source>下一步：安装一个游戏版本</source>
+            <translation>下一步：安装一个游戏版本</translation>
         </message>
         <message>
-            <source>前往下载页安装一个正式版，或用 HMCL 安装后指向同一个游戏目录。</source>
-            <translation>前往下载页安装一个正式版，或用 HMCL 安装后指向同一个游戏目录。</translation>
+            <source>点下面的按钮选择版本在线安装；也可以直接把 .jar、mods 文件夹或整合包拖进窗口，会弹出导入向导。</source>
+            <translation>点下面的按钮选择版本在线安装；也可以直接把 .jar、mods 文件夹或整合包拖进窗口，会弹出导入向导。</translation>
         </message>
         <message>
             <source>安装 Minecraft</source>
             <translation>安装 Minecraft</translation>
+        </message>
+        <message>
+            <source>导入整合包</source>
+            <translation>导入整合包</translation>
+        </message>
+        <message>
+            <source>看安装教程</source>
+            <translation>看安装教程</translation>
         </message>
         <message>
             <source>将启动：基岩版 {0}</source>
@@ -1683,6 +1747,18 @@
             <translation>尚未完成登录</translation>
         </message>
         <message>
+            <source>还没有导入皮肤，到「账号与皮肤」导入一张 PNG。</source>
+            <translation>还没有导入皮肤，到「账号与皮肤」导入一张 PNG。</translation>
+        </message>
+        <message>
+            <source>已切换到皮肤「{0}」，并适配 {1} 个游戏目录</source>
+            <translation>已切换到皮肤「{0}」，并适配 {1} 个游戏目录</translation>
+        </message>
+        <message>
+            <source>已切换到皮肤「{0}」</source>
+            <translation>已切换到皮肤「{0}」</translation>
+        </message>
+        <message>
             <source>无法连接</source>
             <translation>无法连接</translation>
         </message>
@@ -1693,6 +1769,10 @@
         <message>
             <source>创建文件夹失败：{0}</source>
             <translation>创建文件夹失败：{0}</translation>
+        </message>
+        <message>
+            <source>应用皮肤失败：{0}</source>
+            <translation>应用皮肤失败：{0}</translation>
         </message>
         <message>
             <source>将启动：基岩版</source>
@@ -1789,6 +1869,10 @@
             <translation>📋 复制房间码</translation>
         </message>
         <message>
+            <source>重新检测地址</source>
+            <translation>重新检测地址</translation>
+        </message>
+        <message>
             <source>游戏内显示名字</source>
             <translation>游戏内显示名字</translation>
         </message>
@@ -1881,6 +1965,10 @@
             <translation>运行日志</translation>
         </message>
         <message>
+            <source>地址可用</source>
+            <translation>地址可用</translation>
+        </message>
+        <message>
             <source>请稍候</source>
             <translation>请稍候</translation>
         </message>
@@ -1913,6 +2001,18 @@
             <translation>[陶瓦] 启动失败：{0}</translation>
         </message>
         <message>
+            <source>正在检测 {0} 是否可用…</source>
+            <translation>正在检测 {0} 是否可用…</translation>
+        </message>
+        <message>
+            <source>无法连接</source>
+            <translation>无法连接</translation>
+        </message>
+        <message>
+            <source>地址检测失败：{0}</source>
+            <translation>地址检测失败：{0}</translation>
+        </message>
+        <message>
             <source>正在下载陶瓦联机… {0}</source>
             <translation>正在下载陶瓦联机… {0}</translation>
         </message>
@@ -1927,6 +2027,18 @@
         <message>
             <source>出错了</source>
             <translation>出错了</translation>
+        </message>
+        <message>
+            <source>地址可用 · 延迟 {0} ms</source>
+            <translation>地址可用 · 延迟 {0} ms</translation>
+        </message>
+        <message>
+            <source> · 游戏版本 {0}</source>
+            <translation> · 游戏版本 {0}</translation>
+        </message>
+        <message>
+            <source>{0} 暂时无法连接：{1}（可点「重新检测地址」复测）</source>
+            <translation>{0} 暂时无法连接：{1}（可点「重新检测地址」复测）</translation>
         </message>
         <message>
             <source>空闲</source>
@@ -2008,8 +2120,8 @@
             <translation>世界种子</translation>
         </message>
         <message>
-            <source>输入种子，启动器调用本机 Java（与 Minecraft 相同的柏林噪声算法与参数）生成出生点附近的 3D 地形，无需进入游戏</source>
-            <translation>输入种子，启动器调用本机 Java（与 Minecraft 相同的柏林噪声算法与参数）生成出生点附近的 3D 地形，无需进入游戏</translation>
+            <source>选择已安装的版本并输入种子，启动器调用本机 Java 用与官方一致的柏林噪声生成出生点附近的地形，无需进入游戏</source>
+            <translation>选择已安装的版本并输入种子，启动器调用本机 Java 用与官方一致的柏林噪声生成出生点附近的地形，无需进入游戏</translation>
         </message>
         <message>
             <source>可填数字或任意文本，留空随机</source>
@@ -2020,12 +2132,8 @@
             <translation>尺寸越大，生成越久</translation>
         </message>
         <message>
-            <source>经典（1.7–1.17）</source>
-            <translation>经典（1.7–1.17）</translation>
-        </message>
-        <message>
-            <source>新版（1.18+）</source>
-            <translation>新版（1.18+）</translation>
+            <source>刷新</source>
+            <translation>刷新</translation>
         </message>
         <message>
             <source>生成地形</source>
@@ -2036,8 +2144,8 @@
             <translation>导出高度图 PNG</translation>
         </message>
         <message>
-            <source>说明：高度图由启动器调用本机 Java 运行时（内嵌 TerrainGen 程序）计算。「经典」使用 1.7–1.17 的 ImprovedNoise（256 置换表 + 16 向梯度表）与 8 层 octave 叠加（频率 ×2、振幅 ×0.5）；「新版」使用 1.18 起的 Xoroshiro128++ 随机源与气候噪声（大陆性 / 侵蚀度 / 奇异度）。两种模式的噪声参数均为原版固定值，不提供起伏等可调项；但不含生物群系、地形样条与密度函数，仍属非官方地形示意，仅供挑选种子时参考，与游戏内实际地形可能存在差异。</source>
-            <translation>说明：高度图由启动器调用本机 Java 运行时（内嵌 TerrainGen 程序）计算。「经典」使用 1.7–1.17 的 ImprovedNoise（256 置换表 + 16 向梯度表）与 8 层 octave 叠加（频率 ×2、振幅 ×0.5）；「新版」使用 1.18 起的 Xoroshiro128++ 随机源与气候噪声（大陆性 / 侵蚀度 / 奇异度）。两种模式的噪声参数均为原版固定值，不提供起伏等可调项；但不含生物群系、地形样条与密度函数，仍属非官方地形示意，仅供挑选种子时参考，与游戏内实际地形可能存在差异。</translation>
+            <source>说明：选择已安装的版本后生成地形，噪声实现按版本自动切换——1.18 以前使用 ImprovedNoise（256 置换表 + 16 向梯度表，与官方 NoiseGeneratorImproved 逐行一致）叠加 8 层 octave（频率 ×2、振幅 ×0.5）；1.18 起改用官方 Xoroshiro128++ 随机源与大陆性 / 侵蚀度 / 奇异度气候噪声。柏林噪声核心与官方一致，但不含生物群系、地形样条与密度函数，仍属示意高度图，仅供挑选种子时参考。</source>
+            <translation>说明：选择已安装的版本后生成地形，噪声实现按版本自动切换——1.18 以前使用 ImprovedNoise（256 置换表 + 16 向梯度表，与官方 NoiseGeneratorImproved 逐行一致）叠加 8 层 octave（频率 ×2、振幅 ×0.5）；1.18 起改用官方 Xoroshiro128++ 随机源与大陆性 / 侵蚀度 / 奇异度气候噪声。柏林噪声核心与官方一致，但不含生物群系、地形样条与密度函数，仍属示意高度图，仅供挑选种子时参考。</translation>
         </message>
         <message>
             <source>复位视角</source>
@@ -2064,12 +2172,16 @@
             <translation>尺寸</translation>
         </message>
         <message>
-            <source>噪声版本</source>
-            <translation>噪声版本</translation>
+            <source>游戏版本</source>
+            <translation>游戏版本</translation>
         </message>
         <message>
             <source>当前环境未启用 QtWebEngine，将以 2D 高度图预览。</source>
             <translation>当前环境未启用 QtWebEngine，将以 2D 高度图预览。</translation>
+        </message>
+        <message>
+            <source>未找到已安装版本（按最新版噪声）</source>
+            <translation>未找到已安装版本（按最新版噪声）</translation>
         </message>
         <message>
             <source>视角</source>
@@ -2112,6 +2224,14 @@
             <translation>请先生成一次地形。</translation>
         </message>
         <message>
+            <source>新版噪声</source>
+            <translation>新版噪声</translation>
+        </message>
+        <message>
+            <source>经典噪声</source>
+            <translation>经典噪声</translation>
+        </message>
+        <message>
             <source>保存失败。</source>
             <translation>保存失败。</translation>
         </message>
@@ -2141,6 +2261,18 @@
         <message>
             <source>下载源、游戏配置与 Java 运行时管理</source>
             <translation>下载源、游戏配置与 Java 运行时管理</translation>
+        </message>
+        <message>
+            <source>常用</source>
+            <translation>常用</translation>
+        </message>
+        <message>
+            <source>显示全部</source>
+            <translation>显示全部</translation>
+        </message>
+        <message>
+            <source>常用视图只显示影响启动的关键设置，其余选项在「显示全部」中。</source>
+            <translation>常用视图只显示影响启动的关键设置，其余选项在「显示全部」中。</translation>
         </message>
         <message>
             <source>通用</source>
@@ -2231,6 +2363,10 @@
             <translation>预加载的 Java</translation>
         </message>
         <message>
+            <source>预加载 JVM 默认关闭：每次启动启动器会多一次后台预热，只在机械硬盘 / 冷启动场景收益明显。</source>
+            <translation>预加载 JVM 默认关闭：每次启动启动器会多一次后台预热，只在机械硬盘 / 冷启动场景收益明显。</translation>
+        </message>
+        <message>
             <source>启动游戏后隐藏启动器（可从托盘恢复）</source>
             <translation>启动游戏后隐藏启动器（可从托盘恢复）</translation>
         </message>
@@ -2279,6 +2415,18 @@
             <translation>缓存目录位于 {0}；清理后已下载的整合包与加载器需要重新下载。</translation>
         </message>
         <message>
+            <source>导出配置片段…</source>
+            <translation>导出配置片段…</translation>
+        </message>
+        <message>
+            <source>导入配置片段…</source>
+            <translation>导入配置片段…</translation>
+        </message>
+        <message>
+            <source>只分享内存、JVM 参数、隔离方式等启动配置，不含账号、目录与下载源；导入时会校验格式并自动钳制内存与线程数。</source>
+            <translation>只分享内存、JVM 参数、隔离方式等启动配置，不含账号、目录与下载源；导入时会校验格式并自动钳制内存与线程数。</translation>
+        </message>
+        <message>
             <source>标签页开关重启后生效；功能入口开关立即生效。</source>
             <translation>标签页开关重启后生效；功能入口开关立即生效。</translation>
         </message>
@@ -2315,6 +2463,10 @@
             <translation>背景图会随窗口缩放自动适配：窗口比例与图片不同时按「铺满 + 居中裁切」处理，侧边栏与标题栏会自动半透明，保证文字可读。</translation>
         </message>
         <message>
+            <source>动态壁纸默认关闭（未设置）：动图会持续解码占用 CPU / GPU，只有选择文件后才开始播放；低配机建议保持静态背景。</source>
+            <translation>动态壁纸默认关闭（未设置）：动图会持续解码占用 CPU / GPU，只有选择文件后才开始播放；低配机建议保持静态背景。</translation>
+        </message>
+        <message>
             <source>选择动图…</source>
             <translation>选择动图…</translation>
         </message>
@@ -2331,16 +2483,20 @@
             <translation>页面切换动画（淡入淡出）</translation>
         </message>
         <message>
-            <source>经典版（Qt，功能完整）</source>
-            <translation>经典版（Qt，功能完整）</translation>
+            <source>经典版（Qt，省内存）</source>
+            <translation>经典版（Qt，省内存）</translation>
         </message>
         <message>
-            <source>美化版（pywebview + WebView2）</source>
-            <translation>美化版（pywebview + WebView2）</translation>
+            <source>美化版（pywebview + WebView2，推荐）</source>
+            <translation>美化版（pywebview + WebView2，推荐）</translation>
         </message>
         <message>
-            <source>经典版 / 美化版可随时双向切换，两套界面共用同一套启动、下载、账号与联机内核；修改后重启启动器生效，不会丢失下载进度或设置。</source>
-            <translation>经典版 / 美化版可随时双向切换，两套界面共用同一套启动、下载、账号与联机内核；修改后重启启动器生效，不会丢失下载进度或设置。</translation>
+            <source>独立版（Electron，自带 Chromium，占用较高）</source>
+            <translation>独立版（Electron，自带 Chromium，占用较高）</translation>
+        </message>
+        <message>
+            <source>经典版 / 美化版 / 独立版可随时切换，三套界面共用同一套启动、下载、账号与联机内核；修改后重启启动器生效，不会丢失下载进度或设置。独立版自带 Chromium、不依赖 WebView2，占用更高；单文件版已内置独立版，首次切换会自动释放。</source>
+            <translation>经典版 / 美化版 / 独立版可随时切换，三套界面共用同一套启动、下载、账号与联机内核；修改后重启启动器生效，不会丢失下载进度或设置。独立版自带 Chromium、不依赖 WebView2，占用更高；单文件版已内置独立版，首次切换会自动释放。</translation>
         </message>
         <message>
             <source>经典模式（稳定 · 低占用）</source>
@@ -2495,6 +2651,10 @@
             <translation>版本隔离</translation>
         </message>
         <message>
+            <source>版本隔离默认「全部隔离」：每个版本独享 mods 与存档，避免互相干扰；只玩原版可以改成「不隔离」节省磁盘空间。</source>
+            <translation>版本隔离默认「全部隔离」：每个版本独享 mods 与存档，避免互相干扰；只玩原版可以改成「不隔离」节省磁盘空间。</translation>
+        </message>
+        <message>
             <source>游戏进程优先级</source>
             <translation>游戏进程优先级</translation>
         </message>
@@ -2523,6 +2683,10 @@
             <translation>网络代理</translation>
         </message>
         <message>
+            <source>代理默认关闭：本机直连即可下载与登录；只有网络受限或需要加速时才填写代理地址。</source>
+            <translation>代理默认关闭：本机直连即可下载与登录；只有网络受限或需要加速时才填写代理地址。</translation>
+        </message>
+        <message>
             <source>留空则自动按版本选择</source>
             <translation>留空则自动按版本选择</translation>
         </message>
@@ -2537,6 +2701,14 @@
         <message>
             <source>分配内存</source>
             <translation>分配内存</translation>
+        </message>
+        <message>
+            <source>恢复到上次能启动的配置</source>
+            <translation>恢复到上次能启动的配置</translation>
+        </message>
+        <message>
+            <source>启动成功后会自动记录内存、JVM 参数与隔离方式；改坏了可以一键退回。</source>
+            <translation>启动成功后会自动记录内存、JVM 参数与隔离方式；改坏了可以一键退回。</translation>
         </message>
         <message>
             <source>额外 JVM 参数</source>
@@ -2555,6 +2727,10 @@
             <translation>按 Java 版本与内存自动追加 Aikar 风格 G1GC 参数；已自定义 GC 参数时自动跳过。</translation>
         </message>
         <message>
+            <source>智能 JVM 默认开启：按你的 Java 与游戏版本自动调优；你手动填写 GC 参数时会自动跳过。</source>
+            <translation>智能 JVM 默认开启：按你的 Java 与游戏版本自动调优；你手动填写 GC 参数时会自动跳过。</translation>
+        </message>
+        <message>
             <source>大堆预触碰（AlwaysPreTouch，稳定内存占用）</source>
             <translation>大堆预触碰（AlwaysPreTouch，稳定内存占用）</translation>
         </message>
@@ -2563,12 +2739,20 @@
             <translation>仅在分配内存 ≥ 4 GB 时追加，启动稍慢一点，但运行中更少卡顿。</translation>
         </message>
         <message>
+            <source>预读取资源（预触碰）默认开启：只在分配内存 ≥ 4 GB 时生效，用启动时多花一点时间换取运行中更稳定的内存布局。</source>
+            <translation>预读取资源（预触碰）默认开启：只在分配内存 ≥ 4 GB 时生效，用启动时多花一点时间换取运行中更稳定的内存布局。</translation>
+        </message>
+        <message>
             <source>固定堆大小（-Xms 与 -Xmx 相同）</source>
             <translation>固定堆大小（-Xms 与 -Xmx 相同）</translation>
         </message>
         <message>
             <source>启动时一次性占满分配内存，避免运行中扩堆；内存紧张的老机器不建议开启。</source>
             <translation>启动时一次性占满分配内存，避免运行中扩堆；内存紧张的老机器不建议开启。</translation>
+        </message>
+        <message>
+            <source>固定堆大小默认关闭：启动时就会占满分配内存，内存紧张或后台程序较多时会更卡，按需开启。</source>
+            <translation>固定堆大小默认关闭：启动时就会占满分配内存，内存紧张或后台程序较多时会更卡，按需开启。</translation>
         </message>
         <message>
             <source>启动器会自动扫描系统与常见启动器目录。Java 8 → 1.16，Java 17 → 1.17–1.20.4，Java 21 → 1.20.5+</source>
@@ -2603,6 +2787,50 @@
             <translation>打开 Bilibili</translation>
         </message>
         <message>
+            <source>检查更新</source>
+            <translation>检查更新</translation>
+        </message>
+        <message>
+            <source>当前版本 v{0} · 更新源 GitHub / luohaocheng171/mikanCL</source>
+            <translation>当前版本 v{0} · 更新源 GitHub / luohaocheng171/mikanCL</translation>
+        </message>
+        <message>
+            <source>下载并更新</source>
+            <translation>下载并更新</translation>
+        </message>
+        <message>
+            <source>打开 Releases</source>
+            <translation>打开 Releases</translation>
+        </message>
+        <message>
+            <source>正在连接 GitHub 检查更新…</source>
+            <translation>正在连接 GitHub 检查更新…</translation>
+        </message>
+        <message>
+            <source>正在下载更新…</source>
+            <translation>正在下载更新…</translation>
+        </message>
+        <message>
+            <source>取消</source>
+            <translation>取消</translation>
+        </message>
+        <message>
+            <source>下载更新</source>
+            <translation>下载更新</translation>
+        </message>
+        <message>
+            <source>更新已就绪</source>
+            <translation>更新已就绪</translation>
+        </message>
+        <message>
+            <source>启动器关闭后会自动替换为新版本并重新打开。</source>
+            <translation>启动器关闭后会自动替换为新版本并重新打开。</translation>
+        </message>
+        <message>
+            <source>更新失败</source>
+            <translation>更新失败</translation>
+        </message>
+        <message>
             <source>authlib-injector 缓存：{0}（{1} KB）</source>
             <translation>authlib-injector 缓存：{0}（{1} KB）</translation>
         </message>
@@ -2615,12 +2843,90 @@
             <translation>把当前行设为默认 Java</translation>
         </message>
         <message>
+            <source>恢复配置</source>
+            <translation>恢复配置</translation>
+        </message>
+        <message>
+            <source>将内存、JVM 参数、隔离方式等启动配置恢复到上次成功启动时的状态？
+账号、数据目录与下载源不会改动。</source>
+            <translation>将内存、JVM 参数、隔离方式等启动配置恢复到上次成功启动时的状态？
+账号、数据目录与下载源不会改动。</translation>
+        </message>
+        <message>
+            <source>已恢复到上次能启动的配置（{0} 项）。</source>
+            <translation>已恢复到上次能启动的配置（{0} 项）。</translation>
+        </message>
+        <message>
+            <source>导出配置片段</source>
+            <translation>导出配置片段</translation>
+        </message>
+        <message>
+            <source>Mikan 配置片段 (*.mikan);;所有文件 (*)</source>
+            <translation>Mikan 配置片段 (*.mikan);;所有文件 (*)</translation>
+        </message>
+        <message>
+            <source>已导出配置片段：{0}</source>
+            <translation>已导出配置片段：{0}</translation>
+        </message>
+        <message>
+            <source>内存上限</source>
+            <translation>内存上限</translation>
+        </message>
+        <message>
+            <source>额外游戏参数</source>
+            <translation>额外游戏参数</translation>
+        </message>
+        <message>
+            <source>智能 JVM</source>
+            <translation>智能 JVM</translation>
+        </message>
+        <message>
+            <source>固定堆大小</source>
+            <translation>固定堆大小</translation>
+        </message>
+        <message>
+            <source>预读取资源</source>
+            <translation>预读取资源</translation>
+        </message>
+        <message>
+            <source>自动连接服务器</source>
+            <translation>自动连接服务器</translation>
+        </message>
+        <message>
+            <source>进程优先级</source>
+            <translation>进程优先级</translation>
+        </message>
+        <message>
+            <source>代理地址</source>
+            <translation>代理地址</translation>
+        </message>
+        <message>
+            <source>导入配置片段</source>
+            <translation>导入配置片段</translation>
+        </message>
+        <message>
+            <source>导入完成</source>
+            <translation>导入完成</translation>
+        </message>
+        <message>
+            <source>已导入 {0} 项：{1}</source>
+            <translation>已导入 {0} 项：{1}</translation>
+        </message>
+        <message>
             <source>目录与缓存</source>
             <translation>目录与缓存</translation>
         </message>
         <message>
             <source>打开数据/游戏目录，或清理下载与封面缓存</source>
             <translation>打开数据/游戏目录，或清理下载与封面缓存</translation>
+        </message>
+        <message>
+            <source>配置分享</source>
+            <translation>配置分享</translation>
+        </message>
+        <message>
+            <source>把影响启动的关键配置导出为 .mikan 文件，或导入他人分享的片段</source>
+            <translation>把影响启动的关键配置导出为 .mikan 文件，或导入他人分享的片段</translation>
         </message>
         <message>
             <source>标签页开关</source>
@@ -2697,6 +3003,16 @@
 仍要切换吗？（启动时会引导安装 WebView2 Runtime；若启动失败会提示是否切回经典版）</translation>
         </message>
         <message>
+            <source>未检测到独立版（Electron）。
+单文件版应已内置独立版，第一次切换会自动释放；若使用源码运行，请先运行 build_electron.py --all 生成。
+
+仍要切换吗？</source>
+            <translation>未检测到独立版（Electron）。
+单文件版应已内置独立版，第一次切换会自动释放；若使用源码运行，请先运行 build_electron.py --all 生成。
+
+仍要切换吗？</translation>
+        </message>
+        <message>
             <source>已切换到视觉增强模式。</source>
             <translation>已切换到视觉增强模式。</translation>
         </message>
@@ -2749,12 +3065,32 @@
             <translation>路径</translation>
         </message>
         <message>
+            <source>当前 v{0}，已经是最新版本（最新 v{1}）。</source>
+            <translation>当前 v{0}，已经是最新版本（最新 v{1}）。</translation>
+        </message>
+        <message>
+            <source>发现新版本 v{0}（当前 v{1}）。</source>
+            <translation>发现新版本 v{0}（当前 v{1}）。</translation>
+        </message>
+        <message>
+            <source>这个版本没有附带 exe，请到 Releases 页面手动下载。</source>
+            <translation>这个版本没有附带 exe，请到 Releases 页面手动下载。</translation>
+        </message>
+        <message>
             <source>编辑</source>
             <translation>编辑</translation>
         </message>
         <message>
             <source>测试</source>
             <translation>测试</translation>
+        </message>
+        <message>
+            <source>成功启动一次游戏后会自动记录，之后即可一键恢复</source>
+            <translation>成功启动一次游戏后会自动记录，之后即可一键恢复</translation>
+        </message>
+        <message>
+            <source>恢复到上次成功启动时的内存、JVM 参数与隔离方式</source>
+            <translation>恢复到上次成功启动时的内存、JVM 参数与隔离方式</translation>
         </message>
         <message>
             <source>该语言的翻译文件缺失，已回退中文。</source>
@@ -2769,8 +3105,48 @@
             <translation>每个版本只显示一个</translation>
         </message>
         <message>
+            <source>暂无快照</source>
+            <translation>暂无快照</translation>
+        </message>
+        <message>
+            <source>还没有成功启动记录；成功启动一次游戏后会自动保存。</source>
+            <translation>还没有成功启动记录；成功启动一次游戏后会自动保存。</translation>
+        </message>
+        <message>
+            <source>快照里没有可恢复的配置项。</source>
+            <translation>快照里没有可恢复的配置项。</translation>
+        </message>
+        <message>
+            <source>导入失败</source>
+            <translation>导入失败</translation>
+        </message>
+        <message>
+            <source>文件内容不是配置片段。</source>
+            <translation>文件内容不是配置片段。</translation>
+        </message>
+        <message>
+            <source>不是 Mikan 配置片段（format 标识不匹配）。</source>
+            <translation>不是 Mikan 配置片段（format 标识不匹配）。</translation>
+        </message>
+        <message>
+            <source>配置片段里缺少 config 字段。</source>
+            <translation>配置片段里缺少 config 字段。</translation>
+        </message>
+        <message>
+            <source>没有可导入的配置项。</source>
+            <translation>没有可导入的配置项。</translation>
+        </message>
+        <message>
             <source>线程</source>
             <translation>线程</translation>
+        </message>
+        <message>
+            <source>下载加速默认开启：只影响「下载加速」页的分段并发下载，普通下载页仍按全局线程数执行。</source>
+            <translation>下载加速默认开启：只影响「下载加速」页的分段并发下载，普通下载页仍按全局线程数执行。</translation>
+        </message>
+        <message>
+            <source>离线皮肤默认开启：离线账号也能显示本地皮肤，不需要正版账号；关闭后账号页只保留默认皮肤。</source>
+            <translation>离线皮肤默认开启：离线账号也能显示本地皮肤，不需要正版账号；关闭后账号页只保留默认皮肤。</translation>
         </message>
         <message>
             <source>已切换到主题「{0}」</source>
@@ -2789,6 +3165,46 @@
             <translation>双击一行可将其设为默认 Java。右键可切回「每个版本只显示一个」。</translation>
         </message>
         <message>
+            <source>恢复失败</source>
+            <translation>恢复失败</translation>
+        </message>
+        <message>
+            <source>保存配置失败：{0}</source>
+            <translation>保存配置失败：{0}</translation>
+        </message>
+        <message>
+            <source>导出失败</source>
+            <translation>导出失败</translation>
+        </message>
+        <message>
+            <source>无法写入文件：{0}</source>
+            <translation>无法写入文件：{0}</translation>
+        </message>
+        <message>
+            <source>版本隔离取值无效：{0}</source>
+            <translation>版本隔离取值无效：{0}</translation>
+        </message>
+        <message>
+            <source>进程优先级取值无效：{0}</source>
+            <translation>进程优先级取值无效：{0}</translation>
+        </message>
+        <message>
+            <source>无法读取文件：{0}</source>
+            <translation>无法读取文件：{0}</translation>
+        </message>
+        <message>
+            <source>文件不是有效的 JSON：{0}</source>
+            <translation>文件不是有效的 JSON：{0}</translation>
+        </message>
+        <message>
+            <source>检查更新失败</source>
+            <translation>检查更新失败</translation>
+        </message>
+        <message>
+            <source>替换失败</source>
+            <translation>替换失败</translation>
+        </message>
+        <message>
             <source>（内置）</source>
             <translation>（内置）</translation>
         </message>
@@ -2801,8 +3217,20 @@
             <translation>未设置</translation>
         </message>
         <message>
+            <source>字段 {0} 需要整数。</source>
+            <translation>字段 {0} 需要整数。</translation>
+        </message>
+        <message>
             <source>双击一行可将其设为默认 Java。已合并 {hidden} 个同版本条目，右键可查看所有 Java。</source>
             <translation>双击一行可将其设为默认 Java。已合并 {hidden} 个同版本条目，右键可查看所有 Java。</translation>
+        </message>
+        <message>
+            <source>字段 {0} 需要 true/false。</source>
+            <translation>字段 {0} 需要 true/false。</translation>
+        </message>
+        <message>
+            <source>字段 {0} 需要文本。</source>
+            <translation>字段 {0} 需要文本。</translation>
         </message>
     </context>
     <context>
@@ -3186,12 +3614,36 @@
     <context>
         <name>SkinPack</name>
         <message>
-            <source>皮肤包</source>
-            <translation>皮肤包</translation>
+            <source>已为 {0} 个版本生成 UI 材质包。</source>
+            <translation>已为 {0} 个版本生成 UI 材质包。</translation>
         </message>
         <message>
-            <source>按目标玩家 + 手臂模型 + 游戏版本打包皮肤，可分享给其他玩家；需要 CustomSkinLoader 才能只对指定玩家生效</source>
-            <translation>按目标玩家 + 手臂模型 + 游戏版本打包皮肤，可分享给其他玩家；需要 CustomSkinLoader 才能只对指定玩家生效</translation>
+            <source>皮肤包 / UI 材质包</source>
+            <translation>皮肤包 / UI 材质包</translation>
+        </message>
+        <message>
+            <source>上方「一键安装并替换旧包」可直接生成半透明毛玻璃 UI 材质包（自动识别版本）；下方按目标玩家 + 手臂模型 + 游戏版本打包皮肤，需要 CustomSkinLoader 才能只对指定玩家生效</source>
+            <translation>上方「一键安装并替换旧包」可直接生成半透明毛玻璃 UI 材质包（自动识别版本）；下方按目标玩家 + 手臂模型 + 游戏版本打包皮肤，需要 CustomSkinLoader 才能只对指定玩家生效</translation>
+        </message>
+        <message>
+            <source>安装后自动在游戏内启用（1.6.1+ 资源包）</source>
+            <translation>安装后自动在游戏内启用（1.6.1+ 资源包）</translation>
+        </message>
+        <message>
+            <source>一键安装并替换旧包</source>
+            <translation>一键安装并替换旧包</translation>
+        </message>
+        <message>
+            <source>全部版本一键替换</source>
+            <translation>全部版本一键替换</translation>
+        </message>
+        <message>
+            <source>导出 UI 包…</source>
+            <translation>导出 UI 包…</translation>
+        </message>
+        <message>
+            <source>材质取自对应版本的客户端 jar 并原位改造：按钮、输入框、滑块、背包/箱子面板与快捷栏保留原版尺寸与九宫格切图，统一换成半透明冷色磨砂（菜单按钮最透，背包面板稍保守以保证看清物品）；菜单平铺背景换成程序生成的无缝玻璃瓦片。重复安装会自动替换旧 UI 包，不会越装越多。1.0–1.5.2 生成 texturepacks 纹理包，需要在游戏「材质包」里手动选中；1.6.1+ 生成资源包并自动启用。找不到客户端 jar 时只生成玻璃背景层。</source>
+            <translation>材质取自对应版本的客户端 jar 并原位改造：按钮、输入框、滑块、背包/箱子面板与快捷栏保留原版尺寸与九宫格切图，统一换成半透明冷色磨砂（菜单按钮最透，背包面板稍保守以保证看清物品）；菜单平铺背景换成程序生成的无缝玻璃瓦片。重复安装会自动替换旧 UI 包，不会越装越多。1.0–1.5.2 生成 texturepacks 纹理包，需要在游戏「材质包」里手动选中；1.6.1+ 生成资源包并自动启用。找不到客户端 jar 时只生成玻璃背景层。</translation>
         </message>
         <message>
             <source>当前账号皮肤</source>
@@ -3320,6 +3772,52 @@
             <translation>皮肤包已导入：{0}</translation>
         </message>
         <message>
+            <source>
+未找到该版本的客户端 jar，本次只生成了玻璃背景层。</source>
+            <translation>
+未找到该版本的客户端 jar，本次只生成了玻璃背景层。</translation>
+        </message>
+        <message>
+            <source>已安装到 {0} 个目录：{1}{2}</source>
+            <translation>已安装到 {0} 个目录：{1}{2}</translation>
+        </message>
+        <message>
+            <source>UI 材质包已生成：
+{0}
+版本：{1}（{2}）{3}</source>
+            <translation>UI 材质包已生成：
+{0}
+版本：{1}（{2}）{3}</translation>
+        </message>
+        <message>
+            <source> 失败：{0}</source>
+            <translation> 失败：{0}</translation>
+        </message>
+        <message>
+            <source>保存 UI 材质包</source>
+            <translation>保存 UI 材质包</translation>
+        </message>
+        <message>
+            <source>UI 材质包已导出：
+{0}
+适配版本：{1}</source>
+            <translation>UI 材质包已导出：
+{0}
+适配版本：{1}</translation>
+        </message>
+        <message>
+            <source>半透明毛玻璃 UI 材质包</source>
+            <translation>半透明毛玻璃 UI 材质包</translation>
+        </message>
+        <message>
+            <source>一键安装并替换旧包 · 自动识别版本，按钮 / 面板 / 快捷栏统一磨砂半透明</source>
+            <translation>一键安装并替换旧包 · 自动识别版本，按钮 / 面板 / 快捷栏统一磨砂半透明</translation>
+        </message>
+        <message>
+            <source>适配版本</source>
+            <translation>适配版本</translation>
+        </message>
+        <message>
             <source>生成皮肤包</source>
             <translation>生成皮肤包</translation>
         </message>
@@ -3342,10 +3840,6 @@
         <message>
             <source>披风（可选）</source>
             <translation>披风（可选）</translation>
-        </message>
-        <message>
-            <source>适配版本</source>
-            <translation>适配版本</translation>
         </message>
         <message>
             <source>导入皮肤包</source>
@@ -3374,6 +3868,10 @@
         <message>
             <source>皮肤包里没有玩家名，请输入要应用到的玩家名：</source>
             <translation>皮肤包里没有玩家名，请输入要应用到的玩家名：</translation>
+        </message>
+        <message>
+            <source>没有检测到已安装的游戏版本。</source>
+            <translation>没有检测到已安装的游戏版本。</translation>
         </message>
         <message>
             <source>请选择这张皮肤的手臂模型（导入后会按此模型打包）：</source>

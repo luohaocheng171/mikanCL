@@ -10,11 +10,12 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QThread, QUrl, Qt, Signal
+from PySide6.QtCore import QThread, QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -26,8 +27,10 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QInputDialog,
     QLabel,
+    QLayout,
     QLineEdit,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QSlider,
     QSpinBox,
@@ -44,10 +47,10 @@ from ..config import (
     AFTER_LAUNCH_ACTIONS,
     CACHE_DIR,
     DATA_DIR,
-    EXE_PATH,
     FEATURE_PAGE_KEYS,
     ISOLATION_LABELS,
-    IS_PACKAGED,
+    LAUNCH_CONFIG_FIELDS,
+    LAUNCH_CONFIG_FORMAT,
     PROCESS_PRIORITIES,
     SOURCE_MAPPINGS,
     DownloadSource,
@@ -71,6 +74,48 @@ class TestSourceWorker(QThread):
     def run(self) -> None:
         ok, message = test_source(self.source)
         self.done.emit(self.source.name, ok, message)
+
+
+class UpdateCheckWorker(QThread):
+    """检查 GitHub 更新；network 失败也要给出可读结果，不能抛到界面线程。"""
+
+    done = Signal(dict)
+
+    def run(self) -> None:
+        try:
+            from ..update import check_update
+
+            info = check_update()
+        except Exception as exc:  # noqa: BLE001 - 检查更新失败只提示，不影响启动器
+            info = {"ok": False, "message": f"检查更新失败：{exc}", "has_update": False}
+        self.done.emit(info or {"ok": False, "message": "检查更新失败", "has_update": False})
+
+
+class UpdateDownloadWorker(QThread):
+    """下载更新包；完成后交给批处理替换自身。"""
+
+    progress = Signal(float, str)
+    done = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, info: dict, parent=None):
+        super().__init__(parent)
+        self.info = dict(info or {})
+
+    def run(self) -> None:
+        try:
+            from ..update import download_update
+
+            path = download_update(
+                self.info,
+                progress=lambda percent, done, total: self.progress.emit(
+                    float(percent or 0),
+                    (f"{done // 1024} / {total // 1024} KB" if total else "正在下载更新…"),
+                ),
+            )
+            self.done.emit(path)
+        except Exception as exc:  # noqa: BLE001 - 统一转成可读错误
+            self.failed.emit(str(exc))
 
 
 class JavaDownloadWorker(QThread):
@@ -228,6 +273,10 @@ class SettingsPage(QWidget):
         self._test_worker: TestSourceWorker | None = None
         self._rescan_worker: RescanJavaWorker | None = None
         self._java_download_worker: JavaDownloadWorker | None = None
+        # 「常用 / 显示全部」视图：只在显示全部时出现的控件与标签页
+        self._advanced_widgets: list[QWidget] = []
+        self._advanced_tabs: set[QWidget] = set()
+        self._settings_view_common = True
         self._build()
         _trace("settings: _build done")
         self._connect()
@@ -249,26 +298,114 @@ class SettingsPage(QWidget):
         )
         outer.addWidget(header)
 
+        view_row = QHBoxLayout()
+        view_row.setSpacing(6)
+        self.view_common_btn = QPushButton(self.tr("常用"))
+        self.view_common_btn.setObjectName("Chip")
+        self.view_common_btn.setCheckable(True)
+        self.view_common_btn.setChecked(True)
+        self.view_all_btn = QPushButton(self.tr("显示全部"))
+        self.view_all_btn.setObjectName("Chip")
+        self.view_all_btn.setCheckable(True)
+        self.view_group = QButtonGroup(self)
+        self.view_group.setExclusive(True)
+        self.view_group.addButton(self.view_common_btn)
+        self.view_group.addButton(self.view_all_btn)
+        self.view_common_btn.clicked.connect(lambda: self._set_settings_view(True))
+        self.view_all_btn.clicked.connect(lambda: self._set_settings_view(False))
+        view_row.addWidget(self.view_common_btn)
+        view_row.addWidget(self.view_all_btn)
+        view_hint = QLabel(
+            self.tr("常用视图只显示影响启动的关键设置，其余选项在「显示全部」中。")
+        )
+        view_hint.setObjectName("Tiny")
+        view_row.addWidget(view_hint, 1)
+        outer.addLayout(view_row)
+
         self.tabs = QTabWidget()
         outer.addWidget(self.tabs, 1)
         self.tabs.insertTab(0, scroll_page(self._build_general_tab()), self.tr("通用"))
         _trace("settings: tab general")
-        self.tabs.insertTab(1, scroll_page(self._build_features_tab()), self.tr("功能开关"))
+        features_tab = scroll_page(self._build_features_tab())
+        self.tabs.insertTab(1, features_tab, self.tr("功能开关"))
+        self._advanced_tabs.add(features_tab)
         _trace("settings: tab features")
         self.tabs.insertTab(2, scroll_page(self._build_appearance_tab()), self.tr("外观"))
         _trace("settings: tab appearance")
-        self.tabs.addTab(self._build_sources_tab(), self.tr("下载源"))
+        sources_tab = self._build_sources_tab()
+        self.tabs.addTab(sources_tab, self.tr("下载源"))
+        self._advanced_tabs.add(sources_tab)
         _trace("settings: tab sources")
-        self.tabs.addTab(scroll_page(self._build_content_tab()), self.tr("内容源与镜像"))
+        content_tab = scroll_page(self._build_content_tab())
+        self.tabs.addTab(content_tab, self.tr("内容源与镜像"))
+        self._advanced_tabs.add(content_tab)
         _trace("settings: tab content")
-        self.tabs.addTab(scroll_page(self._build_auth_tab()), self.tr("账号与登录"))
+        auth_tab = scroll_page(self._build_auth_tab())
+        self.tabs.addTab(auth_tab, self.tr("账号与登录"))
+        self._advanced_tabs.add(auth_tab)
         _trace("settings: tab auth")
         self.tabs.addTab(scroll_page(self._build_game_tab()), self.tr("游戏设置"))
         _trace("settings: tab game")
-        self.tabs.addTab(self._build_java_tab(), self.tr("Java 运行时"))
+        java_tab = self._build_java_tab()
+        self.tabs.addTab(java_tab, self.tr("Java 运行时"))
+        self._advanced_tabs.add(java_tab)
         _trace("settings: tab java")
-        self.tabs.addTab(scroll_page(self._build_about_tab()), self.tr("关于"))
+        about_tab = scroll_page(self._build_about_tab())
+        self.tabs.addTab(about_tab, self.tr("关于"))
+        self._advanced_tabs.add(about_tab)
         _trace("settings: tab about")
+        self._set_settings_view(True)
+
+    # ------------------------------------------------------------------
+    # 「常用 / 显示全部」视图：只隐藏控件，不销毁重建，滚动区域高度自动收敛
+    def _mark_advanced(self, *items) -> None:
+        """标记只在「显示全部」中出现的控件或分组。"""
+        for item in items:
+            if isinstance(item, QWidget):
+                if isinstance(item, QLabel) and not item.text():
+                    continue
+                self._advanced_widgets.append(item)
+            elif isinstance(item, QLayout):
+                for index in range(item.count()):
+                    child = item.itemAt(index)
+                    if child is None:
+                        continue
+                    if child.widget() is not None:
+                        self._mark_advanced(child.widget())
+                    elif child.layout() is not None:
+                        self._mark_advanced(child.layout())
+
+    def _mark_advanced_row(self, form: QFormLayout) -> None:
+        """把表单刚添加的一行（标签 + 字段）标记为「显示全部」才出现。"""
+        row = form.rowCount() - 1
+        if row < 0:
+            return
+        for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
+            item = form.itemAt(row, role)
+            if item is None:
+                continue
+            widget = item.widget()
+            if widget is not None:
+                if isinstance(widget, QLabel) and not widget.text():
+                    continue
+                self._advanced_widgets.append(widget)
+            elif item.layout() is not None:
+                self._mark_advanced(item.layout())
+
+    def _set_settings_view(self, common: bool) -> None:
+        self._settings_view_common = bool(common)
+        for widget in self._advanced_widgets:
+            widget.setVisible(not common)
+        for index in range(self.tabs.count()):
+            page = self.tabs.widget(index)
+            self.tabs.setTabVisible(index, not (common and page in self._advanced_tabs))
+        self.view_common_btn.setChecked(common)
+        self.view_all_btn.setChecked(not common)
+        if common and self.tabs.widget(self.tabs.currentIndex()) in self._advanced_tabs:
+            for index in range(self.tabs.count()):
+                if self.tabs.isTabVisible(index):
+                    self.tabs.setCurrentIndex(index)
+                    break
 
     def _build_general_tab(self) -> QWidget:
         _trace("gt: entry")
@@ -285,6 +422,7 @@ class SettingsPage(QWidget):
 
         self.tray_check = QCheckBox(self.tr("关闭窗口时最小化到托盘（可从托盘恢复）"))
         form.addRow("", self.tray_check)
+        self._mark_advanced_row(form)
 
         self.language_combo = QComboBox()
         for code, name in SUPPORTED_LANGUAGES.items():
@@ -331,6 +469,7 @@ class SettingsPage(QWidget):
             self.tr("全局带宽上限，边下载边看视频时可设为 1024 左右；0 表示不限速。")
         )
         form.addRow(self.tr("下载限速"), self.speed_limit_spin)
+        self._mark_advanced_row(form)
 
         self.preload_check = QCheckBox(self.tr("预加载 JVM（实验性）"))
         self.preload_check.setToolTip(
@@ -340,10 +479,22 @@ class SettingsPage(QWidget):
             )
         )
         form.addRow("", self.preload_check)
+        self._mark_advanced_row(form)
         self.preload_java_combo = QComboBox()
         self.preload_java_combo.setMinimumWidth(220)
         self.preload_check.toggled.connect(self.preload_java_combo.setEnabled)
         form.addRow(self.tr("预加载的 Java"), self.preload_java_combo)
+        self._mark_advanced_row(form)
+        preload_hint = QLabel(
+            self.tr(
+                "预加载 JVM 默认关闭：每次启动启动器会多一次后台预热，"
+                "只在机械硬盘 / 冷启动场景收益明显。"
+            )
+        )
+        preload_hint.setObjectName("Tiny")
+        preload_hint.setWordWrap(True)
+        form.addRow("", preload_hint)
+        self._mark_advanced_row(form)
         _trace("gt: preload row")
 
         self.general_hide_check = QCheckBox(self.tr("启动游戏后隐藏启动器（可从托盘恢复）"))
@@ -351,6 +502,7 @@ class SettingsPage(QWidget):
 
         self.start_anim_check = QCheckBox(self.tr("启动游戏时显示启动动画"))
         form.addRow("", self.start_anim_check)
+        self._mark_advanced_row(form)
         _trace("gt: all form rows")
 
         card.body.addLayout(form)
@@ -427,8 +579,40 @@ class SettingsPage(QWidget):
         path_hint.setWordWrap(True)
         paths_card.body.addWidget(path_hint)
         layout.addWidget(paths_card)
-        layout.addStretch(1)
+        self._mark_advanced(paths_card)
         _trace("gt: paths card added")
+
+        share_card = Card(margins=20, spacing=10)
+        share_card.body.addWidget(
+            card_title_row(
+                self.tr("配置分享"),
+                self.tr("把影响启动的关键配置导出为 .mikan 文件，或导入他人分享的片段"),
+            )
+        )
+        share_row = QHBoxLayout()
+        share_row.setSpacing(8)
+        export_fragment = QPushButton(self.tr("导出配置片段…"))
+        export_fragment.clicked.connect(self._export_config_fragment)
+        share_row.addWidget(export_fragment)
+        import_fragment = QPushButton(self.tr("导入配置片段…"))
+        import_fragment.setObjectName("Ghost")
+        import_fragment.clicked.connect(self._import_config_fragment)
+        share_row.addWidget(import_fragment)
+        share_row.addStretch(1)
+        share_card.body.addLayout(share_row)
+        share_hint = QLabel(
+            self.tr(
+                "只分享内存、JVM 参数、隔离方式等启动配置，不含账号、目录与下载源；"
+                "导入时会校验格式并自动钳制内存与线程数。"
+            )
+        )
+        share_hint.setObjectName("Tiny")
+        share_hint.setWordWrap(True)
+        share_card.body.addWidget(share_hint)
+        layout.addWidget(share_card)
+        self._mark_advanced(share_card)
+        layout.addStretch(1)
+        _trace("gt: share card added")
         return page
 
     # ------------------------------------------------------------------
@@ -482,6 +666,16 @@ class SettingsPage(QWidget):
             )
             pages_card.body.addWidget(check)
             self._feature_checks[key] = check
+            if key == "download_accel":
+                hint = QLabel(
+                    self.tr(
+                        "下载加速默认开启：只影响「下载加速」页的分段并发下载，"
+                        "普通下载页仍按全局线程数执行。"
+                    )
+                )
+                hint.setObjectName("Tiny")
+                hint.setWordWrap(True)
+                pages_card.body.addWidget(hint)
         layout.addWidget(pages_card)
 
         func_card = Card(margins=20, spacing=10)
@@ -502,6 +696,16 @@ class SettingsPage(QWidget):
             )
             func_card.body.addWidget(check)
             self._feature_checks[key] = check
+            if key == "offline_skin":
+                hint = QLabel(
+                    self.tr(
+                        "离线皮肤默认开启：离线账号也能显示本地皮肤，"
+                        "不需要正版账号；关闭后账号页只保留默认皮肤。"
+                    )
+                )
+                hint.setObjectName("Tiny")
+                hint.setWordWrap(True)
+                func_card.body.addWidget(hint)
         layout.addWidget(func_card)
 
         restart_row = QHBoxLayout()
@@ -627,6 +831,15 @@ class SettingsPage(QWidget):
         self.dynamic_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         card.body.addWidget(QLabel(self.tr("动态壁纸（GIF / WebP 动图）")))
         card.body.addWidget(self.dynamic_label)
+        dynamic_default_hint = QLabel(
+            self.tr(
+                "动态壁纸默认关闭（未设置）：动图会持续解码占用 CPU / GPU，"
+                "只有选择文件后才开始播放；低配机建议保持静态背景。"
+            )
+        )
+        dynamic_default_hint.setObjectName("Tiny")
+        dynamic_default_hint.setWordWrap(True)
+        card.body.addWidget(dynamic_default_hint)
         dynamic_row = QHBoxLayout()
         pick_dynamic = QPushButton(self.tr("选择动图…"))
         pick_dynamic.clicked.connect(self._pick_dynamic_wallpaper)
@@ -663,16 +876,18 @@ class SettingsPage(QWidget):
         frame_row.setSpacing(10)
         frame_row.addWidget(QLabel(self.tr("界面框架")))
         self.frame_combo = QComboBox()
-        self.frame_combo.addItem(self.tr("经典版（Qt，功能完整）"), "classic")
-        self.frame_combo.addItem(self.tr("美化版（pywebview + WebView2）"), "webview")
-        self.frame_combo.setCurrentIndex(0 if self.ctx.config.frame_mode == "classic" else 1)
+        self.frame_combo.addItem(self.tr("经典版（Qt，省内存）"), "classic")
+        self.frame_combo.addItem(self.tr("美化版（pywebview + WebView2，推荐）"), "webview")
+        self.frame_combo.addItem(self.tr("独立版（Electron，自带 Chromium，占用较高）"), "electron")
+        self.frame_combo.setCurrentIndex(self._frame_index(self.ctx.config.frame_mode))
         self.frame_combo.currentIndexChanged.connect(self._on_frame_mode_changed)
         frame_row.addWidget(self.frame_combo, 1)
         effects_card.body.addLayout(frame_row)
         frame_hint = QLabel(
             self.tr(
-                "经典版 / 美化版可随时双向切换，两套界面共用同一套启动、下载、账号与联机内核；"
+                "经典版 / 美化版 / 独立版可随时切换，三套界面共用同一套启动、下载、账号与联机内核；"
                 "修改后重启启动器生效，不会丢失下载进度或设置。"
+                "独立版自带 Chromium、不依赖 WebView2，占用更高；单文件版已内置独立版，首次切换会自动释放。"
             )
         )
         frame_hint.setObjectName("Tiny")
@@ -717,6 +932,7 @@ class SettingsPage(QWidget):
         effects_hint.setWordWrap(True)
         effects_card.body.addWidget(effects_hint)
         layout.addWidget(effects_card)
+        self._mark_advanced(effects_card)
 
         layout.addStretch(1)
         return page
@@ -745,8 +961,13 @@ class SettingsPage(QWidget):
         cfg.save()
         self.ctx.bus.config_changed.emit()
 
+    @staticmethod
+    def _frame_index(mode: str) -> int:
+        return {"classic": 0, "webview": 1, "electron": 2}.get(str(mode or ""), 1)
+
     def _on_frame_mode_changed(self, index: int) -> None:
-        """经典 Qt / 美化 pywebview 双向切换：重启后生效。"""
+        """经典 Qt / 美化 pywebview / 独立 Electron 三向切换：重启后生效。"""
+        from ..electron_launcher import electron_installed
         from .dialog_frame import webview2_installed
 
         cfg = self.ctx.config
@@ -765,7 +986,23 @@ class SettingsPage(QWidget):
             )
             if answer != QMessageBox.Yes:
                 self.frame_combo.blockSignals(True)
-                self.frame_combo.setCurrentIndex(0 if cfg.frame_mode == "classic" else 1)
+                self.frame_combo.setCurrentIndex(self._frame_index(cfg.frame_mode))
+                self.frame_combo.blockSignals(False)
+                return
+        if mode == "electron" and not electron_installed():
+            answer = QMessageBox.question(
+                self,
+                APP_NAME,
+                self.tr(
+                    "未检测到独立版（Electron）。\n"
+                    "单文件版应已内置独立版，第一次切换会自动释放；"
+                    "若使用源码运行，请先运行 build_electron.py --all 生成。\n\n"
+                    "仍要切换吗？"
+                ),
+            )
+            if answer != QMessageBox.Yes:
+                self.frame_combo.blockSignals(True)
+                self.frame_combo.setCurrentIndex(self._frame_index(cfg.frame_mode))
                 self.frame_combo.blockSignals(False)
                 return
         cfg.frame_mode = mode
@@ -1155,6 +1392,7 @@ class SettingsPage(QWidget):
         import_launcher.clicked.connect(self._open_launcher_import)
         launch_import_row.addWidget(import_launcher)
         form.addRow(self.tr("导入配置"), launch_import_row)
+        self._mark_advanced_row(form)
 
         self.isolation_combo = QComboBox()
         for key, label in ISOLATION_LABELS.items():
@@ -1162,12 +1400,22 @@ class SettingsPage(QWidget):
         self.isolation_combo.setToolTip(self.tr("按版本隔离模组或存档，可避免不同版本互相干扰"))
         self.isolation_combo.currentIndexChanged.connect(self._on_isolation_changed)
         form.addRow(self.tr("版本隔离"), self.isolation_combo)
+        isolation_hint = QLabel(
+            self.tr(
+                "版本隔离默认「全部隔离」：每个版本独享 mods 与存档，避免互相干扰；"
+                "只玩原版可以改成「不隔离」节省磁盘空间。"
+            )
+        )
+        isolation_hint.setObjectName("Tiny")
+        isolation_hint.setWordWrap(True)
+        form.addRow("", isolation_hint)
 
         self.priority_combo = QComboBox()
         for key, label in PROCESS_PRIORITIES.items():
             self.priority_combo.addItem(self.tr(label), key)
         self.priority_combo.currentIndexChanged.connect(self._on_priority_changed)
         form.addRow(self.tr("游戏进程优先级"), self.priority_combo)
+        self._mark_advanced_row(form)
 
         self.after_launch_combo = QComboBox()
         for key, label in AFTER_LAUNCH_ACTIONS.items():
@@ -1179,6 +1427,7 @@ class SettingsPage(QWidget):
         self.window_title_edit.setPlaceholderText(self.tr("留空则使用游戏默认标题"))
         self.window_title_edit.editingFinished.connect(self._on_window_title_changed)
         form.addRow(self.tr("游戏窗口标题"), self.window_title_edit)
+        self._mark_advanced_row(form)
 
         proxy_row = QHBoxLayout()
         proxy_row.setSpacing(8)
@@ -1193,6 +1442,14 @@ class SettingsPage(QWidget):
         self.proxy_jvm_check.toggled.connect(self._on_proxy_changed)
         proxy_row.addWidget(self.proxy_jvm_check)
         form.addRow(self.tr("网络代理"), proxy_row)
+        proxy_hint = QLabel(
+            self.tr(
+                "代理默认关闭：本机直连即可下载与登录；只有网络受限或需要加速时才填写代理地址。"
+            )
+        )
+        proxy_hint.setObjectName("Tiny")
+        proxy_hint.setWordWrap(True)
+        form.addRow("", proxy_hint)
 
         self.java_path_edit = QLineEdit()
         self.java_path_edit.setPlaceholderText(self.tr("留空则自动按版本选择"))
@@ -1211,14 +1468,32 @@ class SettingsPage(QWidget):
         self.memory_spin.valueChanged.connect(self._on_memory_changed)
         form.addRow(self.tr("分配内存"), self.memory_spin)
 
+        restore_row = QHBoxLayout()
+        restore_row.setSpacing(8)
+        self.restore_good_button = QPushButton(
+            self.tr("恢复到上次能启动的配置")
+        )
+        self.restore_good_button.setObjectName("Ghost")
+        self.restore_good_button.clicked.connect(self._restore_last_good_config)
+        restore_row.addWidget(self.restore_good_button)
+        restore_hint = QLabel(
+            self.tr("启动成功后会自动记录内存、JVM 参数与隔离方式；改坏了可以一键退回。")
+        )
+        restore_hint.setObjectName("Tiny")
+        restore_hint.setWordWrap(True)
+        restore_row.addWidget(restore_hint, 1)
+        form.addRow("", restore_row)
+
         self.jvm_edit = QLineEdit()
         self.jvm_edit.setPlaceholderText("如 -Dfile.encoding=UTF-8 -XX:+UseG1GC")
         self.jvm_edit.editingFinished.connect(self._on_jvm_changed)
         form.addRow(self.tr("额外 JVM 参数"), self.jvm_edit)
+        self._mark_advanced_row(form)
 
         self.keep_check = QCheckBox(self.tr("游戏退出后保持启动器窗口打开"))
         self.keep_check.toggled.connect(self._on_keep_changed)
         form.addRow("", self.keep_check)
+        self._mark_advanced_row(form)
 
         card.body.addLayout(form)
         note = QLabel(
@@ -1246,6 +1521,15 @@ class SettingsPage(QWidget):
         )
         self.smart_jvm_check.toggled.connect(self._on_optimization_changed)
         opt_card.body.addWidget(self.smart_jvm_check)
+        smart_hint = QLabel(
+            self.tr(
+                "智能 JVM 默认开启：按你的 Java 与游戏版本自动调优；"
+                "你手动填写 GC 参数时会自动跳过。"
+            )
+        )
+        smart_hint.setObjectName("Tiny")
+        smart_hint.setWordWrap(True)
+        opt_card.body.addWidget(smart_hint)
 
         self.opt_pretouch_check = QCheckBox(
             self.tr("大堆预触碰（AlwaysPreTouch，稳定内存占用）")
@@ -1255,6 +1539,16 @@ class SettingsPage(QWidget):
         )
         self.opt_pretouch_check.toggled.connect(self._on_optimization_changed)
         opt_card.body.addWidget(self.opt_pretouch_check)
+        pretouch_hint = QLabel(
+            self.tr(
+                "预读取资源（预触碰）默认开启：只在分配内存 ≥ 4 GB 时生效，"
+                "用启动时多花一点时间换取运行中更稳定的内存布局。"
+            )
+        )
+        pretouch_hint.setObjectName("Tiny")
+        pretouch_hint.setWordWrap(True)
+        opt_card.body.addWidget(pretouch_hint)
+        self._mark_advanced(self.opt_pretouch_check, pretouch_hint)
 
         self.opt_fixed_heap_check = QCheckBox(
             self.tr("固定堆大小（-Xms 与 -Xmx 相同）")
@@ -1264,6 +1558,16 @@ class SettingsPage(QWidget):
         )
         self.opt_fixed_heap_check.toggled.connect(self._on_optimization_changed)
         opt_card.body.addWidget(self.opt_fixed_heap_check)
+        fixed_heap_hint = QLabel(
+            self.tr(
+                "固定堆大小默认关闭：启动时就会占满分配内存，"
+                "内存紧张或后台程序较多时会更卡，按需开启。"
+            )
+        )
+        fixed_heap_hint.setObjectName("Tiny")
+        fixed_heap_hint.setWordWrap(True)
+        opt_card.body.addWidget(fixed_heap_hint)
+        self._mark_advanced(self.opt_fixed_heap_check, fixed_heap_hint)
 
         opt_hint = QLabel(
             "这些开关只影响启动参数，不改动游戏内的画面设置。\n"
@@ -1413,8 +1717,135 @@ class SettingsPage(QWidget):
         agree_row.addStretch(1)
         agree_card.body.addLayout(agree_row)
         layout.addWidget(agree_card)
+
+        # 检查更新：更新源固定为 GitHub 仓库 luohaocheng171/mikanCL
+        update_card = Card(margins=20, spacing=10)
+        update_title = QLabel(self.tr("检查更新"))
+        update_title.setStyleSheet("font-size: 15px; font-weight: 700;")
+        update_card.body.addWidget(update_title)
+        self.update_status = QLabel(
+            self.tr("当前版本 v{0} · 更新源 GitHub / luohaocheng171/mikanCL", APP_VERSION)
+        )
+        self.update_status.setObjectName("Tiny")
+        self.update_status.setWordWrap(True)
+        update_card.body.addWidget(self.update_status)
+        update_row = QHBoxLayout()
+        self.update_button = QPushButton(self.tr("检查更新"))
+        self.update_button.setObjectName("GhostCompact")
+        self.update_button.setFixedHeight(34)
+        self.update_button.clicked.connect(self._check_update)
+        update_row.addWidget(self.update_button)
+        self.update_download_button = QPushButton(self.tr("下载并更新"))
+        self.update_download_button.setFixedHeight(34)
+        self.update_download_button.setVisible(False)
+        self.update_download_button.clicked.connect(self._download_update)
+        update_row.addWidget(self.update_download_button)
+        repo = QPushButton(self.tr("打开 Releases"))
+        repo.setObjectName("GhostCompact")
+        repo.setFixedHeight(34)
+        repo.clicked.connect(
+            lambda: self.ctx.bus.open_browser.emit(
+                "https://github.com/luohaocheng171/mikanCL/releases"
+            )
+        )
+        update_row.addWidget(repo)
+        update_row.addStretch(1)
+        update_card.body.addLayout(update_row)
+        layout.addWidget(update_card)
         layout.addStretch(1)
         return page
+
+    def _check_update(self) -> None:
+        if getattr(self, "update_worker", None) is not None and self.update_worker.isRunning():
+            return
+        self.update_button.setEnabled(False)
+        self.update_status.setText(self.tr("正在连接 GitHub 检查更新…"))
+        worker = UpdateCheckWorker(self)
+        worker.done.connect(self._on_update_checked)
+        worker.finished.connect(lambda: self.update_button.setEnabled(True))
+        self.update_worker = worker
+        worker.start()
+
+    def _on_update_checked(self, info: dict) -> None:
+        info = info or {}
+        if not info.get("ok"):
+            self.update_status.setText(str(info.get("message") or self.tr("检查更新失败")))
+            return
+        latest = str(info.get("tag") or "")
+        if not info.get("has_update"):
+            self.update_status.setText(
+                self.tr("当前 v{0}，已经是最新版本（最新 v{1}）。", APP_VERSION, latest)
+            )
+            self.update_download_button.setVisible(False)
+            return
+        notes = str(info.get("notes") or "").strip()
+        self.update_status.setText(
+            self.tr("发现新版本 v{0}（当前 v{1}）。", latest, APP_VERSION)
+            + ("\n" + notes[:400] if notes else "")
+        )
+        self.current_update_info = info
+        self.update_download_button.setVisible(bool(info.get("downloadable")))
+        if not info.get("downloadable"):
+            QMessageBox.information(
+                self,
+                self.tr("检查更新"),
+                self.tr("这个版本没有附带 exe，请到 Releases 页面手动下载。"),
+            )
+
+    def _download_update(self) -> None:
+        info = getattr(self, "current_update_info", None)
+        if not info:
+            return
+        if getattr(self, "update_download_worker", None) is not None and self.update_download_worker.isRunning():
+            return
+        dialog = QProgressDialog(self.tr("正在下载更新…"), self.tr("取消"), 0, 100, self)
+        dialog.setWindowTitle(self.tr("下载更新"))
+        dialog.setWindowModality(Qt.WindowModal)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.setValue(0)
+        self.update_progress = dialog
+        worker = UpdateDownloadWorker(info, self)
+        worker.progress.connect(
+            lambda percent, detail: (
+                dialog.setValue(int(max(0.0, min(100.0, percent)))),
+                dialog.setLabelText(str(detail or self.tr("正在下载更新…"))),
+            )
+        )
+        worker.done.connect(self._on_update_downloaded)
+        worker.failed.connect(self._on_update_failed)
+        worker.finished.connect(dialog.close)
+        self.update_download_worker = worker
+        worker.start()
+
+    def _on_update_downloaded(self, path) -> None:
+        from ..update import apply_update
+
+        result = apply_update(path)
+        if not result.get("ok"):
+            self._on_update_failed(str(result.get("message") or self.tr("替换失败")))
+            return
+        self.update_status.setText(str(result.get("message") or ""))
+        QMessageBox.information(
+            self,
+            self.tr("更新已就绪"),
+            self.tr("启动器关闭后会自动替换为新版本并重新打开。"),
+        )
+        window = self.window()
+        if window is not None:
+            try:
+                setattr(window, "_force_quit", True)
+                from PySide6.QtCore import QTimer
+
+                QTimer.singleShot(1200, window.close)
+            except (RuntimeError, AttributeError):
+                pass
+
+    def _on_update_failed(self, message: str) -> None:
+        if getattr(self, "update_progress", None) is not None:
+            self.update_progress.close()
+        self.update_status.setText(str(message or self.tr("更新失败")))
+        QMessageBox.warning(self, self.tr("更新失败"), str(message or self.tr("更新失败")))
 
     def _view_agreement(self) -> None:
         from .dialog_agreement import AgreementDialog
@@ -1683,6 +2114,13 @@ class SettingsPage(QWidget):
         self.language_combo.blockSignals(False)
         self._sync_appearance()
         self.authlib_path_label.setText(self._authlib_path_text())
+        has_snapshot = bool(cfg.last_good_config)
+        self.restore_good_button.setEnabled(has_snapshot)
+        self.restore_good_button.setToolTip(
+            self.tr("成功启动一次游戏后会自动记录，之后即可一键恢复")
+            if not has_snapshot
+            else self.tr("恢复到上次成功启动时的内存、JVM 参数与隔离方式")
+        )
 
     def _rebuild_preload_java(self) -> None:
         combo = self.preload_java_combo
@@ -1730,26 +2168,16 @@ class SettingsPage(QWidget):
     def _restart_launcher(self) -> None:
         # 必须先释放单实例锁，否则新进程会 attach 成功并判定为「已经在运行中」而直接退出
         from ..main import release_single_instance
+        from ..relaunch import spawn_restart
 
-        # 源码运行时 sys.argv[0] 是脚本路径（python run.py），必须带上；打包后 sys.argv[0] 是 exe 自身
-        if IS_PACKAGED:
-            args = sys.argv[1:]
-            cwd = str(EXE_PATH.parent)
-        else:
-            script = Path(sys.argv[0]).resolve()
-            args = [str(script), *sys.argv[1:]]
-            cwd = str(script.parent)
         release_single_instance()
-        # PyInstaller onefile 用环境变量把解包目录传给子进程；若被新实例继承，
-        # 新实例会复用旧临时目录，旧进程退出时清理失败并弹出警告框，因此临时清除。
-        inherited = {}
-        for key in ("_MEIPASS", "_PYI_PARENT_PROCESS_LEVEL", "_PYI_ARCHIVE_FILE"):
-            if key in os.environ:
-                inherited[key] = os.environ.pop(key)
-        try:
-            QProcess.startDetached(str(EXE_PATH), args, cwd)
-        finally:
-            os.environ.update(inherited)
+        # relaunch 会清掉 PyInstaller onefile 的 _PYI_* 环境变量：这些变量被新实例
+        # 继承后会让它复用旧进程已经删除的 _MEI 解包目录，启动时直接报
+        # 「Failed to load Python DLL ... python315.dll」。
+        if not spawn_restart():
+            QMessageBox.warning(self, APP_NAME, "重启失败，请手动重新打开启动器。")
+            return
+        QApplication.quit()
         QApplication.quit()
 
     def _on_detect_memory(self) -> None:
@@ -2217,6 +2645,215 @@ class SettingsPage(QWidget):
     def _ctx_save(self) -> None:
         self.ctx.config.save_debounced()
         self.ctx.bus.config_changed.emit()
+
+    # ------------------------------------------------------------------
+    # 启动配置快照 / .mikan 配置片段分享
+    def _restore_last_good_config(self) -> None:
+        cfg = self.ctx.config
+        snapshot = cfg.last_good_config
+        if not isinstance(snapshot, dict) or not snapshot:
+            QMessageBox.information(
+                self,
+                self.tr("暂无快照"),
+                self.tr("还没有成功启动记录；成功启动一次游戏后会自动保存。"),
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            self.tr("恢复配置"),
+            self.tr(
+                "将内存、JVM 参数、隔离方式等启动配置恢复到上次成功启动时的状态？\n"
+                "账号、数据目录与下载源不会改动。"
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            applied = cfg.apply_launch_config(snapshot)
+            cfg.save()
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                self.tr("恢复失败"),
+                t("SettingsPage", "保存配置失败：{0}", exc),
+            )
+            return
+        if not applied:
+            QMessageBox.information(
+                self, self.tr("恢复配置"), self.tr("快照里没有可恢复的配置项。")
+            )
+            return
+        self.ctx.bus.config_changed.emit()
+        self.ctx.bus.toast.emit(
+            t("SettingsPage", "已恢复到上次能启动的配置（{0} 项）。", len(applied))
+        )
+
+    def _export_config_fragment(self) -> None:
+        default_name = f"mikan-config-{time.strftime('%Y%m%d')}.mikan"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            self.tr("导出配置片段"),
+            str(Path.home() / default_name),
+            self.tr("Mikan 配置片段 (*.mikan);;所有文件 (*)"),
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".mikan"):
+            path += ".mikan"
+        cfg = self.ctx.config
+        fields = cfg.launch_config_snapshot()
+        # 下载线程数只用于分享，不进入启动快照
+        fields["download_threads"] = int(cfg.download_threads)
+        payload = {
+            "format": LAUNCH_CONFIG_FORMAT,
+            "app": APP_NAME,
+            "app_version": APP_VERSION,
+            "exported_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "config": fields,
+        }
+        try:
+            Path(path).write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                self.tr("导出失败"),
+                t("SettingsPage", "无法写入文件：{0}", exc),
+            )
+            return
+        self.ctx.bus.toast.emit(t("SettingsPage", "已导出配置片段：{0}", path))
+
+    def _validate_config_fragment(self, fields: dict) -> dict:
+        """校验导入字段的类型与取值范围，非法时抛出带可读说明的 ValueError。"""
+        cleaned: dict = {}
+        for key in LAUNCH_CONFIG_FIELDS:
+            if key not in fields:
+                continue
+            value = fields[key]
+            if key in ("memory_mb", "download_threads"):
+                if isinstance(value, bool) or not isinstance(value, int):
+                    raise ValueError(
+                        t("SettingsPage", "字段 {0} 需要整数。", self._config_field_label(key))
+                    )
+            elif key in ("smart_jvm", "opt_fixed_heap", "opt_pre_touch", "proxy_enabled"):
+                if not isinstance(value, bool):
+                    raise ValueError(
+                        t(
+                            "SettingsPage",
+                            "字段 {0} 需要 true/false。",
+                            self._config_field_label(key),
+                        )
+                    )
+            elif not isinstance(value, str):
+                raise ValueError(
+                    t("SettingsPage", "字段 {0} 需要文本。", self._config_field_label(key))
+                )
+            if key == "isolation_mode" and value not in ISOLATION_LABELS:
+                raise ValueError(
+                    t("SettingsPage", "版本隔离取值无效：{0}", value)
+                )
+            if key == "priority" and value not in PROCESS_PRIORITIES:
+                raise ValueError(
+                    t("SettingsPage", "进程优先级取值无效：{0}", value)
+                )
+            cleaned[key] = value
+        return cleaned
+
+    def _config_field_label(self, key: str) -> str:
+        labels = {
+            "memory_mb": self.tr("内存上限"),
+            "extra_jvm_args": self.tr("额外 JVM 参数"),
+            "extra_game_args": self.tr("额外游戏参数"),
+            "smart_jvm": self.tr("智能 JVM"),
+            "opt_fixed_heap": self.tr("固定堆大小"),
+            "opt_pre_touch": self.tr("预读取资源"),
+            "isolation_mode": self.tr("版本隔离"),
+            "window_title": self.tr("游戏窗口标题"),
+            "server": self.tr("自动连接服务器"),
+            "priority": self.tr("进程优先级"),
+            "java_path": self.tr("Java 路径"),
+            "proxy_enabled": self.tr("启用代理"),
+            "proxy_url": self.tr("代理地址"),
+            "download_threads": self.tr("下载线程数"),
+        }
+        return labels.get(key, key)
+
+    def _import_config_fragment(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            self.tr("导入配置片段"),
+            str(Path.home()),
+            self.tr("Mikan 配置片段 (*.mikan);;所有文件 (*)"),
+        )
+        if not path:
+            return
+        try:
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                self.tr("导入失败"),
+                t("SettingsPage", "无法读取文件：{0}", exc),
+            )
+            return
+        except ValueError as exc:
+            QMessageBox.warning(
+                self,
+                self.tr("导入失败"),
+                t("SettingsPage", "文件不是有效的 JSON：{0}", exc),
+            )
+            return
+        if not isinstance(payload, dict):
+            QMessageBox.warning(
+                self, self.tr("导入失败"), self.tr("文件内容不是配置片段。")
+            )
+            return
+        if str(payload.get("format") or "") != LAUNCH_CONFIG_FORMAT:
+            QMessageBox.warning(
+                self,
+                self.tr("导入失败"),
+                self.tr("不是 Mikan 配置片段（format 标识不匹配）。"),
+            )
+            return
+        fields = payload.get("config")
+        if not isinstance(fields, dict):
+            QMessageBox.warning(
+                self, self.tr("导入失败"), self.tr("配置片段里缺少 config 字段。")
+            )
+            return
+        try:
+            cleaned = self._validate_config_fragment(fields)
+        except ValueError as exc:
+            QMessageBox.warning(self, self.tr("导入失败"), str(exc))
+            return
+        if not cleaned:
+            QMessageBox.warning(
+                self, self.tr("导入失败"), self.tr("没有可导入的配置项。")
+            )
+            return
+        cfg = self.ctx.config
+        try:
+            applied = cfg.apply_launch_config(cleaned)
+            cfg.save()
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                self.tr("导入失败"),
+                t("SettingsPage", "保存配置失败：{0}", exc),
+            )
+            return
+        if "proxy_enabled" in applied or "proxy_url" in applied:
+            apply_proxy(cfg.effective_proxy)
+        self.ctx.bus.config_changed.emit()
+        names = "、".join(self._config_field_label(key) for key in applied)
+        QMessageBox.information(
+            self,
+            self.tr("导入完成"),
+            t("SettingsPage", "已导入 {0} 项：{1}", len(applied), names),
+        )
 
     def shutdown(self) -> None:
         for worker in (self._test_worker, self._rescan_worker, self._java_download_worker):

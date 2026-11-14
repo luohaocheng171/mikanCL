@@ -36,6 +36,30 @@ class PingResult:
         return f"{self.players_online}/{self.players_max}"
 
 
+def parse_address(text: str, default_port: int = 25565) -> tuple[str, int]:
+    """把 127.0.0.1:25565 / example.com / [::1]:25565 解析为 (host, port)。
+
+    解析失败时返回空 host，调用方据此提示用户。
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return "", default_port
+    if raw.startswith("["):  # IPv6 字面量
+        head, _, tail = raw.partition("]")
+        host = head[1:].strip()
+        port = default_port
+        if tail.startswith(":") and tail[1:].isdigit():
+            port = int(tail[1:])
+        return host, port
+    if raw.count(":") == 1:
+        host, _, port_text = raw.partition(":")
+        if port_text.isdigit():
+            port = int(port_text)
+            return host.strip(), port if 0 < port < 65536 else default_port
+        return host.strip() or raw, default_port
+    return raw, default_port
+
+
 def _varint(value: int) -> bytes:
     out = bytearray()
     value &= 0xFFFFFFFF
@@ -215,3 +239,31 @@ def ping_server(host: str, port: int = 25565, timeout: float = 4.0) -> PingResul
         result.online = False
         result.error = str(exc) or "无法连接"
         return result
+
+
+def probe_address(address: str, timeout: float = 4.0) -> PingResult:
+    """探测一个「主机:端口」地址是否可用。
+
+    先走完整 Server List Ping；若服务端不响应状态协议（例如部分 TCP 代理），
+    再退化为纯 TCP 连通性检测，只判断端口能否握手成功。
+    """
+    host, port = parse_address(address)
+    if not host:
+        return PingResult(error="地址为空")
+    result = ping_server(host, port, timeout=timeout)
+    if result.online:
+        return result
+    started = time.perf_counter()
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            pass
+        result.online = True
+        result.latency = int((time.perf_counter() - started) * 1000)
+        result.error = ""
+        if not result.motd:
+            result.motd = "端口可连通（未响应状态查询）"
+    except (OSError, ValueError) as exc:
+        result.online = False
+        result.latency = -1
+        result.error = str(exc) or "无法连接"
+    return result

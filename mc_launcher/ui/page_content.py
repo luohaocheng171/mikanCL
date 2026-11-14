@@ -54,7 +54,7 @@ from ..net import Cancelled, Candidate, Http
 from ..ui_pack import UiPackError, apply_ui_pack
 from ..version import scan_installed_versions
 from .covers import CoverLoader, make_placeholder
-from .widgets import Badge, Card, page_header
+from .widgets import Badge, Card, ModpackInstallModeDialog, page_header
 
 TYPE_BADGE_KIND = {
     "mod": "blue",
@@ -611,6 +611,7 @@ class ContentInstallWorker(QThread):
         project: ContentProject,
         version: ContentVersion,
         instance_dir: Path,
+        attach: dict | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -618,6 +619,7 @@ class ContentInstallWorker(QThread):
         self.project = project
         self.version = version
         self.instance_dir = instance_dir
+        self.attach = attach
         self.modpack_path: Path | None = None
         self.cancel_event = threading.Event()
         self.pause_event = threading.Event()
@@ -676,6 +678,38 @@ class ContentInstallWorker(QThread):
         self.log.emit(f"[整合包] {meta.name} · MC {meta.mc_version} · {meta.loader or '原版'}")
         if not meta.mc_version:
             raise ContentError("整合包缺少 Minecraft 版本信息。")
+
+        if self.attach:
+            version_id = str(self.attach.get("version_id") or "")
+            match = re.match(r"^(\d+(?:\.\d+)+)(?:-[A-Za-z0-9_.-]+)?$", version_id)
+            guess_mc = match.group(1) if match else ""
+            target = self.ctx.config.resolve_game_dirs(
+                version_id, root=self.attach.get("game_dir") or None
+            ).primary
+            pipeline = ModpackPipeline(
+                self.ctx,
+                target,
+                log=self.log.emit,
+                cancel=self.cancel_event,
+                pause=self.pause_event,
+                progress=lambda value, detail, stage, _speed, _done, _total: self._emit(
+                    value, detail, stage=stage
+                ),
+            )
+            pipeline.attach_files(
+                version_id,
+                zip_path,
+                meta,
+                root=self.attach.get("game_dir") or None,
+                target_mc=str(self.attach.get("mc_version") or guess_mc),
+                target_loader=str(self.attach.get("loader") or ""),
+            )
+            self._emit(1.0, "整合包附加完成")
+            self.log.emit(
+                f"[完成] 整合包内容已写入已有版本 {version_id}：{target}，未新建实例。"
+            )
+            self.done.emit(f"整合包「{meta.name or self.project.title}」已附加到版本 {version_id}。")
+            return
 
         slug_base = re.sub(r"[^\w\-]+", "-", self.project.title.lower()).strip("-")[:36]
         slug = f"{slug_base or 'modpack'}-{self.project.id[:6]}"
@@ -894,7 +928,10 @@ class InstallDialog(QDialog):
         layout.addWidget(self.dir_label)
 
         if self.project.project_type == "modpack":
-            hint = QLabel("整合包会新建独立实例，并自动安装基础版本与加载器。")
+            hint = QLabel(
+                "确认版本后会让你选择：下载全新版本并新建独立实例，"
+                "或把整合包附加到已有版本（不下载原版、不新建实例）。"
+            )
             hint.setObjectName("Tiny")
             hint.setWordWrap(True)
             layout.addWidget(hint)
@@ -1007,7 +1044,7 @@ class InstallDialog(QDialog):
             self.dir_label.setText("")
             return
         if self.project.project_type == "modpack":
-            self.dir_label.setText(f"新建实例目录：{INSTANCES_DIR}")
+            self.dir_label.setText(f"新建实例目录：{INSTANCES_DIR}（可选择附加到已有版本）")
             return
         folder = _TYPE_FOLDERS.get(self.project.project_type, "mods")
         root = Path(str(target.get("game_dir") or ""))
@@ -1076,6 +1113,7 @@ class ContentPage(QWidget):
         self._install_worker: ContentInstallWorker | None = None
         self._install_pause = threading.Event()
         self._pending_install: tuple[ContentProject, ContentVersion, Path] | None = None
+        self._pending_attach: dict | None = None
         self._save_task_id = ""
         self._save_worker: SaveFileWorker | None = None
         self._save_pause = threading.Event()
@@ -1609,7 +1647,9 @@ class ContentPage(QWidget):
         elif reset:
             self.list_status.setText("没有找到内容，可更换关键词或调整筛选条件。")
             self._show_empty(
-                "没有找到内容\n\n换个关键词、切换来源，或放宽 Minecraft 版本与加载器筛选。"
+                "没有找到内容 —— 下一步可以：换个关键词、切换来源，或放宽 Minecraft 版本与加载器筛选。\n"
+                "也可以直接去整合包中心挑一个现成整合包，或者把 mod 文件拖进窗口导入。",
+                [("去整合包中心", "modpack"), ("看下载教程", "wiki")],
             )
         if len(projects) < self.LIMIT:
             self.load_hint.setText("已到底部")
@@ -1674,14 +1714,31 @@ class ContentPage(QWidget):
         else:
             self.result_count.setText(f"已显示 {len(self._cards)} 项")
 
-    def _show_empty(self, text: str) -> None:
+    def _show_empty(self, text: str, actions: list[tuple[str, str]] | None = None) -> None:
+        host = QWidget()
+        host_layout = QVBoxLayout(host)
+        host_layout.setContentsMargins(0, 24, 0, 24)
+        host_layout.setSpacing(10)
         empty = QLabel(text)
         empty.setObjectName("Muted")
         empty.setAlignment(Qt.AlignCenter)
-        empty.setMinimumHeight(160)
+        empty.setMinimumHeight(120)
         empty.setWordWrap(True)
-        self._empty_label = empty
-        self.results_grid.addWidget(empty, 0, 0, 1, max(1, self._grid_columns))
+        host_layout.addWidget(empty)
+        if actions:
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            row.addStretch(1)
+            for label, key in actions:
+                button = QPushButton(label)
+                button.clicked.connect(
+                    lambda _checked=False, page=key: self.ctx.bus.navigate.emit(page)
+                )
+                row.addWidget(button)
+            row.addStretch(1)
+            host_layout.addLayout(row)
+        self._empty_label = host
+        self.results_grid.addWidget(host, 0, 0, 1, max(1, self._grid_columns))
 
     def _refresh_empty_for_category(self) -> None:
         """有分类过滤且当前没有卡片时，给出「继续加载」的提示。"""
@@ -2269,12 +2326,36 @@ class ContentPage(QWidget):
             return
         if dialog.selected_version is None or dialog.selected_target is None:
             return
-        self._start_install(project, dialog.selected_version, dialog.selected_target)
+        attach: dict | None = None
+        if project.project_type == "modpack":
+            installed = [item for item in targets if item.get("version_id")]
+            mode = ModpackInstallModeDialog(installed, "安装整合包", self)
+            if mode.exec() != QDialog.Accepted:
+                self.ctx.bus.toast.emit("已取消整合包安装。")
+                return
+            if mode.mode == "attach":
+                attach = dict(mode.selected or {})
+        self._start_install(
+            project, dialog.selected_version, dialog.selected_target, attach
+        )
 
     def _start_install(
-        self, project: ContentProject, version: ContentVersion, target: dict
+        self,
+        project: ContentProject,
+        version: ContentVersion,
+        target: dict,
+        attach: dict | None = None,
     ) -> None:
-        target_dir = Path(str(target.get("game_dir") or self.ctx.config.game_path))
+        if attach and attach.get("version_id"):
+            target_dir = Path(
+                str(attach.get("game_dir") or self.ctx.config.resolve_game_dirs(
+                    str(attach["version_id"])
+                ).primary)
+            )
+        else:
+            attach = None
+            target_dir = Path(str(target.get("game_dir") or self.ctx.config.game_path))
+        self._pending_attach = attach
         self._cancel_requested = False
         self._pending_install = (project, version, target_dir)
         self._install_pause.clear()
@@ -2318,7 +2399,9 @@ class ContentPage(QWidget):
         previous = self._install_worker
         if previous is not None and not previous.isRunning():
             previous.deleteLater()
-        worker = ContentInstallWorker(self.ctx, project, version, target_dir, self)
+        worker = ContentInstallWorker(
+            self.ctx, project, version, target_dir, self._pending_attach, self
+        )
         worker.pause_event = self._install_pause
         worker.progress.connect(self._on_install_progress)
         worker.log.connect(self._append_install_log)

@@ -28,7 +28,7 @@ from ..content import scan_mod_metadata
 from ..context import AppContext
 from ..modgraph import ModGraph, ModNode, build_mod_graph
 from ..version import scan_installed_versions
-from .widgets import Card, page_header
+from .widgets import Card, page_header, related_features_row
 
 NODE_W = 196.0
 NODE_H = 56.0
@@ -374,6 +374,7 @@ class ModGraphPage(QWidget):
         self._scripts.setObjectName("Tiny")
         self._scripts.setWordWrap(True)
         outer.addWidget(self._scripts)
+        outer.addWidget(related_features_row(self.ctx, "modgraph"))
 
     # ------------------------------------------------------------------
     def refresh(self) -> None:

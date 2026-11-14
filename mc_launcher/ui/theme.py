@@ -36,6 +36,7 @@ STYLESHEET = """
 * { outline: none; }
 QWidget { color: #e8f1ea; font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif; font-size: 13px; }
 QMainWindow, QWidget#Root { background-color: #0c1310; }
+QDialog#FrameModeDialog { background-color: #0c1310; }
 QStackedWidget, QStackedWidget > QWidget { background-color: #0c1310; }
 QFrame#Sidebar { background-color: #0a100c; border-right: 1px solid #1b2920; }
 QScrollArea#SidebarScroll, QScrollArea#SidebarScroll > QWidget, QScrollArea#SidebarScroll > QWidget > QWidget { background-color: #0a100c; }

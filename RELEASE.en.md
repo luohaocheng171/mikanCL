@@ -1,10 +1,22 @@
-# MikanCL v5.2.0 Release Notes
+# MikanCL v5.3.1 Release Notes
 
 [中文](RELEASE.md) · **English** · [Русский](RELEASE.ru.md) · [Français](RELEASE.fr.md) · [日本語](RELEASE.ja.md)
 
-Release date: 2026-11-13
+Release date: 2026-11-14
 
-## New in v5.2.0
+## New and fixed in v5.3.1
+
+- **Standalone edition bundled into the single exe**: the Electron runtime is embedded as a compressed payload inside `MikanCL.exe`, so no separate build or download is required. On first switch it is extracted to `data/electron/app` and reused afterwards
+- **Fixed "Standalone" doing nothing**: the v5.2.0 packaged backend did not recognize the `electron` value, showed "invalid frame argument", and reverted to Classic after restart. v5.3.1 rebuilds all three entry points: first-run dialog, Qt settings and web settings
+- **Switch back to the main launcher**: choosing Classic / Enhanced inside Electron relaunches the main launcher; if the launcher cannot be found, you get a clear message instead of restarting Electron itself
+- **Readable first-run dialog**: added a dark background so the three cards stay legible on light system themes
+- **Standalone troubleshooting log**: extraction and launch steps are written to `data/logs/electron.log`
+- **Larger but self-contained**: the single exe is about 160 MB larger than v5.2.0 and starts a little slower on first run, but ships Classic, Enhanced and Standalone together
+- **Forbric parity in the web UI**: after the guided installer finishes, the Enhanced / Standalone UI registers and selects a "Forbric 26.2" instance and prefers Java 21, matching the Classic edition
+- **Fix crash after in-app restart**: restarting from the settings page spawned a process that inherited PyInstaller's `_PYI_*` variables and reused the already-deleted extraction folder, showing "Failed to load Python DLL … python315.dll". These variables are now stripped before every restart, including handing back from the Standalone edition and reopening after an update. Launching the exe by double-click was always fine because Explorer provides a clean environment
+- **Clearer first-run choice**: the whole framework card is clickable and the dialog shows the current choice ("✓ Classic · Qt"); the frame actually entered is written to `data/logs/launcher.log`
+
+## New in v5.2.0 (history)
 
 - **Standalone "Version Settings" page in the Polished edition**: fully ports all 7 tabs of the Classic edition's Version Settings (Overview, Game Settings, Mods, Resource Packs, Shader Packs, Modpacks, Version Management), including launch-script export, batch health check/repair, batch config export, saves and backups, and the world seed / screenshots / crash reports / mod graph / dependency tools; instances and versions can be switched at the top
 - **Save format conversion and legacy world import**: multi-threaded conversion from 2009 Classic / Indev / Alpha / McRegion → Anvil → target game version, with block ID remapping and automatic backups; old naming schemes (`server_level.dat`, `*.mine`, a single `level.dat` inside a Classic archive) are detected and can be converted and imported in one click

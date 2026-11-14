@@ -41,7 +41,7 @@ from ..terrain_java import (
     version_tuple,
 )
 from ..version import scan_installed_versions
-from .widgets import page_header
+from .widgets import page_header, related_features_row
 
 try:  # WebEngine 在部分精简环境下可能缺失，提供回退
     from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -340,6 +340,7 @@ class SeedTerrainPage(QWidget):
         body.addWidget(tip)
 
         outer.addLayout(body, 1)
+        outer.addWidget(related_features_row(self.ctx, "seed_terrain"))
         self._reload_versions()
 
     def _reload_versions(self) -> None:

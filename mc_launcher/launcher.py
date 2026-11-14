@@ -92,6 +92,45 @@ class LaunchPlan:
     log_path: Path
     classpath: list[str]
     warnings: list[str] = field(default_factory=list)
+    summary: str = ""
+
+
+_GC_SELECTORS = ("G1GC", "ZGC", "ShenandoahGC", "ParallelGC", "SerialGC", "EpsilonGC")
+
+
+def _has_custom_gc(text: str) -> bool:
+    value = text or ""
+    return any(
+        f"-XX:+Use{gc}" in value or f"-XX:-Use{gc}" in value for gc in _GC_SELECTORS
+    )
+
+
+def _launch_summary(options: LaunchOptions, memory: int, tune_args: list[str]) -> str:
+    """用本次实际生效的参数生成一句启动说明（供启动成功提示）。"""
+    parts = ["已启用智能 JVM" if options.smart_jvm else "未启用智能 JVM"]
+    custom_gc = _has_custom_gc(options.extra_jvm_args)
+    if options.smart_jvm:
+        gc_flag = next(
+            (
+                arg[len("-XX:+Use"):]
+                for arg in tune_args
+                if arg.startswith("-XX:+Use") and arg.endswith("GC")
+            ),
+            "",
+        )
+        if custom_gc:
+            parts.append("检测到自定义 GC 参数，已跳过自动 GC 覆盖")
+        elif gc_flag:
+            parts.append(f"使用 {gc_flag}")
+        else:
+            parts.append("未追加 GC 调优参数")
+    else:
+        parts.append(
+            "使用你自定义的 GC 参数" if custom_gc else "未启用 GC 调优"
+        )
+    parts.append(f"分配 {memory} MB")
+    parts.append("固定堆大小（Xms = Xmx）" if options.fixed_heap else "堆大小可动态扩展")
+    return "本次启动：" + "，".join(parts) + "。"
 
 
 def _split_extra_args(text: str) -> list[str]:
@@ -460,6 +499,42 @@ def post_launch(process: subprocess.Popen, priority: str = "normal", title: str 
         ).start()
 
 
+_LOADER_CACHE_DIRS = (".fabric", ".quilt")
+
+
+def clean_loader_cache_temp(*game_dirs: Path) -> tuple[int, int]:
+    """清理模组加载器上次中断留下的反混淆临时文件。
+
+    Fabric / Quilt 生成重映射 jar 时先写 ``client-intermediary.jar.tmp``，成功后再
+    改名成正式文件。如果上一次启动在重映射阶段被强制结束（点停止、启动器被关、
+    断电），``.tmp`` 会留在 ``.fabric/remappedJars`` 里；下次启动 tinyremapper 以
+    CREATE_NEW 打开同名文件就会直接抛 ``FileAlreadyExistsException``，表现为
+    “error remapping game jars” 导致游戏起不来。
+
+    返回 ``(已删除数量, 被占用数量)``；被占用的通常说明还有残留 Java 进程。
+    """
+    removed = 0
+    failed = 0
+    seen: set[str] = set()
+    for game_dir in game_dirs:
+        for cache_name in _LOADER_CACHE_DIRS:
+            folder = Path(game_dir) / cache_name / "remappedJars"
+            key = str(folder).lower()
+            if key in seen or not folder.is_dir():
+                continue
+            seen.add(key)
+            for temp in folder.rglob("*.tmp"):
+                try:
+                    temp.unlink()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    failed += 1
+                    continue
+                removed += 1
+    return removed, failed
+
+
 def build_launch_plan(options: LaunchOptions) -> LaunchPlan:
     version = options.version
     game_dir = options.game_dir
@@ -470,6 +545,17 @@ def build_launch_plan(options: LaunchOptions) -> LaunchPlan:
     natives_dir.mkdir(parents=True, exist_ok=True)
 
     warnings: list[str] = []
+    # 启动前清掉加载器反混淆缓存里的 .tmp，避免上次异常退出导致本次必崩
+    cleaned, locked = clean_loader_cache_temp(game_dir, root_dir)
+    if cleaned:
+        warnings.append(
+            f"已清理上次启动中断残留的加载器临时缓存（{cleaned} 个），本次启动会重新反混淆。"
+        )
+    if locked:
+        warnings.append(
+            f"有 {locked} 个加载器缓存临时文件仍被占用：可能还有游戏进程在运行，"
+            "请先关闭残留的 Java 进程再启动。"
+        )
     classpath: list[str] = []
     missing: list[str] = []
     for lib in version.libraries:
@@ -625,6 +711,7 @@ def build_launch_plan(options: LaunchOptions) -> LaunchPlan:
         log_path=log_path,
         classpath=classpath,
         warnings=warnings,
+        summary=_launch_summary(options, memory, tune_args),
     )
 
 
@@ -634,6 +721,7 @@ class GameSession:
     log_path: Path
     command: list[str]
     started_at: float = field(default_factory=time.time)
+    launch_summary: str = ""
     _reader: threading.Thread | None = None
     _lines: list[str] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -668,7 +756,12 @@ def start_game(
     except OSError as exc:
         raise VersionError(f"无法启动 Java：{exc}\n请检查 Java 路径：{plan.command[0]}") from exc
 
-    session = GameSession(process=process, log_path=log_path, command=plan.command)
+    session = GameSession(
+        process=process,
+        log_path=log_path,
+        command=plan.command,
+        launch_summary=plan.summary,
+    )
 
     def reader() -> None:
         try:
@@ -732,6 +825,11 @@ def crash_hint(exit_code: int, tail: str) -> str:
         hints.append("Java 版本与游戏不匹配，请安装所需 Java（1.17+ 需要 Java 17，1.20.5+ 需要 Java 21）。")
     if "outofmemoryerror" in lower:
         hints.append("内存不足，请在设置中调低分配内存或关闭其他程序。")
+    if "error remapping game jars" in lower or "filealreadyexistsexception" in lower:
+        hints.append(
+            "Fabric/Quilt 反混淆缓存被上次中断的启动占用：请关闭残留的 Java 进程后重试；"
+            "启动器已会在启动前自动清理这类 .tmp 缓存。"
+        )
     if "could not find or load main class" in lower:
         hints.append("客户端文件不完整或版本 JSON 损坏，请重新安装该版本。")
     if "glfw" in lower or "opengl" in lower or "pixel format" in lower:

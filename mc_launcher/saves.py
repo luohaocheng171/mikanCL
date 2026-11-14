@@ -123,9 +123,36 @@ def backup_save(
     log: Callable[[str], None] | None = None,
 ) -> Path | None:
     """把单个世界打包为 zip，返回备份文件路径；世界不存在时返回 None。"""
-    world = saves_dir(game_dir) / folder
-    if not world.is_dir():
-        return None
+    return backup_world_path(
+        saves_dir(game_dir) / folder,
+        backup_root,
+        version_id,
+        auto=auto,
+        log=log,
+    )
+
+
+def backup_world_path(
+    world,
+    backup_root,
+    version_id: str,
+    *,
+    auto: bool = False,
+    log: Callable[[str], None] | None = None,
+) -> Path | None:
+    """按完整路径备份任意世界（目录、Classic 单文件、server_level.dat）。"""
+    world = Path(world)
+    single = world.is_file()
+    if single:
+        folder = world.stem or "world"
+    else:
+        if not (
+            (world / "level.dat").is_file()
+            or (world / "server_level.dat").is_file()
+            or any(world.glob("*.mine"))
+        ):
+            return None
+        folder = world.name or "world"
     target_dir = backup_dir_for(backup_root, version_id)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     prefix = "auto-" if auto else ""
@@ -133,17 +160,21 @@ def backup_save(
     written = False
     try:
         with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-            for root, _dirs, files in os.walk(world):
-                for name in files:
-                    if name.lower() == "session.lock":
-                        continue  # 游戏运行时无法读取的锁文件，不打包
-                    file_path = Path(root) / name
-                    try:
-                        arcname = Path(folder) / file_path.relative_to(world)
-                        zf.write(file_path, arcname.as_posix())
-                        written = True
-                    except OSError:
-                        continue
+            if single:
+                zf.write(world, f"{_safe_name(folder)}/level.dat")
+                written = True
+            else:
+                for root, _dirs, files in os.walk(world):
+                    for name in files:
+                        if name.lower() == "session.lock":
+                            continue  # 游戏运行时无法读取的锁文件，不打包
+                        file_path = Path(root) / name
+                        try:
+                            arcname = Path(folder) / file_path.relative_to(world)
+                            zf.write(file_path, arcname.as_posix())
+                            written = True
+                        except OSError:
+                            continue
     except OSError as exc:
         if log:
             log(f"[备份] 打包存档失败：{exc}")

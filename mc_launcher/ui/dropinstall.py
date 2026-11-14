@@ -10,7 +10,6 @@ import threading
 import time
 import traceback
 import zipfile
-from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths, Qt, QThread, QTimer, Signal
@@ -19,151 +18,40 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QVBoxLayout,
 )
 
 from ..auth import import_offline_skin
 from ..config import (
     INSTANCES_DIR,
-    LOG_DIR,
     read_instance_manifest,
 )
 from ..context import AppContext
 from ..content import ContentError, mc_version_key
-from ..launcher import prepare_isolated_dir
 from ..modpack_pipeline import ModpackPipeline
 from ..net import Cancelled
 from .widgets import Badge, Card
 
-KIND_LABELS = {
-    "mod": "Mod",
-    "modpack": "整合包",
-    "resourcepack": "资源包",
-    "shader": "光影包",
-    "world": "世界存档",
-}
-_KIND_FOLDERS = {"mod": "mods", "resourcepack": "resourcepacks", "shader": "shaderpacks"}
-
-
-def _zip_names(path: Path) -> list[str]:
-    try:
-        with zipfile.ZipFile(path) as archive:
-            return [name.replace("\\", "/") for name in archive.namelist()]
-    except (OSError, zipfile.BadZipFile):
-        return []
-
-
-def _single_root_prefix(names: list[str]) -> str:
-    """压缩包内所有文件都在同一个顶层目录时返回该目录前缀。"""
-    files = [name for name in names if name and not name.endswith("/")]
-    if not files:
-        return ""
-    first = files[0].split("/")[0] + "/"
-    if all(name.startswith(first) for name in files):
-        return first
-    return ""
-
-
-def write_install_error_log(title: str, detail: str) -> Path | None:
-    """把安装失败的详细信息追加写入 data/logs/install_error.log。"""
-    try:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        path = LOG_DIR / "install_error.log"
-        with open(path, "a", encoding="utf-8") as handle:
-            handle.write(f"\n==== {datetime.now():%Y-%m-%d %H:%M:%S} · {title} ====\n{detail}\n")
-        return path
-    except OSError:
-        return None
-
-
-def detect_path(path: Path) -> str:
-    """根据文件后缀与内部结构判断拖入内容类型。"""
-    if path.is_dir():
-        if (path / "level.dat").is_file():
-            return "world"
-        if any(
-            (path / marker).is_file()
-            for marker in (
-                "manifest.json",
-                "modrinth.index.json",
-                "mmc-pack.json",
-                "instance.cfg",
-                "instance.json",
-            )
-        ):
-            return "modpack"
-        return ""
-    suffix = path.suffix.lower()
-    if suffix == ".jar":
-        return "mod"
-    if suffix in (".mrpack", ".mikan"):
-        return "modpack"
-    if suffix != ".zip":
-        return ""
-    names = _zip_names(path)
-    if not names:
-        return ""
-    lowered = [name.lower() for name in names]
-    if any(name.endswith("level.dat") for name in lowered):
-        return "world"
-    if any(
-        name.endswith("modrinth.index.json") or name.endswith("mmc-pack.json")
-        or name.endswith("instance.cfg") or name == "instance.json"
-        for name in lowered
-    ):
-        return "modpack"
-    if any(name.endswith("manifest.json") for name in lowered):
-        return "modpack"
-    if any(name.startswith("shaders/") or "/shaders/" in name for name in lowered):
-        return "shader"
-    if any(name.endswith("pack.mcmeta") for name in lowered):
-        return "resourcepack"
-    if any(name.endswith(".jar") for name in lowered):
-        return "modpack"
-    if any(
-        name.startswith("mods/") or "/mods/" in name
-        or name.startswith("config/") or "/config/" in name
-        for name in lowered
-    ):
-        # 没有清单、但带 mods/ 或 config/ 的压缩包：按“直装包”处理
-        return "modpack"
-    return ""
-
-
-def _unique_path(path: Path) -> Path:
-    if not path.exists():
-        return path
-    stem, suffix = path.stem, path.suffix
-    index = 2
-    while True:
-        candidate = path.with_name(f"{stem} ({index}){suffix}")
-        if not candidate.exists():
-            return candidate
-        index += 1
-
-
-def _safe_extract(archive: zipfile.ZipFile, target: Path, prefix: str = "") -> int:
-    count = 0
-    for info in archive.infolist():
-        if info.is_dir():
-            continue
-        name = info.filename.replace("\\", "/")
-        if prefix:
-            if not name.startswith(prefix):
-                continue
-            name = name[len(prefix):]
-        if not name or name.startswith("/") or ".." in Path(name).parts:
-            continue
-        destination = target / name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with archive.open(info) as source, open(destination, "wb") as output:
-            shutil.copyfileobj(source, output)
-        count += 1
-    return count
+from ..dropdetect import (  # noqa: F401 - 保留原有导入路径
+    KIND_LABELS,
+    _KIND_FOLDERS,
+    _expand_dropped_paths,
+    _safe_extract,
+    _single_root_prefix,
+    _unique_path,
+    _world_zip_prefix,
+    _zip_names,
+    detect_path,
+    install_file,
+    install_world,
+    write_install_error_log,
+)
 
 
 def _import_offline_skin(
@@ -175,56 +63,6 @@ def _import_offline_skin(
     )
     if paths and log:
         log(f"[皮肤] 已自动导入离线皮肤：{paths[-1]}")
-
-
-def _world_zip_prefix(names: list[str]) -> str:
-    tops: set[str] = set()
-    for name in names:
-        clean = name.strip("/")
-        if not clean:
-            continue
-        tops.add(clean.split("/", 1)[0])
-    if len(tops) == 1:
-        top = tops.pop()
-        if any(name.startswith(top + "/level.dat") for name in names):
-            return top + "/"
-    return ""
-
-
-def install_world(path: Path, game_dir: Path, log=None) -> str:
-    saves = game_dir / "saves"
-    saves.mkdir(parents=True, exist_ok=True)
-    if path.is_dir():
-        destination = _unique_path(saves / path.name)
-        shutil.copytree(path, destination)
-        return str(destination)
-    destination = _unique_path(saves / path.stem)
-    destination.mkdir(parents=True, exist_ok=True)
-    try:
-        with zipfile.ZipFile(path) as archive:
-            names = [name.replace("\\", "/") for name in archive.namelist()]
-            prefix = _world_zip_prefix(names)
-            _safe_extract(archive, destination, prefix)
-    except (OSError, zipfile.BadZipFile) as exc:
-        raise ContentError(f"世界存档解压失败：{exc}") from exc
-    return str(destination)
-
-
-def install_file(ctx: AppContext, path: Path, kind: str, target: dict, log=None) -> str:
-    root = Path(str(target.get("game_dir") or ctx.config.game_path))
-    version_id = str(target.get("version_id") or "")
-    mode = ctx.config.isolation_for(version_id) if version_id else "none"
-    game_dir = prepare_isolated_dir(root, version_id, mode) if version_id else root
-    if kind == "world":
-        return install_world(path, game_dir, log)
-    folder = _KIND_FOLDERS.get(kind)
-    if folder is None:
-        raise ContentError(f"暂不支持导入类型：{kind}")
-    destination_dir = game_dir / folder
-    destination_dir.mkdir(parents=True, exist_ok=True)
-    destination = _unique_path(destination_dir / path.name)
-    shutil.copy2(path, destination)
-    return str(destination)
 
 
 class FileDropWorker(QThread):
@@ -257,6 +95,19 @@ def _pack_slug(name: str, path: Path, fallback: str = "modpack") -> str:
     return f"{base or fallback}-{digest}"
 
 
+def _same_mc_version(left: str, right: str) -> bool:
+    """比较两个版本号是否等价（忽略末尾的 .0，兼容 1.20 与 1.20.0）。"""
+
+    def norm(value: str) -> tuple[int, ...]:
+        parts = [int(item) for item in re.findall(r"\d+", value or "")]
+        while len(parts) > 1 and parts[-1] == 0:
+            parts.pop()
+        return tuple(parts)
+
+    left_norm, right_norm = norm(left), norm(right)
+    return bool(left_norm) and left_norm == right_norm
+
+
 def _find_installed_loader(target: Path, mc_version: str, loader: str) -> str:
     """兼容旧调用：实际逻辑已收敛到 modpack_pipeline。"""
     from ..modpack_pipeline import _find_installed_loader as impl
@@ -273,10 +124,13 @@ class ModpackDropWorker(QThread):
     failed = Signal(str)
     cancelled = Signal(str)
 
-    def __init__(self, ctx: AppContext, path: Path, parent=None):
+    def __init__(
+        self, ctx: AppContext, path: Path, parent=None, attach_version: str = ""
+    ):
         super().__init__(parent)
         self.ctx = ctx
         self.path = path
+        self.attach_version = (attach_version or "").strip()
         self.cancel_event = threading.Event()
         self.pause_event = threading.Event()
         self.failure_detail = ""
@@ -354,7 +208,46 @@ class ModpackDropWorker(QThread):
         if not meta.mc_version:
             self._fail("整合包缺少 Minecraft 版本信息，无法导入。")
             return
+        if self.attach_version:
+            self._attach_pack(meta)
+            return
         self._install_pack(meta)
+
+    def _attach_pack(self, meta) -> None:
+        """附加模式：不新建实例，直接把整合包内容写进所选版本的游戏目录。"""
+        version_id = self.attach_version
+        match = re.match(r"^(\d+(?:\.\d+)+)", version_id)
+        base = match.group(1) if match else ""
+        if meta.mc_version and base and not _same_mc_version(base, meta.mc_version):
+            self._fail(
+                f"版本不匹配：整合包要求 Minecraft {meta.mc_version}，"
+                f"所选版本是 {version_id}。请改用「创建全新实例」或选择版本一致的实例。"
+            )
+            return
+        lowered = version_id.lower()
+        loader = (meta.loader or "").lower()
+        if loader and loader not in ("vanilla", "原版") and loader not in lowered:
+            self._fail(
+                f"加载器不匹配：整合包使用 {meta.loader}，所选版本是 {version_id}。"
+                "附加模式不会安装加载器，请选择已装同款加载器的版本，或改用「创建全新实例」。"
+            )
+            return
+        try:
+            dirs = self.ctx.config.resolve_game_dirs(version_id)
+            target = dirs.primary
+            pipeline = self._pipeline(target)
+            pipeline.install_files(self.path, meta)
+            self._emit(1.0, "整合包已附加到已有版本")
+            self.done.emit(
+                f"整合包「{meta.name or self.path.stem}」已附加到版本 {version_id}，"
+                "原有存档与设置保持不变。"
+            )
+        except Cancelled:
+            self._cancelled()
+        except ContentError as exc:
+            self._fail(str(exc), exc)
+        except Exception as exc:  # noqa: BLE001
+            self._fail(f"整合包附加失败：{exc}", exc)
 
     # ------------------------------------------------------------------
     def _install_pack(self, meta) -> None:
@@ -548,6 +441,28 @@ class DropDialog(QDialog):
             card.body.addWidget(more)
         layout.addWidget(card)
 
+        self.modpack_mode = "new"
+        self.modpack_attach = ""
+        self._has_modpack = any(kind == "modpack" for _path, kind in items)
+        if self._has_modpack:
+            mode_box = QGroupBox("整合包安装方式")
+            mode_layout = QVBoxLayout(mode_box)
+            mode_layout.setContentsMargins(12, 8, 12, 8)
+            mode_layout.setSpacing(4)
+            self.mode_new = QRadioButton("创建全新实例（推荐，整合包互不影响）")
+            self.mode_new.setChecked(True)
+            self.mode_attach = QRadioButton("附加到下面选择的已有版本（覆盖该版本的 mods）")
+            mode_layout.addWidget(self.mode_new)
+            mode_layout.addWidget(self.mode_attach)
+            mode_hint = QLabel(
+                "全新实例会自动安装整合包要求的原版与加载器；附加模式不再下载版本，"
+                "但要求所选版本的 Minecraft 版本与加载器同整合包一致。"
+            )
+            mode_hint.setObjectName("Tiny")
+            mode_hint.setWordWrap(True)
+            mode_layout.addWidget(mode_hint)
+            layout.addWidget(mode_box)
+
         target_row = QHBoxLayout()
         target_row.setSpacing(10)
         caption = QLabel("安装到")
@@ -561,7 +476,7 @@ class DropDialog(QDialog):
 
         hint = QLabel(
             "Mod / 资源包 / 光影包 / 世界存档会安装到所选版本（遵循版本隔离设置）；"
-            "整合包会自动创建独立实例，无需选择目标。"
+            "整合包默认创建独立实例，也可以选择附加到已有版本。"
         )
         hint.setObjectName("Tiny")
         hint.setWordWrap(True)
@@ -584,6 +499,15 @@ class DropDialog(QDialog):
         if not isinstance(target, dict):
             QMessageBox.information(self, "请选择目标", "请选择要安装到的版本。")
             return
+        if self._has_modpack and self.mode_attach.isChecked():
+            version_id = str(target.get("version_id") or "")
+            if not version_id:
+                QMessageBox.information(
+                    self, "请选择版本", "附加模式需要选择一个已安装的游戏版本。"
+                )
+                return
+            self.modpack_mode = "attach"
+            self.modpack_attach = version_id
         self.selected_target = target
         self.accept()
 
@@ -592,6 +516,7 @@ def handle_dropped_paths(parent, ctx: AppContext, paths: list[Path]) -> None:
     """识别并安装拖入的文件/文件夹。"""
     from .page_content import scan_targets
 
+    paths = _expand_dropped_paths(list(paths))
     items: list[tuple[Path, str]] = []
     unknown: list[str] = []
     for path in paths:
@@ -697,7 +622,13 @@ def handle_dropped_paths(parent, ctx: AppContext, paths: list[Path]) -> None:
             holder: dict[str, QThread] = {}
 
             def make_modpack(_task, path=path, pause=pause, holder=holder) -> QThread:
-                worker = ModpackDropWorker(ctx, path)
+                worker = ModpackDropWorker(
+                    ctx,
+                    path,
+                    attach_version=(
+                        dialog.modpack_attach if dialog.modpack_mode == "attach" else ""
+                    ),
+                )
                 worker.pause_event = pause
                 holder["worker"] = worker
                 link(worker, _task.id)

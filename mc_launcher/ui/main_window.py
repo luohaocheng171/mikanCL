@@ -17,20 +17,26 @@ from PySide6.QtGui import (
     QDesktopServices,
     QGuiApplication,
     QIcon,
+    QKeySequence,
     QMovie,
     QPainter,
     QPainterPath,
     QPixmap,
     QRegion,
+    QShortcut,
 )
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -87,7 +93,7 @@ from .theme import (
     make_skin_avatar,
     resolve_account_avatar,
 )
-from .widgets import ask_skin_model, scroll_page
+from .widgets import ask_skin_model, load_recent_pages, save_recent_pages, scroll_page
 
 # 无边框窗口的边缘缩放：Windows 命中测试消息与结果码
 _WM_NCHITTEST = 0x0084
@@ -386,6 +392,125 @@ class NetworkCheckWorker(QThread):
         self.done.emit(ok)
 
 
+COMMAND_INDEX: tuple[tuple[str, str, str, str], ...] = (
+    ("主页 / 启动游戏", "home", "页面", "启动 版本列表 账号"),
+    ("下载安装", "download", "页面", "原版 安装游戏 下载"),
+    ("下载中心", "downloads", "页面", "任务 队列 进度"),
+    ("下载加速", "download_accel", "页面", "测速 节点 速度"),
+    ("内容中心", "content", "页面", "Mod 模组 资源包 光影"),
+    ("整合包", "modpack", "页面", "整合包 安装 附加"),
+    ("账号管理", "account", "页面", "登录 微软 离线 外置"),
+    ("版本设置", "control", "页面", "实例 存档 修复 资源包"),
+    ("Mod 加载器", "loaders", "页面", "Forge Fabric NeoForge Quilt"),
+    ("多人联机", "multiplayer", "页面", "服务器 联机"),
+    ("内置浏览器", "browser", "页面", "网页 浏览"),
+    ("Forbric", "forbric", "页面", "整合 兼容"),
+    ("Java 中心", "java", "页面", "Java 扫描 下载 运行时"),
+    ("依赖补全", "deps", "页面", "缺失 库 修复"),
+    ("Mod 关系网", "modgraph", "页面", "冲突 关系图"),
+    ("教程中心", "wiki", "页面", "攻略 帮助 文档"),
+    ("基岩版", "bedrock", "页面", "Bedrock 基岩"),
+    ("皮肤工厂", "skin_factory", "页面", "皮肤工坊 制作 4D"),
+    ("皮肤包 / UI 材质包", "skin_pack", "页面", "皮肤 材质 界面"),
+    ("世界种子", "seed_terrain", "页面", "种子 地形 地图"),
+    ("截图图库", "gallery", "页面", "截图 打包 导出"),
+    ("崩溃报告", "crash", "页面", "崩溃 日志 归档"),
+    ("设置", "settings", "页面", "选项 配置"),
+    ("NBT 编辑器", "control", "功能", "level.dat NBT 存档"),
+    ("存档备份", "control", "功能", "备份 存档 还原"),
+    ("存档恢复", "control", "功能", "恢复 回档"),
+    ("实例管理", "control", "功能", "实例 版本隔离"),
+    ("版本修复 / 补全文件", "control", "功能", "修复 校验 缺失"),
+    ("资源包管理", "control", "功能", "资源包 材质"),
+    ("光影包管理", "control", "功能", "光影 shader"),
+    ("游戏窗口与分辨率", "control", "功能", "窗口 分辨率 全屏"),
+    ("Mod 下载", "content", "功能", "模组 下载"),
+    ("资源包下载", "content", "功能", "材质 下载"),
+    ("光影包下载", "content", "功能", "shader 下载"),
+    ("整合包安装", "modpack", "功能", "附加 已有版本 新建实例"),
+    ("服务器列表", "multiplayer", "功能", "服务器 地址"),
+    ("皮肤快速切换", "home", "功能", "最近皮肤 头像"),
+    ("运行日志 / 控制台", "home", "功能", "日志 控制台 输出"),
+    ("下载任务队列", "downloads", "功能", "暂停 重试 任务"),
+    ("下载测速", "download_accel", "功能", "加速 节点"),
+    ("基岩版下载", "bedrock", "功能", "Bedrock 下载"),
+    ("世界种子地形预览", "seed_terrain", "功能", "地图 种子"),
+    ("截图打包导出", "gallery", "功能", "zip 导出 截图"),
+    ("崩溃日志删除", "crash", "功能", "清理 崩溃"),
+    ("依赖缺失补全", "deps", "功能", "缺失 Mod 库"),
+    ("Mod 冲突关系图", "modgraph", "功能", "冲突 依赖"),
+    ("设置 · 通用", "settings", "设置分区", "常规"),
+    ("设置 · 功能开关", "settings", "设置分区", "页面开关"),
+    ("设置 · 外观 / 主题", "settings", "设置分区", "主题 背景 毛玻璃"),
+    ("设置 · 下载源", "settings", "设置分区", "镜像 下载"),
+    ("设置 · 内容源与镜像", "settings", "设置分区", "内容源 镜像"),
+    ("设置 · 账号与登录", "settings", "设置分区", "登录 账号"),
+    ("设置 · 游戏设置", "settings", "设置分区", "游戏 目录"),
+    ("设置 · Java 运行时", "settings", "设置分区", "Java 内存 JVM"),
+    ("设置 · 关于", "settings", "设置分区", "版本 信息"),
+    ("打开数据目录", "settings", "功能", "数据 缓存 目录"),
+    ("打开插件目录", "settings", "功能", "插件"),
+    ("清理封面缓存", "settings", "功能", "缓存 清理"),
+    ("清理下载缓存", "settings", "功能", "缓存 清理"),
+)
+
+
+class CommandPalette(QDialog):
+    """Ctrl+K 全局命令面板：模糊搜索页面与常用功能。"""
+
+    def __init__(self, navigate, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._navigate = navigate
+        self.setObjectName("Root")
+        self.setWindowTitle("命令面板")
+        self.setModal(True)
+        self.setMinimumWidth(520)
+        self.resize(620, 400)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("输入页面或功能名称…（Enter 跳转，Esc 关闭）")
+        layout.addWidget(self.search_edit)
+        self.result_list = QListWidget()
+        self.result_list.setAlternatingRowColors(False)
+        layout.addWidget(self.result_list, 1)
+
+        self._populate("")
+        self.search_edit.textChanged.connect(self._populate)
+        self.search_edit.returnPressed.connect(self._activate_current)
+        self.result_list.itemActivated.connect(lambda _item: self._activate_current())
+        self.result_list.itemClicked.connect(lambda _item: self._activate_current())
+
+    def _populate(self, query: str) -> None:
+        keyword = (query or "").strip().lower()
+        self.result_list.clear()
+        for label, page_key, group, aliases in COMMAND_INDEX:
+            haystack = f"{label} {group} {aliases}".lower()
+            if keyword and keyword not in haystack:
+                continue
+            item = QListWidgetItem(f"{label}    · {group}")
+            item.setData(Qt.UserRole, page_key)
+            self.result_list.addItem(item)
+        if self.result_list.count():
+            self.result_list.setCurrentRow(0)
+        else:
+            empty = QListWidgetItem("没有匹配的页面或功能")
+            empty.setFlags(Qt.NoItemFlags)
+            self.result_list.addItem(empty)
+
+    def _activate_current(self) -> None:
+        item = self.result_list.currentItem()
+        if item is None:
+            return
+        page_key = item.data(Qt.UserRole)
+        if not page_key:
+            return
+        self.accept()
+        self._navigate(str(page_key))
+
+
 class MainWindow(QMainWindow):
     def __init__(self, ctx: AppContext):
         super().__init__()
@@ -404,6 +529,8 @@ class MainWindow(QMainWindow):
         self._nav_history: list[str] = []
         self._current_nav_key = ""
         self._nav_skip_record = False
+        self._recent_pages = load_recent_pages()
+        self._command_palette: CommandPalette | None = None
         self.setWindowTitle(f"{APP_NAME} · {self.tr('Minecraft 启动器')}")
         _trace("mw: after setWindowTitle")
         self.setWindowIcon(make_block_icon(64))
@@ -420,6 +547,14 @@ class MainWindow(QMainWindow):
 
         self._build()
         _trace("mw: after _build")
+        self._command_shortcut = QShortcut(QKeySequence("Ctrl+K"), self)
+        self._command_shortcut.activated.connect(self._open_command_palette)
+        if self.nav_buttons:
+            first_button = self.nav_buttons[0]
+            self._record_recent_page(
+                getattr(first_button, "_nav_key", ""), first_button.text()
+            )
+        self._refresh_home_recent()
         self._avatar_covers = CoverLoader(self)
         _trace("mw: after CoverLoader")
         self._connect_bus()
@@ -1124,6 +1259,42 @@ class MainWindow(QMainWindow):
         except RuntimeError:
             pass
 
+    def _open_command_palette(self) -> None:
+        """Ctrl+K：打开全局命令面板。"""
+        if self._command_palette is not None and self._command_palette.isVisible():
+            self._command_palette.raise_()
+            self._command_palette.activateWindow()
+            return
+        dialog = CommandPalette(self._navigate_by_name, self)
+        self._command_palette = dialog
+        try:
+            dialog.exec()
+        finally:
+            self._command_palette = None
+
+    def _record_recent_page(self, key: str, label: str) -> None:
+        """记录一次页面访问（只在统一切换入口调用，重复访问只提前不重复）。"""
+        if not key or key == "plugin":
+            return
+        if self._recent_pages and self._recent_pages[0].get("key") == key:
+            return
+        entries = [item for item in self._recent_pages if item.get("key") != key]
+        entries.insert(0, {"key": key, "label": label})
+        self._recent_pages = entries[:5]
+        save_recent_pages(self._recent_pages)
+        self._refresh_home_recent()
+
+    def _refresh_home_recent(self) -> None:
+        page = getattr(self, "home_page", None)
+        if page is None:
+            return
+        setter = getattr(page, "set_recent_pages", None)
+        if callable(setter):
+            try:
+                setter(self._recent_pages)
+            except RuntimeError:
+                pass
+
     def _navigate_by_name(self, name: str) -> None:
         # 按导航项 key 反查页码：插件 / 外部跳转只需匹配 key，新增页面时不用再同步数字
         aliases = {
@@ -1339,6 +1510,8 @@ class MainWindow(QMainWindow):
                 self._nav_history.append(self._current_nav_key)
                 del self._nav_history[:-20]
         self._current_nav_key = key
+        if key and not self._nav_skip_record:
+            self._record_recent_page(key, self.nav_buttons[index].text())
         # 重复点击当前磁贴不重复刷新；真正切页时把刷新延后到事件循环空闲，
         # 先让页面完成一次绘制，避免磁盘扫描 / 网络请求阻塞切换动画
         if not changed:

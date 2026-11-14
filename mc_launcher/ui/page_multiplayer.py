@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import terracotta as tc
+from .. import serverping
 from ..context import AppContext
 from .widgets import Card, card_title_row, hline, page_header
 
@@ -100,6 +101,8 @@ class MultiplayerPage(QWidget):
         self._state: dict = {"state": "waiting"}
         self._starting = False
         self._last_room = ""
+        self._probed_url = ""
+        self._probe_worker: SimpleWorker | None = None
         self.log_line.connect(self._append_log)
         self._build()
         self._render()
@@ -163,6 +166,22 @@ class MultiplayerPage(QWidget):
         room_row.addWidget(self.copy_btn)
         room_row.addStretch(1)
         status_card.body.addLayout(room_row)
+
+        # 地址可用性检测：进入房间后自动 ping 一次，也可手动复测
+        ping_row = QHBoxLayout()
+        ping_row.setContentsMargins(0, 0, 0, 0)
+        ping_row.setSpacing(8)
+        self.ping_btn = QPushButton(self.tr("重新检测地址"))
+        self.ping_btn.setObjectName("Ghost")
+        self.ping_btn.setVisible(False)
+        self.ping_btn.clicked.connect(self._probe_current)
+        self.ping_label = QLabel("")
+        self.ping_label.setObjectName("Tiny")
+        self.ping_label.setWordWrap(True)
+        self.ping_label.setVisible(False)
+        ping_row.addWidget(self.ping_btn)
+        ping_row.addWidget(self.ping_label, 1)
+        status_card.body.addLayout(ping_row)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 1000)
@@ -272,6 +291,9 @@ class MultiplayerPage(QWidget):
         self._ensure_service()
 
     def shutdown(self) -> None:
+        if self._probe_worker is not None:
+            self._probe_worker.wait(5000)
+            self._probe_worker = None
         if self.poller is not None:
             self.poller.stop()
             self.poller.wait(1500)
@@ -340,6 +362,56 @@ class MultiplayerPage(QWidget):
 
     def _reset_copy_btn(self) -> None:
         self.copy_btn.setText(self.tr("📋 复制房间码"))
+
+    # ------------------------------------------------------------------
+    # 地址探测
+    # ------------------------------------------------------------------
+    def _probe_current(self) -> None:
+        url = str(self._state.get("url") or "")
+        if not url:
+            return
+        self._probed_url = ""
+        self._probe_async(url)
+
+    def _probe_async(self, url: str) -> None:
+        if self._probe_worker is not None and self._probe_worker.isRunning():
+            return
+        self._probed_url = url
+        self.ping_label.setVisible(True)
+        self.ping_label.setStyleSheet("color: #8a8f98;")
+        self.ping_label.setText(self.tr("正在检测 {0} 是否可用…").format(url))
+
+        def task(_worker: SimpleWorker):
+            return serverping.probe_address(url, timeout=4.0)
+
+        worker = SimpleWorker(task, self)
+        self._probe_worker = worker
+        worker.done.connect(self._on_probe_done)
+        worker.failed.connect(self._on_probe_failed)
+        worker.start()
+
+    def _on_probe_done(self, result) -> None:
+        url = self._probed_url or str(self._state.get("url") or "")
+        if getattr(result, "online", False):
+            latency = int(getattr(result, "latency", -1))
+            text = self.tr("地址可用 · 延迟 {0} ms").format(latency) if latency >= 0 else self.tr(
+                "地址可用"
+            )
+            extra = str(getattr(result, "version", "") or "")
+            if extra:
+                text += self.tr(" · 游戏版本 {0}").format(extra)
+            self.ping_label.setStyleSheet("color: #65d46e;")
+            self.ping_label.setText(f"{url} · {text}")
+        else:
+            reason = str(getattr(result, "error", "") or self.tr("无法连接"))
+            self.ping_label.setStyleSheet("color: #e0b15c;")
+            self.ping_label.setText(
+                self.tr("{0} 暂时无法连接：{1}（可点「重新检测地址」复测）").format(url, reason)
+            )
+
+    def _on_probe_failed(self, message: str) -> None:
+        self.ping_label.setStyleSheet("color: #e0b15c;")
+        self.ping_label.setText(self.tr("地址检测失败：{0}").format(message))
 
     # ------------------------------------------------------------------
     # 操作
@@ -526,6 +598,13 @@ class MultiplayerPage(QWidget):
         self.room_label.setVisible(show_room and bool(room))
         self.room_label.setText(room)
         self.copy_btn.setVisible(show_room and bool(room))
+        # 进入房间后自动检测一次服务器地址是否可用
+        url = str(self._state.get("url") or "")
+        show_ping = state in ("host-ok", "guest-ok") and bool(url)
+        self.ping_btn.setVisible(show_ping)
+        self.ping_label.setVisible(show_ping)
+        if show_ping and url != self._probed_url:
+            self._probe_async(url)
         # 房间码变化或隐藏时清掉“已复制”临时文案，避免刷新后残留
         if room != self._last_room or not room:
             self._last_room = room

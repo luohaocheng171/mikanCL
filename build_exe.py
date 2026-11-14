@@ -25,14 +25,33 @@ EXCLUDES = [
     "PySide6.Qt3DInput",
     "PySide6.Qt3DLogic",
     "PySide6.Qt3DRender",
+    "PySide6.QtBluetooth",
     "PySide6.QtCharts",
     "PySide6.QtDataVisualization",
+    "PySide6.QtDesigner",
     "PySide6.QtGraphs",
+    "PySide6.QtHelp",
+    "PySide6.QtLocation",
+    "PySide6.QtMultimedia",
+    "PySide6.QtMultimediaWidgets",
+    "PySide6.QtNfc",
+    "PySide6.QtPdf",
+    "PySide6.QtPdfWidgets",
+    "PySide6.QtPositioning",
+    "PySide6.QtQml",
+    "PySide6.QtQuick",
     "PySide6.QtQuick3D",
+    "PySide6.QtQuickControls2",
+    "PySide6.QtQuickWidgets",
+    "PySide6.QtRemoteObjects",
+    "PySide6.QtScxml",
+    "PySide6.QtSensors",
     "PySide6.QtSerialPort",
+    "PySide6.QtSql",
+    "PySide6.QtStateMachine",
     "PySide6.QtTest",
-    "PySide6.QtWebEngineQuick",
-    "tkinter",
+    "PySide6.QtUiTools",
+    "PySide6.QtWebEngineQuick",    "tkinter",
     "unittest",
     "pydoc",
 ]
@@ -49,6 +68,7 @@ DATA_DIRS = (
 # pywebview 在 Windows 依赖 pythonnet + WebView2 互操作程序集
 # （webview 自带 PyInstaller 钩子，会自动收集 lib/js，这里只补隐藏导入）
 HIDDEN_IMPORTS = (
+    "mc_launcher.world_convert",
     "webview.platforms.edgechromium",
     "webview.platforms.winforms",
     "clr",
@@ -148,6 +168,16 @@ def main() -> int:
         source = ROOT / folder
         if source.is_dir():
             command += ["--add-data", f"{source};{target}"]
+
+    # Electron 独立版内置包：第一次切到独立版时释放到 data/electron/app
+    electron_bundle = ROOT / "electron_bundle"
+    if (electron_bundle / "MikanCL-Electron.zip").is_file():
+        command += ["--add-data", f"{electron_bundle};electron_bundle"]
+        size = (electron_bundle / "MikanCL-Electron.zip").stat().st_size / 1024 / 1024
+        print(f"已附带 Electron 内置包（{size:.1f} MB）")
+    else:
+        print("提示：未找到 electron_bundle/MikanCL-Electron.zip，单文件将不含独立版。")
+        print("      先运行 python build_electron.py --all 生成内置包。")
 
     command.append(str(ROOT / "run.py"))
 

@@ -37,7 +37,7 @@ from ..installer import GameInstaller
 from ..java import download_java, java_key
 from ..net import Cancelled
 from ..version import load_version, scan_installed_versions
-from .widgets import Card, page_header
+from .widgets import Card, page_header, related_features_row
 
 _FILE_KINDS = ("client", "library", "assets", "logging", "version")
 
@@ -384,6 +384,7 @@ class DependenciesPage(QWidget):
         hint.setWordWrap(True)
         check_card.body.addWidget(hint)
         outer.addWidget(check_card, 1)
+        outer.addWidget(related_features_row(self.ctx, "deps"))
 
     # ------------------------------------------------------------------
     def refresh(self) -> None:

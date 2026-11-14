@@ -1,8 +1,9 @@
 """MikanCL 应用入口。
 
-启动路径按界面框架分成两条，未选中的框架不导入：
+启动路径按界面框架分成三条，未选中的框架不导入：
 - classic：Qt Widgets 主窗口（功能完整，低占用）
 - webview：pywebview + WebView2 美化版外壳（Chromium 渲染）
+- electron：独立版，交给 Electron 产物自己启动，主程序直接退出
 
 重模块（QtWebEngine、MainWindow、ContentClient、Net 等）全部放到函数内惰性导入，
 避免美化版启动时白等几百毫秒。
@@ -134,6 +135,47 @@ def _run_webview(config) -> bool:
     return True
 
 
+def _message_box(text: str) -> None:
+    """还没有 QApplication 时的兜底提示（只在 Windows 上有实际效果）。"""
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(0, text, APP_NAME, 0x00000030)
+    except Exception:  # noqa: BLE001 - 提示失败不影响退出
+        pass
+
+
+def _run_electron(config) -> bool:
+    """独立版：拉起 Electron 产物并退出主程序；返回 True 表示已经交接。"""
+    from .electron_launcher import launch_electron
+
+    if launch_electron():
+        try:
+            config.cancel_debounced_save()
+            config.save()
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+    _message_box(
+        f"未找到 {APP_NAME_CN} 独立版（Electron）。\n\n"
+        "独立版是单独的构建产物，需要先运行 build_electron.py 生成；\n"
+        "也可以在「设置 → 外观 → 界面框架」里切回美化版或经典版。"
+    )
+    return False
+
+
+def _log_line(message: str) -> None:
+    """把启动阶段的关键决策写进 data/logs/launcher.log（与界面日志同一文件）。"""
+    import time
+
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(LOG_DIR / "launcher.log", "a", encoding="utf-8") as handle:
+            handle.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  [框架] {message}\n")
+    except OSError:
+        pass
+
+
 def main() -> None:
     from ._trace import trace as _startup_trace
 
@@ -151,6 +193,19 @@ def main() -> None:
 
     config = Config.load()
     _startup_trace("after config load")
+
+    # 独立版：主程序只做交接，不初始化 Qt，也不碰 WebView2
+    if config.frame_mode_asked and config.frame_mode == "electron":
+        if _run_electron(config):
+            _startup_trace("electron handed over")
+            return
+        # 产物缺失：提示后按经典版继续，避免卡在无法进入的界面
+        config.frame_mode = "classic"
+        config.frame_locked = False
+        try:
+            config.save()
+        except OSError:
+            pass
 
     # 已选定美化版时不再导入 QtWebEngine；经典版仍需在 QApplication 之前导入
     if not (config.frame_mode_asked and config.frame_mode == "webview"):
@@ -204,12 +259,38 @@ def main() -> None:
         from .ui.dialog_frame import FrameModeDialog
 
         frame_dialog = FrameModeDialog()
-        frame_dialog.exec()
+        result = frame_dialog.exec()
         config.frame_mode = frame_dialog.mode
         config.frame_mode_asked = True
         config.frame_locked = False
         config.save()
+        # 记一笔，方便排查「选了一个框架却进了另一个」这类问题
+        _log_line(
+            "首次选择界面框架：{}（{}）".format(
+                config.frame_mode,
+                "已点使用此框架" if result == QDialog.Accepted else "直接关闭对话框，沿用高亮项",
+            )
+        )
     _startup_trace(f"frame mode: {config.frame_mode}")
+
+    # 首次就选了独立版：拉起 Electron 后立刻退出，不进入 Qt / WebView2 流程
+    if config.frame_mode == "electron":
+        if _run_electron(config):
+            guard.detach()
+            _SINGLE_INSTANCE = None
+            # 正常返回让 PyInstaller 清理临时解包目录，避免每次切换残留上百 MB
+            return
+        from .ui.dialog_frame import webview2_installed as _webview2_ok
+
+        config.frame_mode = "webview" if _webview2_ok() else "classic"
+        config.frame_locked = False
+        try:
+            config.save()
+        except OSError:
+            pass
+        _startup_trace(f"electron missing, fallback: {config.frame_mode}")
+
+    _log_line(f"进入界面框架：{config.frame_mode}")
 
     # 经典版首次启动再选「界面运行模式」（毛玻璃程度），美化版不需要
     if config.frame_mode == "classic" and not config.ui_mode_asked:

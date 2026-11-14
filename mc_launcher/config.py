@@ -24,11 +24,15 @@ def _is_packaged() -> bool:
 def _app_root() -> Path:
     """用户双击的 exe 所在目录（打包后 data/ 就放在这里）。
 
+    Electron 等外部宿主可以通过 MIKAN_APP_ROOT 显式指定数据根目录。
     Nuitka 单文件模式下 ``sys.executable`` 与 ``__file__`` 都指向缓存目录里解包后的
     副本，直接取它们会把 data/（配置、实例、账号）建到 %LOCALAPPDATA% 的临时缓存，
     换个版本就等于丢数据。Nuitka 在编译模块里注入的 ``__compiled__.original_argv0``
     保存了用户实际启动的那个 exe（引导程序还会把目录写进 ``NUITKA_ONEFILE_DIRECTORY``）。
     """
+    override = os.environ.get("MIKAN_APP_ROOT", "").strip()
+    if override:
+        return Path(override).resolve()
     if not IS_PACKAGED:
         return Path(__file__).resolve().parent.parent
     info = globals().get("__compiled__")
@@ -245,6 +249,27 @@ AFTER_LAUNCH_ACTIONS = {
     "hide": "启动后隐藏启动器",
     "close": "启动后关闭启动器",
 }
+
+# 影响启动的关键配置：启动成功时存档，也用于 .mikan 配置片段分享。
+# download_threads 只在导出/导入时参与，不进入「上次能启动」快照。
+LAUNCH_CONFIG_FIELDS: tuple[str, ...] = (
+    "memory_mb",
+    "extra_jvm_args",
+    "extra_game_args",
+    "smart_jvm",
+    "opt_fixed_heap",
+    "opt_pre_touch",
+    "isolation_mode",
+    "window_title",
+    "server",
+    "priority",
+    "java_path",
+    "proxy_enabled",
+    "proxy_url",
+    "download_threads",
+)
+# .mikan 配置片段里 config 部分的格式标识
+LAUNCH_CONFIG_FORMAT = "mikan/config-fragment"
 
 
 @dataclass
@@ -510,10 +535,13 @@ class Config:
     glass_see_through: bool = False  # 毛玻璃透视桌面：窗口背景透明 + DWM 模糊，开启时忽略背景图与动态壁纸
     glass_strength: int = 62     # 毛玻璃强度 0~100（0 几乎全透明，100 几乎不透明）
     glass_blur: int = 20         # 毛玻璃模糊半径（px，0~64），0 几乎不模糊，64 几乎看不到背景
+    ui_brightness: int = 100     # 背景亮度 70~130（100 = 原始亮度）
+    ui_radius: int = 16          # 卡片 / 面板圆角（px，0~24）
+    ui_scale: int = 100          # 按钮与控件尺寸 85~120（100 = 默认大小）
     ui_acrylic: bool = False     # 毛玻璃背景（依赖 Windows DWM 合成，GPU 加速、低 CPU）
     ui_mode: str = "classic"     # 界面运行模式：classic（经典稳定）/ visual（视觉增强）
     ui_mode_asked: bool = False  # 是否已在首次启动时询问过界面模式
-    frame_mode: str = "classic"  # 界面框架：classic（Qt）/ webview（pywebview + WebView2）
+    frame_mode: str = "classic"  # 界面框架：classic（Qt）/ webview（pywebview + WebView2）/ electron（独立版）
     frame_mode_asked: bool = False  # 是否已在首次启动时询问过界面框架
     frame_locked: bool = False  # 兼容旧配置保留的字段：5.3.0 起框架可双向切换，不再锁定
 
@@ -527,6 +555,9 @@ class Config:
     proxy_enabled: bool = False
     proxy_url: str = ""
     proxy_jvm: bool = True
+
+    # ---- 上次成功启动的配置快照（供「恢复到上次能启动的配置」使用） ----
+    last_good_config: dict[str, Any] = field(default_factory=dict)
 
     # ---- 多人游戏 / 自动连服 ----
     auto_connect_enabled: bool = False
@@ -544,6 +575,7 @@ class Config:
     download_threads: int = 16
     download_speed_limit: int = 0  # 全局下载限速，单位 KB/s，0 表示不限速
     download_accel_dir: str = ""  # 下载加速页上次使用的保存目录
+    download_dir: str = ""        # 手动下载 / 另存为的目录，空表示系统下载文件夹
 
     # ---- 启动统计 / 存档备份 ----
     launch_count: int = 0           # 累计启动次数，用于「支持正版」提示节奏
@@ -722,8 +754,103 @@ class Config:
         return DATA_DIR / "backups"
 
     @property
+    def download_path(self) -> Path:
+        """用户下载目录：另存为、只下载不安装的文件都放这里。"""
+        text = (self.download_dir or "").strip()
+        if text:
+            return Path(os.path.expandvars(text)).expanduser()
+        folder = Path.home() / "Downloads"
+        return folder if folder.is_dir() else Path.home()
+
+    @property
     def effective_proxy(self) -> str:
         return self.proxy_url.strip() if self.proxy_enabled else ""
+
+    # ------------------------------------------------------------------
+    # 启动配置快照 / .mikan 配置片段
+    def launch_config_snapshot(self) -> dict[str, Any]:
+        """影响启动的关键配置（不含下载线程数，线程数只用于配置分享）。"""
+        return {
+            "memory_mb": int(self.memory_mb),
+            "extra_jvm_args": str(self.extra_jvm_args or ""),
+            "extra_game_args": str(self.extra_game_args or ""),
+            "smart_jvm": bool(self.smart_jvm),
+            "opt_fixed_heap": bool(self.opt_fixed_heap),
+            "opt_pre_touch": bool(self.opt_pre_touch),
+            "isolation_mode": str(self.isolation_mode or "all"),
+            "window_title": str(self.window_title or ""),
+            "server": str(self.auto_connect_server or ""),
+            "priority": str(self.process_priority or "normal"),
+            "java_path": str(self.java_path or ""),
+            "proxy_enabled": bool(self.proxy_enabled),
+            "proxy_url": str(self.proxy_url or ""),
+        }
+
+    def remember_last_good_config(self) -> None:
+        """启动成功后覆盖快照；启动失败路径不会调用本方法。"""
+        self.last_good_config = self.launch_config_snapshot()
+        self.save()
+
+    def apply_launch_config(self, data: dict[str, Any]) -> list[str]:
+        """把快照/导入片段写回配置并做范围钳制，返回实际写入的字段名。"""
+        applied: list[str] = []
+        if not isinstance(data, dict):
+            return applied
+
+        if "memory_mb" in data:
+            raw = data["memory_mb"]
+            if not isinstance(raw, bool):
+                try:
+                    memory = int(raw)
+                except (TypeError, ValueError):
+                    memory = 0
+                if memory > 0:
+                    limit = 65536
+                    try:
+                        from .hardware import total_memory_mb
+
+                        total = total_memory_mb()
+                    except Exception:  # noqa: BLE001 - 探测失败按未知处理
+                        total = 0
+                    if total > 0:
+                        limit = min(limit, max(512, total))
+                    self.memory_mb = max(512, min(limit, memory))
+                    applied.append("memory_mb")
+
+        if "download_threads" in data:
+            raw = data["download_threads"]
+            if not isinstance(raw, bool):
+                try:
+                    threads = int(raw)
+                except (TypeError, ValueError):
+                    threads = 0
+                if threads > 0:
+                    # 分享片段按 1~64 钳制，避免他人的机器配置把本机拖满
+                    self.download_threads = max(1, min(64, threads))
+                    applied.append("download_threads")
+
+        for key in ("extra_jvm_args", "extra_game_args", "window_title", "java_path", "proxy_url"):
+            if key in data and isinstance(data[key], str):
+                setattr(self, key, data[key].strip()[:4000])
+                applied.append(key)
+
+        # 快照里的 server 对应本机的自动连服地址
+        if "server" in data and isinstance(data["server"], str):
+            self.auto_connect_server = data["server"].strip()[:255]
+            applied.append("server")
+
+        for key in ("smart_jvm", "opt_fixed_heap", "opt_pre_touch", "proxy_enabled"):
+            if key in data and isinstance(data[key], bool):
+                setattr(self, key, data[key])
+                applied.append(key)
+
+        if data.get("isolation_mode") in ISOLATION_LABELS:
+            self.isolation_mode = str(data["isolation_mode"])
+            applied.append("isolation_mode")
+        if data.get("priority") in PROCESS_PRIORITIES:
+            self.process_priority = str(data["priority"])
+            applied.append("priority")
+        return applied
 
     # ------------------------------------------------------------------
     # 服务器列表
@@ -971,6 +1098,7 @@ class Config:
                 "proxy_enabled": bool(self.proxy_enabled),
                 "proxy_url": self.proxy_url,
                 "proxy_jvm": bool(self.proxy_jvm),
+                "last_good_config": dict(self.last_good_config),
                 "auto_connect_enabled": bool(self.auto_connect_enabled),
                 "auto_connect_server": self.auto_connect_server,
                 "auto_connect_port": int(self.auto_connect_port),
@@ -1139,7 +1267,7 @@ class Config:
         cfg.ui_mode = mode if mode in ("classic", "visual") else "classic"
         cfg.ui_mode_asked = bool(data.get("ui_mode_asked", False))
         frame = str(data.get("frame_mode") or "classic")
-        cfg.frame_mode = frame if frame in ("classic", "webview") else "classic"
+        cfg.frame_mode = frame if frame in ("classic", "webview", "electron") else "classic"
         cfg.frame_mode_asked = bool(data.get("frame_mode_asked", False))
         # 5.3.0 起经典版 / 美化版可随时双向切换，旧配置里的 frame_locked 不再生效
         cfg.frame_locked = False
@@ -1156,6 +1284,16 @@ class Config:
         cfg.proxy_enabled = bool(data.get("proxy_enabled", False))
         cfg.proxy_url = str(data.get("proxy_url") or "")
         cfg.proxy_jvm = bool(data.get("proxy_jvm", True))
+        raw_snapshot = data.get("last_good_config")
+        if isinstance(raw_snapshot, dict):
+            # 旧配置没有该字段；损坏的条目直接忽略，保证启动快照只含简单类型
+            cfg.last_good_config = {
+                str(key): value
+                for key, value in raw_snapshot.items()
+                if isinstance(value, (str, int, float, bool))
+            }
+        else:
+            cfg.last_good_config = {}
         raw_version_settings = data.get("version_settings")
         if isinstance(raw_version_settings, dict):
             for key, raw in raw_version_settings.items():
@@ -1328,6 +1466,8 @@ __all__ = [
     "ISOLATION_LABELS",
     "PROCESS_PRIORITIES",
     "AFTER_LAUNCH_ACTIONS",
+    "LAUNCH_CONFIG_FIELDS",
+    "LAUNCH_CONFIG_FORMAT",
     "OFFICIAL_MANIFEST",
     "BMCLAPI_BASE",
     "BMCLAPI_MANIFEST",

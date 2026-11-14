@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..config import DATA_DIR
-from .widgets import Card, page_header
+from .widgets import Card, page_header, related_features_row
 
 _MAX_PREVIEW = 220 * 1024  # 只读取尾部 220KB，避免超大日志卡住 UI
 
@@ -88,6 +88,7 @@ class CrashReportPage(QWidget):
         splitter.setStretchFactor(1, 3)
         card.body.addWidget(splitter, 1)
         layout.addWidget(card, 1)
+        layout.addWidget(related_features_row(self.ctx, "crash"))
 
     # ------------------------------------------------------------------
     @staticmethod

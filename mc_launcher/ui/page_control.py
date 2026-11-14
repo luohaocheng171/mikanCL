@@ -58,7 +58,15 @@ from ..version import (
     load_version,
     scan_installed_versions,
 )
-from .widgets import Badge, Card, card_title_row, hline, page_header, scroll_page
+from .widgets import (
+    Badge,
+    Card,
+    card_title_row,
+    hline,
+    page_header,
+    related_features_row,
+    scroll_page,
+)
 
 NAV_ITEMS = (
     ("overview", "概览"),
@@ -482,6 +490,7 @@ class ControlPage(QWidget):
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
         outer.addWidget(splitter, 1)
+        outer.addWidget(related_features_row(self.ctx, "control"))
 
         self.nav_list = QListWidget()
         self.nav_list.setObjectName("SettingsNav")
@@ -1116,6 +1125,18 @@ class ControlPage(QWidget):
         open_backup = QPushButton("打开备份目录")
         open_backup.clicked.connect(self._open_backup_dir)
         saves_buttons.addWidget(open_backup)
+        pick_backup = QPushButton("备份目录…")
+        pick_backup.setToolTip("自行选择存档备份保存位置；不选则使用 data/backups")
+        pick_backup.clicked.connect(self._choose_backup_dir)
+        saves_buttons.addWidget(pick_backup)
+        edit_save = QPushButton("存档编辑器…")
+        edit_save.setToolTip("修改世界名称、模式、难度、天气、时间、出生点与常用规则（自动备份 level.dat）")
+        edit_save.clicked.connect(self._open_save_editor)
+        saves_buttons.addWidget(edit_save)
+        convert_save = QPushButton("存档转换器…")
+        convert_save.setToolTip("把存档的版本标记改写为目标游戏版本（自动备份 level.dat）")
+        convert_save.clicked.connect(self._open_world_converter)
+        saves_buttons.addWidget(convert_save)
         saves_buttons.addStretch(1)
         saves_card.body.addLayout(saves_buttons)
 
@@ -1288,6 +1309,36 @@ class ControlPage(QWidget):
         root = self.ctx.config.backup_root
         root.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(root)))
+
+    def _choose_backup_dir(self) -> None:
+        current = str(self.ctx.config.backup_root)
+        path = QFileDialog.getExistingDirectory(self, "选择存档备份目录", current)
+        if not path:
+            return
+        self.ctx.config.backup_dir = path
+        try:
+            self.ctx.config.save()
+        except OSError as exc:
+            QMessageBox.warning(self, APP_NAME, f"保存配置失败：{exc}")
+            return
+        self.ctx.bus.toast.emit(f"备份目录已设为 {path}")
+
+    def _open_save_editor(self) -> None:
+        from .dialog_saves_tools import WorldEditorDialog
+
+        dialog = WorldEditorDialog(self._saves_path(), self)
+        dialog.exec()
+        self._refresh_saves()
+
+    def _open_world_converter(self) -> None:
+        from .dialog_saves_tools import WorldConvertDialog
+
+        versions = scan_installed_versions(self.ctx.config.game_path)
+        dialog = WorldConvertDialog(
+            self._saves_path(), [item.id for item in versions], self
+        )
+        dialog.exec()
+        self._refresh_saves()
 
     def _toggle_auto_backup(self, enabled: bool) -> None:
         self.ctx.config.auto_backup_saves = bool(enabled)
@@ -1537,10 +1588,37 @@ class ControlPage(QWidget):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
 
     def _import_world_archive(self) -> None:
-        version = self._current_version()
-        if version is None:
-            QMessageBox.information(self, APP_NAME, "请先选择一个版本。")
+        versions = scan_installed_versions(self.ctx.config.game_path)
+        if not versions:
+            QMessageBox.information(
+                self, APP_NAME, "还没有安装任何版本，请先下载一个游戏版本再导入存档。"
+            )
             return
+        current = self._current_version()
+        labels = [
+            f"{item.id}{'（当前）' if current is not None and item.id == current.id else ''}"
+            for item in versions
+        ]
+        default_index = next(
+            (
+                index
+                for index, item in enumerate(versions)
+                if current is not None and item.id == current.id
+            ),
+            0,
+        )
+        label, ok = QInputDialog.getItem(
+            self,
+            "选择导入目标",
+            "把世界存档导入到哪个游戏版本？",
+            labels,
+            default_index,
+            False,
+        )
+        if not ok:
+            return
+        chosen = versions[labels.index(label)]
+        game_dir = self.ctx.config.game_path
         path, _ = QFileDialog.getOpenFileName(
             self, "选择世界存档", str(Path.home()), "世界存档压缩包 (*.zip)"
         )
@@ -1549,13 +1627,13 @@ class ControlPage(QWidget):
         from ..content import ContentError
         from .dropinstall import install_file
 
-        target = {"game_dir": str(self._instance_dir()), "version_id": version.id}
+        target = {"game_dir": str(game_dir), "version_id": chosen.id}
         try:
             destination = install_file(self.ctx, Path(path), "world", target)
         except ContentError as exc:
             QMessageBox.warning(self, APP_NAME, str(exc))
             return
-        self.ctx.bus.toast.emit(f"世界存档已导入：{destination}")
+        self.ctx.bus.toast.emit(f"世界存档已导入到 {chosen.id}：{destination}")
         self.ctx.bus.log.emit(f"[存档] 已导入到 {destination}")
 
     def _export_modpack(self) -> None:

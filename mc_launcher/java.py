@@ -1637,6 +1637,34 @@ def fetch_java_installer_versions(
     return [dict(item) for item in rows]
 
 
+def fetch_oracle_exe_versions(
+    major: int, timeout: int = 25, package: str = "jdk"
+) -> list[dict]:
+    """Oracle JDK 的 Windows EXE 安装程序（仅部分版本提供免登录直链）。"""
+    major = int(major)
+    link = f"https://download.oracle.com/java/{major}/latest/jdk-{major}_windows-x64_bin.exe"
+    try:
+        final, size = _head_url(link, timeout=timeout)
+    except Exception:  # noqa: BLE001 - 探测失败视为没有 EXE
+        return []
+    if not final:
+        return []
+    return [
+        _version_entry(
+            "oracle",
+            major,
+            f"{major} (latest)",
+            final,
+            name=final.rsplit("/", 1)[-1],
+            size=size,
+            note="Oracle 官方 EXE 安装程序（NFTC 免费许可）",
+            latest=True,
+            package=package,
+            install="installer",
+        )
+    ]
+
+
 def add_user_path_entry(directory: str | Path) -> tuple[bool, str]:
     """把目录写入当前用户 PATH（HKCU\\Environment），并同步更新当前进程 PATH。
 
