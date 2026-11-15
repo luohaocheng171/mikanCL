@@ -1,0 +1,57 @@
+# MikanCL —— 版本控制忽略规则
+# 说明：只跟踪源码与文档；运行时数据、构建产物、依赖缓存一律不入库。
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+
+# --- 运行时数据（账号 / 配置 / 存档 / 缓存 / 日志） ---
+data/
+!data/.gitkeep
+*.log
+logs/
+crash-reports/
+.mikancl-tx/
+
+# --- 构建产物 ---
+build/
+!build/version_info.txt
+dist/
+dist-electron/
+*.exe
+*.msi
+*.spec
+*.zip
+*.7z
+
+# --- Electron ---
+electron/node_modules/
+electron/dist/
+electron/out/
+electron/app/
+
+# --- 备份 / 临时文件 ---
+*.bak
+*.tmp
+*.part
+*.dat_old.bak
+~$*
+Thumbs.db
+desktop.ini
+
+# --- 本地 IDE / 编辑器 ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# --- 本项目工作文档（非源码，按需放通） ---
+code_health_audit.md

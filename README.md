@@ -1,4 +1,4 @@
-# MikanCL v5.4.5 使用手册
+# MikanCL v5.4.6 使用手册
 
 [文档索引](#文档索引) · [中文发布说明](RELEASE.md)
 
@@ -420,6 +420,56 @@ v5.2.0 把经典版的版本设置完整搬到了美化版，单独开了一个�
 
 ---
 
+## NBT 极限数值引擎（v5.4.6 增补）
+
+- **为什么能突破游戏上限**：很多数值上限来自 NBT 标签的**位宽**而非游戏规则——`TAG_Byte` 8 位（有符号 ±127 / 无符号 0~255）、`TAG_Short` 16 位（±32767）、`TAG_Int` 32 位（±2³¹）、`TAG_Long` 64 位（±2⁶³）。聊天里提到的「老版本 32767 附魔极限」正是 short 的上限。新增 `nbt_extreme.py`，用两种手段突破：**类型提升**（把附魔 `lvl` 从 short 改写成 int/long，就能写 32767 以上）与**无符号位模式**（byte 字段写 0~255，写出等价的负位模式）。写前一律留 `.mikancl-bak` 备份，超限默认拒绝以防损坏存档（可选回绕）。
+- **附魔双轨**：`1.20.5` 是分水岭——旧版附魔在 `tag.Enchantments` / `ench`（level 是 short），新版在 `components."minecraft:enchantments".levels`（level 是 int，附魔书为 `stored_enchantments`）。扫描与一键拉满自动识别格式；`game_data.py` 新增 44 种附魔字典（含 1.21 的 `breach`/`density`/`wind_burst` 与 26.1 的 `lunge`），按版本过滤。还提供「⚡ 大一统附魔」：给物品注入全部附魔（含互斥 / 诅咒）后统一拉满——这正是外置工具做 32k 附魔的原理。
+- **通用越界能力**：`promote_node` 可对任意叶子节点自动提升类型写入超大值；`scan_overflow` 扫描整棵 NBT 树，标出每个数值节点可提升到的更大类型；14 项一键预设覆盖经验、堆叠、生命、药效等级、世界种子 / 时间、出生点等。整数解析改用字符串直转，修掉 `int(float())` 在 >2⁵³ 时丢精度的隐藏 bug（写 2⁶³ 级数值不再失真）。
+- **附魔 255 上限的真相（重要）**：位宽可以提升，**但附魔等级有额外的游戏硬上限**。Minecraft Java **1.17.1（2021-07-06）起，官方把「所有附魔的显示与效果」强制封顶到 255**（更新日志原话：*All enchantments are now capped at level 255 in both display and power*）；同版本还修了 MC-131290（附魔存 short 却按 int 读取）。所以 **1.17.1 及以后写 32767 只会显示/生效 255**——钻石剑锋利 255 级 = `7 + 0.5×(255+1) = 135` 伤害，与实测完全一致；若真按 32767 级应是 16391。这是游戏代码层限制，**类型提升绕不过去**。而在 **1.17.1 之前**（1.16.5 / 1.12.2 / 1.7.10 等）没有这个 clamp，short 可写满 32767 并真实生效——这才是群友「老版本 32767 附魔」的真相。代码里 `enchant_effective_cap(version)` 按版本给出真实上限，`enchant_apply` 在超限时明确提示会被压回 255。
+- **绕过 255 的可行路径：属性直改**：新增 `attribute_apply()`，不给附魔加等级，而是直接给物品挂攻击伤害属性——旧版写 `tag.AttributeModifiers`（`generic.attack_damage`，`Amount` 是 double，1.21.2+ 自动去 `generic.` 前缀），1.20.5+ 写 `components.attribute_modifiers`（`add_value` 运算）。该属性游戏内上限 **0~2048**（minecraft.wiki Attribute），虽非无限但远高于 255 级锋利的 135。
+- **边界诚实说明**：类型提升后的值是否被游戏采用，取决于字段在游戏里是「按数值读取」还是「按类型读取」——经验 / 堆叠 / 属性等通常可用，附魔等级受上述 255 封顶、字符串枚举 / 注册表 ID 不可用。极限数值可能崩溃、坏档或联机被封，界面全程警示；本功能只保证写出的 NBT 合法且能被工具读回，不承诺游戏一定采用。数据依据 minecraft.wiki 与官方 1.17.1 更新日志，2026-11-15 核对。
+- **三套界面同步**：NBT 工作室新增「⚡ 极限数值」页（附魔突破 / **属性直改** / 数值转换 / 越界扫描 / 一键预设五个子页）；Web 与 Electron 共用 `app.js` 新增的 **10 个** `nbe_*` 接口，Qt 经典版 `page_nbt_studio.py` 新增同名页签与「查上限 / 属性直改」控件，全部后台线程 + 函数内惰性导入。
+- **回归测试**：`test_nbt_extreme.py` 扩到 **70 项全绿**（含新增的 1.17.1 封顶边界、1.16.5 不封顶、新版/旧版属性写入、2048 钳制、1.21.2 去前缀等）；`test_nbt_studio.py` 38 项仍全绿。
+
+---
+
+## NBT 建筑生成与深层数值控制（v5.4.6 增补二）
+
+新增 `nbt_build.py`。NBT 工作室多出「🏗 建筑生成」页，两个子页签：**指定坐标生成建筑**、**深层数值控制**。所有能力都按版本实时判定，不硬编码。
+
+- **为什么不是"直接往 region 写方块"**：世界方块存在 `region/*.mca` 的区块里，不是 `level.dat` 的一部分。直接改 region 要重写整块 chunk 与高度图，风险高且极易坏档，本启动器不做。改用官方支持的「**结构文件 + 投放工具**」路径。
+- **结构文件（真正能定义建筑的 NBT）**：按官方格式生成 `size` / `palette` / `blocks` / `entities` / `DataVersion`（gzip 压缩）。内置 4 个模板——小木屋（5×5×5，含门窗屋顶）、石塔（3×8×3 带顶灯）、悬空平台（7×1×7）、石柱（1×6×1），也能自定义方块表与方块状态属性（如 `axis=y`）。结构文件按版本落到正确目录：**1.21 起 `data/<ns>/structure/`（单数），之前 `structures/`**。
+- **指定坐标生成建筑**——三条落地路径，按版本给能用哪几条：
+  - **`/give` 结构方块物品（1.10+，最省事）**：直接生成可粘贴的命令，物品自带 `BlockEntityTag`（`mode=LOAD`、结构名、`posX/Y/Z`、`sizeX/Y/Z`、旋转、镜像、完整度），放下通电即在目标坐标加载。1.11 起方块实体 id 是 `structure_block`，1.10 是 `Structure`——自动切换；
+  - **`/place template`（1.19+）**：生成可直接执行的命令，22w19a 起可放模板；**1.21.5+ 才支持 `strict`**，低版本请求 strict 会如实告知不支持；
+  - **命令方块物品**：自带 `BlockEntityTag`，放下即带好 `/place template` 命令。
+  1.12.2 这类老版本只会给结构方块路径，不会假装有 `/place`。
+- **深层数值控制（41 项，按版本过滤）**：世界出生点 X/Y/Z 与出生朝向（`SpawnAngle` 1.16.2+）、世界时间 / 总时间、天气四项（晴雨雷倒计时与状态）、难度 / 锁定难度 / 极限模式 / 允许命令、**世界边界**（中心、直径、越界伤害、警告距离）、**玩家能力**（允许飞行 / 正在飞行 / 瞬间破坏 / 无敌 / 可放置 / 飞行速度 / 行走速度）、玩家经验 / 饥饿 / 生命 / 伤害吸收、**实体物理**（无重力 / 无敌 / 永久保留 / 静音 / 发光描边 / 禁用 AI）。
+- **版本实时检测（本页的核心）**：`capabilities(version)` 是唯一入口，返回结构方块、`/place`、`strict`、数据包、结构目录名、26.1 是否重构等能力；`control_catalog(version)` 返回 41 项控制并标注**当前版本的真实文件落点**。**26.1 起 `level.dat` 重构**：天气移到 `data/minecraft/weather.dat`、难度移入 `difficulty_settings`、世界边界移到 `world_border.dat`——写入时自动改到正确文件；文件不存在会**明确报错而不是臆造**，版本不够的字段直接禁用并写明原因。
+- **三套界面同步**：Web / Electron 共用 `app.js` 新增「🏗 建筑生成」页与 **7 个** `nbb_*` 接口（`nbb_overview` / `nbb_capabilities` / `nbb_controls` / `nbb_plan` / `nbb_write_structure` / `nbb_give` / `nbb_apply_control`）；Qt 经典版 `page_nbt_studio.py` 新增同名页签（7 个页签），切版本会同时刷新能力徽标与控制表。全部后台线程 + 函数内惰性导入。
+- **回归测试**：新增 `test_nbt_build.py` **79 项全绿**（版本能力边界、结构文件读回、palette/Properties、结构方块新旧 BE id、`/give` 命令、`/place` 版本与 strict、完整方案、数据包路径单复数、41 项控制目录、26.1 分文件报错、写入读回、备份、路径安全）。
+
+---
+
+## v5.4.6 这一版新增了什么
+
+- **官方游戏数据字典**：新增 `game_data.py`，按 minecraft.wiki 官方页面逐条核对，收录 18 条数据包格式号 / 26 条资源包格式号（`1.6.1`–`26.3`）、59 条游戏规则、32 条实体属性、31 种生物默认掉落、97 条常用 NBT 字段（7 组）、13 类标签与 270 个原版物品 ID。版本边界有据可查：`1.20.5` 配方 `item`→`id`、`1.21` 战利品表目录改单数 `loot_table`、`1.21.2` 简化 ingredient 与属性去前缀、`1.21.5` 实体 NBT 改 snake_case、`1.21.9` `pack.mcmeta` 改用 `min_format`/`max_format`、`1.21.11` gamerule 改 snake_case 并伴随部分值反转、`26.1` GameRules 迁到 `game_rules.dat`。`1.12.2` 及更早没有数据包系统，界面明确提示只能用 Mod 改配方，不强求适配。
+- **NBT 工作室**：新增 `nbt_studio.py`，在保留标签类型的 typed NBT 读写之上做树形展开、批量改值、增删节点、写盘前自动备份（`.mikancl-bak`）、路径穿越防护。可编辑实体属性（按版本生成正确 ID）、生物掉落物（生成覆盖 `minecraft` 命名空间的战利品表）、GameRules（自动处理键名与反转规则）、`server.properties`（保留注释逐键改写）。
+- **配方工坊 · 把图标拖进工作台**：新增 `item_icons.py`，从版本 jar / 资源包 / Mod jar 提取真实物品贴图，没有贴图时按 ID 生成稳定像素风占位图标。网页版与独立版是工作台 3×3 + 熔炉界面，把图标拖进格子、结果格放产物；经典版是可拖放的 `ItemPalette` → `ItemSlot`。一次导出**数据包 zip + 资源包 zip**，分别手动放进 `datapacks/` 与 `resourcepacks/`。支持选中 Mod 命名空间**覆盖已有配方**，也能读取存档 / Mod / 版本 jar 里的现有配方改完再导出。
+- **数值调校**：刷怪上限、实体挤压、移速等 18 个入口按来源分组（gamerule / `server.properties` / Bukkit / 实体属性），gamerule 写 `level.dat`，服务端配置逐键改写；Bukkit 系与实体属性只给建议值并指到对应编辑位置，不假装能直接改。
+- **把启动器全部功能做成可调用接口**：新增 `api_gateway.py`，反射 `WebApi` 的**全部 339 个公开方法**，生成接口清单 / 签名 / 中文说明 / 分组，支持查询、描述、在线 `invoke`、导出 OpenAPI 3，以及只监听 `127.0.0.1` 的本机 HTTP JSON-RPC 服务（随机 token 鉴权）。危险方法与私有方法列入黑名单；陶瓦联机的 9 个接口原样保留。
+- **三套界面全覆盖**：Qt 经典版新增「NBT 工作室 / 配方工坊 / 数值调校 / API 浏览器」四个页面，pywebview 美化版与 Electron 独立版共用 `app.js` 的四个同名导航页；全部沿用首次显示才加载、后台线程与函数内惰性导入。
+- **顺手修掉一个老 bug**：`save_repair.list_world_candidates()` 在存档目录不存在时会因 `items` 未定义抛 `UnboundLocalError`，空机器上新增页面首次加载必失败；已修并补回归测试。
+
+### 本版校验
+
+- **源码**：112 个 `mc_launcher/*.py` + 13 个 `tests/*.py` 在 Python 3.15.2 下编译零失败；`node --check app.js` 通过；`app.css` 新增样式类全部有定义。
+- **接口对照**：前端 314 个 `call()` 全部命中后端 339 个公开方法（含 40 个新增前缀调用），405 个 `ACT` 定义零重名；陶瓦接口未改动。
+- **回归测试**：`test_nbt_studio.py` 38 项、`test_item_icons.py` 20 项、`test_datapack_v2.py` 38 项、`test_api_gateway.py` 30 项，合计 **126 项全绿**。
+- **Qt 离屏实跑**：四个新增 Qt 页面在 `QT_QPA_PLATFORM=offscreen` 下构造、`show()`、首次异步加载、`wait_all()` 全部无异常；顺带验证拖拽 MIME、占位图标与 3×3 配方建模。
+- **产物**：`dist/MikanCL.exe` 已用 Python 3.15.2 + PyInstaller 6.22.3 重打包，**369.8 MB**（内含 149.4 MB Electron 独立版包，耗时 7 分 29 秒），Windows 版本资源 `FileVersion` / `ProductVersion` 均为 **5.4.6**；旧版备份为 `dist/MikanCL-5.4.5.exe`。
+- **占位图标边界**：打包时为控制体积排除了 `PySide6.QtSvg`，经典版 exe 里 SVG 占位图标会退化成按物品 ID 生成的字母色块；美化版 / 独立版由浏览器直接渲染 SVG，不受影响。两版都能正常显示真实 PNG 贴图。
+
 ## v5.4.5 这一版新增了什么
 
 - **备份中心**：三类备份（启动前自动 / 创世神强制 / 存档修复）统一索引；每个存档可单独设置「最多保留几份」，超限自动删最老一份；可删除单份、清空某存档全部备份、打开备份文件夹。经典版在「备份中心」页，网页版与独立版在「备份中心」导航页。
@@ -429,7 +479,7 @@ v5.2.0 把经典版的版本设置完整搬到了美化版，单独开了一个�
 - **运行时优化**：JVM 内存模板（CDS/AppCDS、G1 字符串去重、按实例分堆）与 Mod 变更监视 / 一键应用重启队列。界面里如实标注「跨 JVM 内存去重」「运行中热注入 Mod」在 Windows 用户态与 JVM 限制下做不到。
 - **惰性导入与异步**：开发校验切换到 Python 3.15.2，新增跨版本惰性导入层（3.15 可选启用 PEP 810，旧版自动跳过）；全部新功能用函数内惰性导入 + 后台线程，源码仍兼容 3.10+，v5.4.5 的 exe 已用该环境重新打包并验证。
 
-### 本版产物与校验
+### v5.4.5 产物与校验
 
 - **可执行文件已重新打包**：`dist/MikanCL.exe`，369.6 MB，Windows 版本资源 `FileVersion` / `ProductVersion` 均为 **5.4.5**，内含 149.4 MB 的 Electron 独立版包；右键 exe → 属性 → 详细信息即可核对。此前 `dist` 里旧文件的版本资源实际是 5.4.3，已备份为 `dist/MikanCL-5.4.3.exe`。
 - **校验结果**：118 个 `.py` 在 3.15.2 下编译零失败；`node --check app.js` 通过；前端 274 个调用全部命中后端；`TerrainGen.java` source v7 编译并跑通 5 / 10 / 15 参数；版本号共 7 处一致；陶瓦接口未改动。
@@ -634,10 +684,16 @@ MikanCL/
 │  ├─ datapack.py          数据包配方 / 战利品表编辑（v5.4.5）
 │  ├─ runtime_opt.py       JVM 模板 / 内存分配 / Mod 变更队列（v5.4.5）
 │  ├─ lazy.py              跨版本惰性导入层（v5.4.5）
-│  ├─ ui/                  经典版 Qt 页面（含 async_job 与三个新页面）
+│  ├─ game_data.py         官方版本矩阵 / 属性 / 规则 / NBT 字典（v5.4.6）
+│  ├─ nbt_studio.py        NBT 树 / 属性 / 掉落 / 规则编辑（v5.4.6）
+│  ├─ nbt_extreme.py       NBT 极限数值：类型提升 / 无符号 / 附魔突破（v5.4.6 增补）
+│  ├─ nbt_build.py         建筑生成（结构文件 / 结构方块 / /place）+ 41 项深层控制（v5.4.6 增补二）
+│  ├─ item_icons.py        物品贴图提取 / 占位图标 / Mod 命名空间（v5.4.6）
+│  ├─ api_gateway.py       全功能接口反射 / OpenAPI / 本机 JSON-RPC（v5.4.6）
+│  ├─ ui/                  经典版 Qt 页面（含 async_job 与七个新增页面）
 │  ├─ ui_web/              美化版后端与前端
 │  │  ├─ shell.py          WebApi
-│  │  └─ web/              app.js / style.css / index.html
+│  │  └─ web/              app.js / app.css / index.html
 │  ├─ translations/        .ts / .qm
 │  └─ data/                内置清单、Wiki、资源
 └─ data/                   运行后生成：配置、账号、实例、日志、备份

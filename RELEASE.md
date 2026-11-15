@@ -1,8 +1,54 @@
-# MikanCL v5.4.5 发布说明
+# MikanCL v5.4.6 发布说明
 
 **中文** · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · [Français](RELEASE.fr.md) · [日本語](RELEASE.ja.md)
 
 发布日期：2026-11-15
+
+## 增补：NBT 极限数值引擎（突破游戏数值上限）
+
+- **原理与边界**：数值上限多来自 NBT 标签位宽（`TAG_Byte` 8 位 / `TAG_Short` 32767 / `TAG_Int` 2³¹ / `TAG_Long` 2⁶³）。新增 `nbt_extreme.py`，通过**类型提升**（short→int→long）与**无符号位模式**写入超过原类型上限的值；超限默认拒绝、可选回绕，写前自动留 `.mikancl-bak` 备份。
+- **附魔双轨突破**：`1.20.5` 前后自动识别——旧版 `tag.Enchantments`/`ench`（short），新版 `components."minecraft:enchantments".levels`（int，附魔书 `stored_enchantments`）。附魔字典扩到 44 种（含 1.21 `breach`/`density`/`wind_burst`、26.1 `lunge`），支持一键拉满与「⚡ 大一统附魔」（注入全部附魔含互斥 / 诅咒后拉满，即 32k 附魔原理）。
+- **通用越界能力**：任意节点自动提升类型写超大值、整树越界扫描、14 项一键预设（经验 / 堆叠 / 生命 / 药效 / 种子 / 时间等）；整数解析改字符串直转，修掉 `int(float())` 在 >2⁵³ 丢精度的 bug。
+- **三套界面同步**：NBT 工作室新增「⚡ 极限数值」页（Web / Electron 8 个 `nbe_*` 接口 + Qt 同名页签），全程后台线程 + 惰性导入。
+- **警示**：极限数值可能导致崩溃 / 坏档 / 联机被封；是否生效取决于游戏是「按数值」还是「按类型」读取字段。本功能只保证写出的 NBT 合法可读回，不承诺游戏一定采用。数据依据 minecraft.wiki 2026-11-15 核对。
+- **附魔 255 上限修正（重要）**：位宽能提升，但附魔等级另有游戏硬上限——**Java 1.17.1（2021-07-06）起，官方把所有附魔的显示与效果封顶到 255**（原话 *All enchantments are now capped at level 255 in both display and power*，同版修 MC-131290）。因此 1.17.1+ 写 32767 也只按 255 算（钻石剑锋利 255 级 = 135 伤害，实测吻合）；1.17.1 之前无此限制，short 可真实写满 32767。`enchant_effective_cap(version)` 按版本给出真实上限，超限时界面明确提示会被压回。
+- **绕过 255：属性直改**：新增 `attribute_apply()`，直接给物品挂攻击伤害属性（旧版 `tag.AttributeModifiers` / 1.20.5+ `components.attribute_modifiers`），`amount` 为 double，游戏内上限 **0~2048**，远高于 255 级锋利的 135。Web/Electron「极限数值」新增「属性直改」子页，Qt 同名控件。
+- **校验**：`test_nbt_extreme.py` 扩到 **70 项全绿**（含 1.17.1 封顶边界、1.16.5 不封顶、新版/旧版属性写入、2048 钳制、1.21.2 去前缀）；原 `test_nbt_studio.py` 38 项、`test_api_gateway.py` 30 项、`test_datapack_v2.py` 38 项、`test_item_icons.py` 20 项均全绿（合计 196 项）；`node --check app.js`、127 文件 AST、Qt 页面（offscreen）实跑通过；`nbe_*` 接口 10 个前后端一一对应。
+
+## 新增：建筑生成（指定坐标）+ 41 项深层数值控制
+
+- **为什么不是直接改 region**：世界方块在 `region/*.mca` 的区块里，不在 `level.dat` 中；直接改 region 要重写整块 chunk 与高度图，极易坏档。改用官方路径「**结构文件 + 投放工具**」。
+- **结构文件生成**：按官方格式产出 `size`/`palette`/`blocks`/`entities`/`DataVersion`（gzip）。内置 4 个模板——小木屋、石塔、悬空平台、石柱；也支持自定义方块表与方块状态。落盘目录按版本自动选：**1.21 起 `structure/`（单数），之前 `structures/`**。
+- **指定坐标生成建筑，三条路径按版本给**：① `/give` 结构方块物品（1.10+，最省事）——自带 `BlockEntityTag`（LOAD 模式、结构名、坐标、尺寸、旋转、镜像、完整度），放下通电即加载；1.11 起 BE id 为 `structure_block`、1.10 为 `Structure`，自动切换。② `/place template`（1.19+）；`strict` 仅 1.21.5+。③ 命令方块物品，放下即带好命令。1.12.2 这类老版本只给结构方块路径，不假装有 `/place`。
+- **41 项深层数值控制**：出生点与朝向（`SpawnAngle` 1.16.2+）、世界时间、天气四项、难度 / 极限模式 / 允许命令、**世界边界**（中心 / 直径 / 伤害 / 警告）、**玩家能力**（飞行 / 瞬间破坏 / 无敌 / 移速）、经验 / 饥饿 / 生命 / 吸收、**实体物理**（无重力 / 无敌 / 永久保留 / 静音 / 发光 / 禁 AI）。
+- **版本实时检测**：`capabilities(version)` 与 `control_catalog(version)` 是唯一入口，实时返回当前版本支持什么、每个字段落在哪个文件。**26.1 起 `level.dat` 重构**（天气→`weather.dat`、难度→`difficulty_settings`、世界边界→`world_border.dat`），写入自动改到正确文件；文件缺失会明确报错而非臆造，版本不足的字段直接禁用并写明原因。
+- **三套界面同步**：Web / Electron 新增「🏗 建筑生成」页与 7 个 `nbb_*` 接口；Qt 版 `page_nbt_studio.py` 新增同名页签（7 个），切版本同时刷新能力徽标与控制表。
+- **校验**：新增 `test_nbt_build.py` **79 项全绿**；连同既有五套共 **275 项全绿**；129 文件 AST 零错误、`node --check` 通过、Qt 离屏实跑 7 页签正常。
+
+## 修复与改进：拖拽误报、物品动态获取、存档按版本过滤
+
+- **修掉「没有读到拖入的文件路径」误报**：全局窗口的 `drop` 监听器原先没校验 `dataTransfer.types` 是否含 `Files`，导致在配方工坊里拖物品图标（`text/plain`）空拽松手时误触发文件导入提示。现在三个拖拽监听器统一先确认「确实是文件拖入」才处理，物品拖拽不再误报。
+- **物品每次从已下载版本动态获取**：配方工坊物品栏不再只依赖内置 270 个物品 ID，而是每次从本地已下载的版本 jar / 资源包 / Mod jar 读取真实贴图并补入静态字典之外的原版物品（含新版新增物品），返回 `dynamic_added` / `from_version_jar` 标记。切换版本即重新拉取。
+- **导入合成包默认只看当前版本存档**：写入存档下拉默认只显示与当前所选版本一致的存档（按存档 `level.dat` 的版本名匹配），避免不同版本里同名存档（如「新建世界」）难以分辨；提供「只看当前版本」开关随时切回全部。Qt 版同款复选框。
+
+## v5.4.6 新增：全面 NBT 编辑、贴图拖拽配方工坊、数值调校、统一 API 网关
+
+- **官方游戏数据字典**：新增 `game_data.py`，按 minecraft.wiki 官方页面原始文本逐条核对。收录 18 条数据包格式号 / 26 条资源包格式号（`1.6.1`–`26.3`）、59 条游戏规则、32 条实体属性、31 种生物默认掉落、97 条常用 NBT 字段（7 组）、13 类 NBT 标签与 270 个原版物品 ID。版本边界精确区分：`1.20.5` 配方 `item`→`id`、`1.21` 战利品表目录改单数 `loot_table`、`1.21.2` 简化 ingredient 且属性 ID 去前缀、`1.21.5` 实体 NBT 改 snake_case、`1.21.9` `pack.mcmeta` 改用 `min_format`/`max_format`、`1.21.11` gamerule 改 snake_case 并伴随部分值反转、`26.1` GameRules 迁到 `game_rules.dat`。`1.12.2` 及更早没有数据包系统，界面明确说明只能用 Mod 修改配方，不做强求适配。
+- **NBT 工作室**：新增 `nbt_studio.py`，在保留标签类型的 typed NBT 读写之上提供树形展开、批量改值、增删节点、写盘前自动备份（`.mikancl-bak`）与路径穿越防护。可编辑实体属性（按版本生成正确 ID）、生物掉落物（生成覆盖 `minecraft` 命名空间的战利品表）、GameRules（自动处理键名与反转规则）与 `server.properties`（逐键改写并保留注释）。
+- **配方工坊 · 图标拖拽 + 双包导出**：新增 `item_icons.py`，从版本 jar、资源包、Mod jar 提取真实物品贴图，缺贴图时按 ID 生成稳定像素风占位图标。网页版与独立版是工作台 3×3 与熔炉界面，把图标拖进格子、结果格放产物；经典版是 `ItemPalette` → `ItemSlot` 原生拖放。一次导出**数据包 zip + 资源包 zip**，用户分别手动导入 `datapacks/` 与 `resourcepacks/`。支持选中 Mod 命名空间**覆盖已有配方**，也能读取存档 / Mod / 版本 jar 的现有配方改完再导出。
+- **数值调校**：刷怪上限、实体挤压、移速等 18 个入口按来源分组（gamerule / `server.properties` / Bukkit / 实体属性）；gamerule 写入 `level.dat`，服务端配置逐键改写；Bukkit 系与实体属性只给建议值并指到对应编辑位置，不假装能直接改。
+- **统一 API 网关**：新增 `api_gateway.py`，反射 `WebApi` 的全部 **339 个公开方法**，生成接口清单 / 签名 / 中文说明 / 分组，提供查询、描述、在线 `invoke`、导出 OpenAPI 3，以及仅监听 `127.0.0.1` 的本机 HTTP JSON-RPC 服务（随机 token 鉴权）。危险方法与私有方法列入黑名单；陶瓦联机的 9 个接口原样保留。
+- **三套界面全覆盖**：Qt 经典版新增「NBT 工作室 / 配方工坊 / 数值调校 / API 浏览器」四个页面；pywebview 美化版与 Electron 独立版共用 `app.js` 的四个同名导航页。全部沿用首次显示才加载、后台线程与函数内惰性导入，源码仍兼容 Python 3.10+。
+- **Bug 修复**：`save_repair.list_world_candidates()` 在存档目录不存在时因 `items` 未定义抛 `UnboundLocalError`，会让空机器上的新增页面首次加载失败；已修复并补回归测试。另修掉 `nbs_open` 返回结构缺 `path`、pointer 的 JSON 数组串兼容、数值调校表单索引错位、配方工坊 `craft-pick` 动作重名、`tune_server_write` 空路径回退等前后端接线问题。
+
+### 本版产物与校验
+
+- **可执行文件**：`dist/MikanCL.exe` 已用 Python 3.15.2 + PyInstaller 6.22.3 重打包，**369.8 MB**（内含 149.4 MB Electron 独立版包，耗时 7 分 29 秒），Windows 版本资源 `FileVersion` / `ProductVersion` 均为 **5.4.6**；旧的 5.4.5 产物备份为 `dist/MikanCL-5.4.5.exe`。
+- **编译与语法**：112 个 `mc_launcher/*.py` + 13 个 `tests/*.py` 在 3.15.2 下编译零失败；`node --check app.js` 通过；新增 CSS 类全部有定义。
+- **接口对照**：前端 314 个 `call()` 全部命中后端 339 个公开方法（含 40 个新增前缀调用）；405 个 `ACT` 定义零重名；陶瓦接口未改动。
+- **回归测试**：`test_nbt_studio.py` 38 项、`test_item_icons.py` 20 项、`test_datapack_v2.py` 38 项、`test_api_gateway.py` 30 项，合计 **126 项全部通过**。
+- **Qt 离屏实跑**：四个新增 Qt 页面在 `QT_QPA_PLATFORM=offscreen` 下构造、`show()`、首次异步加载、`wait_all()` 全部无异常，并验证拖拽 MIME、占位图标与 3×3 配方建模。
+- **仍请注意**：物品贴图需要本地已有版本 jar / 资源包 / Mod jar；没有时会显示占位图标而非游戏原图。打包时为控制体积排除了 `PySide6.QtSvg`，经典版 exe 里的 SVG 占位图标会退化成按物品 ID 生成的字母色块，美化版 / 独立版由浏览器渲染 SVG 不受影响；真实 PNG 贴图两版都正常。群系与结构预览仍是高保真近似，真实地形由游戏按种子生成。局域网中控的 RCON 与多开直连只验证到协议 / 页面 / 接线层面。
 
 ## v5.4.5 新增：备份中心、高度自定义、局域网中控、数据包编辑器
 
@@ -14,7 +60,7 @@
 - **运行时优化 · 如实说明边界**：Windows 用户态没有 KSM，Python 启动器**无法**强制让两个独立 JVM 共享同一块物理内存页；运行中热注入 Mod jar 也因 JVM Instrumentation 只能改方法体、Fabric/Forge 注册表冻结与 Mixin 加载时机而不可行。因此落地的是真实有效的替代：JVM 内存模板（CDS / AppCDS、G1 字符串去重、压缩指针、按实例分摊堆）、Mod 变更监视与「一键应用并重启」队列。界面里明确标注哪些做不到及原因。
 - **Python 3.15 惰性导入**：开发与校验切换到 Python 3.15.2；新增 `lazy.py` 跨版本惰性导入层（3.15 下可选启用 PEP 810 原生惰性导入，3.14 及以下自动跳过）。所有新功能采用函数内惰性导入 + 后台线程（QThread / Job），源码保持 3.10+ 兼容，打包 exe 不受影响。
 
-### 本版产物与校验
+### v5.4.5 产物与校验
 
 - **可执行文件**：`dist/MikanCL.exe`，369.6 MB，PyInstaller onefile 单文件；Windows 版本资源 `FileVersion` / `ProductVersion` 均为 **5.4.5**；内含 149.4 MB 的 Electron 独立版包。2026-11-15 17:50 用 Python 3.15.2 + PyInstaller 6.22.3 重新打包，耗时 6 分 13 秒。此前 `dist` 里旧 exe 的版本资源实际是 **5.4.3**（并非 5.4.4），已按真实版本备份为 `dist/MikanCL-5.4.3.exe`。
 - **代码校验**：118 个 `.py` 在 3.15.2 下全量编译零失败；`node --check app.js` 通过；前端 274 个 `call()` 名称全部命中 `shell.py` 的后端方法；`TerrainGen.java` source v7 编译通过，5 / 10 / 15 参数三种调用均实跑成功并产出高度直方图；版本号在 `__init__.py`、`build/version_info.txt`、README 与五份发布说明共 7 处一致；陶瓦接口未改动。

@@ -1,0 +1,3 @@
+# Qt 翻译源文件是 XML（<TS> 格式），扩展名同样是 .ts；
+# 这里让 GitHub Linguist 跳过统计，避免仓库语言被误判为 TypeScript。
+mc_launcher/translations/*.ts linguist-detectable=false
