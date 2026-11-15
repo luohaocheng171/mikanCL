@@ -20,6 +20,9 @@ ROOT = Path(__file__).resolve().parent
 TRANSLATIONS = ROOT / "mc_launcher" / "translations"
 LANGUAGES = ["zh_CN", "en_US", "ja_JP", "ru_RU", "fr_FR"]
 
+# 页面里的便捷包装：_c("...") 等价于 t("CreatorPage", "...")，提取时按同一上下文处理
+WRAPPER_CONTEXTS: dict[str, str] = {"_c": "CreatorPage"}
+
 # v5.1.0 新增字符串的英文译文（旧 .qm 中没有，按 (context, source) 补入）。
 # 其他语言未覆盖的条目回退为原文（中文），与既有策略一致。
 EN_SUPPLEMENTS: dict[str, dict[str, str]] = {
@@ -210,6 +213,22 @@ EN_SUPPLEMENTS: dict[str, dict[str, str]] = {
         "应用皮肤失败：{0}": "Failed to apply skin: {0}",
         "读取皮肤失败：{0}": "Failed to read skin: {0}",
     },
+    "CreatorPage": {
+        "生命 Health": "Health",
+        "吸收生命 AbsorptionAmount": "Absorption",
+        "饱和度 foodSaturationLevel": "Saturation",
+        "饥饿值 foodLevel": "Food level",
+        "疲劳 foodExhaustionLevel": "Exhaustion",
+        "经验等级 XpLevel": "XP level",
+        "经验进度 XpP": "XP progress",
+        "无敌（Invulnerable，免疫绝大多数伤害）": "Invulnerable (immune to most damage)",
+        "飞行（Flying / Mayfly，生存模式会持续耗饥饿）": "Flying / Mayfly (consumes hunger in survival)",
+        "难度 Difficulty": "Difficulty",
+        "极限模式（hardcore，死亡后只能旁观）": "Hardcore (spectate after death)",
+        "允许命令（allowCommands，开启后可用 /gamemode 等）": "Allow commands (enables /gamemode and more)",
+        "面板上的数值与存档中的实际数据一致，没有检测到改动，存档保持原样。":
+            "The panel matches the save data; nothing was changed and the save is untouched.",
+    },
     "ModGraphPage": {
         "Mod 关系网": "Mod graph",
         "把 mods/ 的前置依赖画成一张网：红色=缺少前置，橙色=循环依赖": "Draws mod dependencies as a network: red = missing dependency, orange = dependency cycle",
@@ -279,6 +298,10 @@ def extract() -> dict[str, list[str]]:
                 text = _str(node.args[1])
                 if ctx and text:
                     add(ctx, text)
+            elif isinstance(func, ast.Name) and func.id in WRAPPER_CONTEXTS and node.args:
+                text = _str(node.args[0])
+                if text:
+                    add(WRAPPER_CONTEXTS[func.id], text)
             elif isinstance(func, ast.Attribute) and func.attr == "tr" and node.args:
                 text = _str(node.args[0])
                 if text:

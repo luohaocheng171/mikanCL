@@ -37,9 +37,8 @@ EXCLUDES = [
     "PySide6.QtNfc",
     "PySide6.QtPdf",
     "PySide6.QtPdfWidgets",
-    "PySide6.QtPositioning",
-    "PySide6.QtQml",
-    "PySide6.QtQuick",
+    # QtWebEngineCore 依赖 QtQml/QtQuick/QtPositioning，不能排除，否则经典版
+    # 内置浏览器与登录窗口会报 libshiboken: could not import module
     "PySide6.QtQuick3D",
     "PySide6.QtQuickControls2",
     "PySide6.QtQuickWidgets",
@@ -51,13 +50,12 @@ EXCLUDES = [
     "PySide6.QtStateMachine",
     "PySide6.QtTest",
     "PySide6.QtUiTools",
-    "PySide6.QtWebEngineQuick",    "tkinter",
+    "PySide6.QtWebEngineQuick",
+    "tkinter",
     "unittest",
     "pydoc",
     # 下面这些模块本项目完全没用到，排除后能少收一批 Qt 插件
     "PySide6.QtDBus",
-    "PySide6.QtOpenGL",
-    "PySide6.QtOpenGLWidgets",
     "PySide6.QtSvg",
     "PySide6.QtSvgWidgets",
     "PySide6.QtSerialBus",
@@ -66,6 +64,17 @@ EXCLUDES = [
     "PySide6.QtNetworkAuth",
     "PySide6.QtHttpServer",
     "PySide6.QtSpatialAudio",
+    # 已确认：源码里没有任何 import / 动态导入引用以下模块
+    "PySide6.QtAxContainer",
+    "PySide6.QtCanvasPainter",
+    "PySide6.QtConcurrent",
+    "PySide6.QtGraphsWidgets",
+    "PySide6.QtLabsStyleKit",
+    # 同上：QtOpenGL / QtOpenGLWidgets / QtPrintSupport 都是 QtWebEngine 的
+    # 运行时依赖，排除后 exe 启动即崩溃
+    "PySide6.QtQuickTest",
+    "PySide6.QtWebView",
+    "PySide6.QtXml",
 ]
 
 # 运行时资源：内置数据、浏览器 DLL、美化版前端、插件

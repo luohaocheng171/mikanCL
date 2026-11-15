@@ -1,8 +1,43 @@
-# MikanCL v5.4.0 — Notes de version
+# MikanCL v5.4.3 — Notes de version
 
 [中文](RELEASE.md) · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · **Français** · [日本語](RELEASE.ja.md)
 
-Date de publication : 2026-11-14
+Date de publication : 2026-11-15
+
+## v5.4.3 — nouveautés : champs des versions récentes et édition complète des valeurs / objets
+
+- **Champs propres aux versions récentes** : l'onglet Monde reçoit un groupe « champs de monde des versions récentes » — nom du monde `LevelName`, ticks de pluie `rainTime`, ticks d'orage `thunderTime`, ticks de beau temps `clearWeatherTime`, `LastPlayed` (TAG_Long, horodatage en ms), `SpawnAngle` (1.16+), `WanderingTraderSpawnChance` / `WanderingTraderSpawnDelay` (1.14+), `DifficultyLocked`, `initialized` et `MapFeatures`. Les champs sont masqués et jamais envoyés lorsque la sauvegarde est antérieure à leur première version : aucune donnée NBT invalide n'est écrite dans les anciens mondes.
+- **GameRules générées selon la version** : au-delà des 12 interrupteurs toujours visibles, les autres règles suivent `DataVersion` et couvrent l'apparition des phantoms / patrouilles / marchands (1.14), le pardon des joueurs morts et la colère universelle (1.14.4), le pourcentage de dormeurs (1.17), l'apparition des wardens (1.19), la propagation des lianes (1.19.3), la hauteur de neige et la limite de commandes (1.19.4), les trois règles de décroissance des drops d'explosion et la conversion des sources d'eau / lave (1.20.1), les dégâts de chute / feu / noyade / gel, les sons globaux et le rayon de chunks de spawn (1.21.2) — 44 règles au total. Les règles entières se saisissent en ticks ou en valeur, plus seulement par une case à cocher.
+- **Toutes les valeurs du joueur / du monde** : deux grilles repliables listent tous les scalaires de `level.dat` et des données du joueur, groupés par champ, filtrables, et seules les entrées modifiées sont envoyées. Les entiers 64 bits comme `RandomSeed` et `LastPlayed` transitent en chaîne pour éviter toute perte de précision côté interface. Couvre les minuteurs météo, la bordure du monde, la graine, l'angle de spawn, le combat de dragon, les marchands, les événements de boss, les data packs, les champs profonds de `WorldGenSettings`, ainsi que Air / Fire / FallDistance / PortalCooldown / DeathTime / HurtTime / LastDamage / AttackTime / SleepTimer / XpTotal / XpSeed / Score / SelectedItemSlot / tous les indicateurs d'état / Motion / Rotation / toutes les vitesses et options d'abilities.
+- **Catalogue complet d'objets et de blocs** : extrait depuis les ressources de la version sélectionnée (1.21.2+ `assets/<ns>/items/*.json`, 1.13–1.21.1 `models/item/*.json`, 1.12- `.lang`). La liste de candidats reste affichée, filtre localement à la saisie et retombe sur une similarité orthographique quand rien ne correspond exactement.
+- **Poser des blocs / remplir une zone aux coordonnées** : choix de la dimension, des coordonnées, de l'ID de bloc et des propriétés ; un remplissage est plafonné à 262 144 blocs. Sur 1.12-, les propriétés sont ignorées avec un avertissement, et les sections de chunk et les palettes s'étendent automatiquement.
+- **Générer / supprimer des entités aux coordonnées** : par coordonnées, quantité (1–256), rayon de dispersion et NBT personnalisé, ou suppression dans une zone. Chaque opération passe par une validation de jeton, un verrou de monde, une sauvegarde forcée et un rollback transactionnel.
+- **Valeurs détaillées d'un objet** : durabilité maximale, coût de réparation, indestructible, rareté, scintillement d'enchantement, nutrition et saturation ; remettre un champ à sa valeur par défaut supprime le tag NBT. La quantité n'est plus forcée positive et suit uniquement le type NBT de la version.
+- **Édition rapide de tous les attributs** : portée d'attaque, distance d'interaction blocs / entités, efficacité de minage, vitesse de déplacement, vie maximale et tous les autres attributs vanilla, avec bascule automatique entre préfixe `generic.`, ID namespacés et ID courts introduits en 1.21.2.
+- **Noms des effets et enchantements + mode expert** : 39 effets et 42 enchantements affichent leur nom officiel (en chinois) en mode débutant ; le commutateur « mode expert » en haut du panneau affiche les ID bruts `minecraft:` (identique en interface classique et web). Le filtrage suit la version, les ID numériques sont écrits avant 1.20.2 et les ID namespacés après, et un ID invalide déclenche un message clair au lieu d'être ignoré.
+- **Enchantements écrits selon la version** : `ench` (id / lvl en Short) avant 1.12, `Enchantments` de 1.13 à 1.20.4, `minecraft:enchantments.levels` en composant à partir de 1.20.5 ; les trois formats sont lus.
+- **Corrections** : plantage `KeyError: 'creator'` dû au commutateur « Créateur de sauvegarde » manquant dans les paramètres, et entrée `${user_properties}` absente du tableau des variables de lancement.
+- **Empaquetage** : les modules Qt inutilisés restent exclus, mais les dépendances d'exécution de QtWebEngine (QtQml / QtQuick / QtPositioning / QtOpenGL / QtOpenGLWidgets / QtPrintSupport) sont conservées, sinon le navigateur intégré et la connexion Microsoft plantent au démarrage. Le fichier unique `MikanCL.exe` fait environ 366 Mo.
+- **Documentation et tutoriels** : le centre de tutoriels passe en révision 6 avec les nouveaux champs, le mode expert et l'édition complète des valeurs / objets.
+
+## v5.4.2 — amélioration : lecture préalable de la sauvegarde, plages et slots par version
+
+- **Plus de préréglage par défaut** : à l'ouverture d'une sauvegarde ou au changement de joueur, vie, absorption, faim, fatigue, XP, invulnérabilité, vol, difficulté, GameRules, position et objets sont remplis depuis les valeurs NBT réelles ; seuls les champs modifiés sont envoyés.
+- **Indications de plage** : sous chaque champ, le minimum / maximum et la note vanilla, avec des plafonds calculés selon la version (vie 0-1024, faim 0-20, progression XP 0-1, position ±30 000 000, ender chest 0-26).
+- **Main secondaire et ender chest sur anciennes versions** : pas de slot secondaire avant 1.8 ; -106 de 1.9 à 1.11 ; 40 depuis 1.12 ; ender chest 0-26. Un slot inexistant pour la version est expliqué dans l'aperçu.
+- **Champs d'état complétés** : absorption `AbsorptionAmount`, fatigue `foodExhaustionLevel`, progression XP `XpP`, invulnérabilité `Invulnerable`, vol `Flying` / `Mayfly` ; l'onglet Monde gagne la difficulté, le mode hardcore et l'autorisation des commandes.
+- **Aucune écriture sans changement** : si le panneau correspond à la sauvegarde, message « aucune modification détectée », sans sauvegarde ni écriture.
+- **Tutoriels / documentation / i18n synchronisés** : les nouveaux textes rejoignent le contexte `CreatorPage`, la documentation précise l'usage du panneau et les différences de version.
+
+## v5.4.1 — correctif : les modifications de l'éditeur ne s'appliquaient pas
+
+- **Cible d'écriture adaptée à la version** : 1.12 et antérieur → `level.dat → Player` ; 1.13+ → `playerdata/<UUID>.dat` ; 26.1+ → `players/data/<UUID>.dat`. Toutes les copies du joueur sont mises à jour ensemble.
+- **Vérification après écriture** : les fichiers sont relus et les champs (vie, XP, mode de jeu, attributs, effets, heure, météo) comparés ; les écarts sont listés précisément.
+- **Version affichée par sauvegarde** : `Version.Name`, puis correspondance exacte du `DataVersion` ; les anciennes sauvegardes sans `DataVersion` sont signalées comme Anvil 1.8.x.
+- **Formats par version** : 1.8 écrit `Health` et `HealF` avec un `Dimension` entier ; 1.20.5+ utilise `active_effects` et un `id` textuel ; 1.21+ utilise `attributes` / `id` / `base` / `modifiers` ; les enchantements 1.20.5+ stockent `levels` en `{id: niveau}`.
+- **Objets lus depuis la version de la sauvegarde** : `assets/<ns>/items/*.json` (1.21.2+), `models/item/*.json` (1.13–1.21.1), `.lang` (1.12-).
+- **Météo et difficulté réellement appliquées** : réécriture de `rainTime` / `thunderTime` / `clearWeatherTime` ; difficulté dans `difficulty_settings` pour 26.1+.
+- **Correctif au démarrage** : plus d'erreur `name 'extra_jvm' is not defined`.
 
 ## Nouveautés de la v5.4.0 : éditeur de sauvegarde (édition profonde multi-époques)
 

@@ -1,8 +1,43 @@
-# MikanCL v5.4.0 Release Notes
+# MikanCL v5.4.3 Release Notes
 
 [中文](RELEASE.md) · **English** · [Русский](RELEASE.ru.md) · [Français](RELEASE.fr.md) · [日本語](RELEASE.ja.md)
 
-Release date: 2026-11-14
+Release date: 2026-11-15
+
+## v5.4.3: newer-version save fields and full value / object editing
+
+- **Fields only newer versions have**: the World tab gains a "newer-version world fields" group — world name `LevelName`, rain ticks `rainTime`, thunder ticks `thunderTime`, clear-weather ticks `clearWeatherTime`, `LastPlayed` (TAG_Long, ms timestamp), `SpawnAngle` (1.16+), `WanderingTraderSpawnChance` / `WanderingTraderSpawnDelay` (1.14+), `DifficultyLocked`, `initialized` and `MapFeatures`. Fields are hidden and never submitted when the save predates their first version, so old saves never receive invalid NBT.
+- **GameRules generated per save version**: beyond the 12 always-visible toggles, the remaining rules follow `DataVersion` and cover insomnia / patrol / trader spawning (1.14), forgive dead players and universal anger (1.14.4), sleeping percentage (1.17), warden spawning (1.19), vine spread (1.19.3), snow height and command block limit (1.19.4), the three explosion drop-decay rules and water / lava source conversion (1.20.1), fall / fire / drowning / freeze damage, global sound events and spawn chunk radius (1.21.2) — 44 rules in total, with integer rules entered as ticks or counts instead of a plain toggle.
+- **All player values / all world values**: two collapsible grids list every scalar in `level.dat` and the player data, grouped by field, filterable, and only changed entries are submitted. 64-bit longs such as `RandomSeed` and `LastPlayed` travel as strings so the front end never loses precision. Covers weather timers, world border, seed, spawn angle, dragon fight, wandering trader, boss events, data packs, deep `WorldGenSettings` fields, and player Air / Fire / FallDistance / PortalCooldown / DeathTime / HurtTime / LastDamage / AttackTime / SleepTimer / XpTotal / XpSeed / Score / SelectedItemSlot / all state flags / Motion / Rotation / every ability speed and toggle.
+- **Full item and block catalogue**: scans the selected version's own resources (1.21.2+ `assets/<ns>/items/*.json`, 1.13–1.21.1 `models/item/*.json`, 1.12- `.lang`). The candidate list stays visible, filters locally as you type, and falls back to spelling similarity when nothing matches exactly.
+- **Place blocks / fill regions at coordinates**: choose dimension, coordinates, block ID and block properties; one fill is capped at 262,144 blocks. On 1.12- saves block properties are ignored with a notice, and chunk sections and palettes expand automatically.
+- **Spawn / clear entities at coordinates**: spawn by coordinates, count (1–256), spread radius and custom NBT, or clear within a range. Every operation goes through token validation, a world lock, a forced backup and transactional rollback.
+- **Item detail values**: max damage, repair cost, unbreakable, rarity, enchantment glint, food nutrition and saturation; clearing a field back to its default removes the NBT tag. Item counts are no longer forced non-negative and only follow the NBT type of that version.
+- **Full attribute quick editing**: attack range, block / entity interaction range, mining efficiency, movement speed, max health and every other vanilla attribute, with the ID form switching automatically between the `generic.` prefix, namespaced IDs and the short IDs introduced in 1.21.2.
+- **Localized effects and enchantments, plus expert mode**: 39 status effects and 42 enchantments show their official Chinese names in beginner mode; the "expert mode" toggle at the top of the panel switches to the raw `minecraft:` IDs (identical in the classic and web UIs). Entries are filtered by save version, numeric IDs are written before 1.20.2 and namespaced IDs after, and invalid IDs raise a clear message instead of being ignored.
+- **Enchantment layout per version**: `ench` (short id / lvl) on 1.12-, `Enchantments` on 1.13–1.20.4, component-based `minecraft:enchantments.levels` on 1.20.5+, and all three formats are read.
+- **Fixes**: the `KeyError: 'creator'` crash caused by the missing "Save Creator" toggle on the settings page, and the `${user_properties}` entry missing from the launch variable table.
+- **Packaging**: unused Qt modules are still excluded, but the QtWebEngine runtime dependencies (QtQml / QtQuick / QtPositioning / QtOpenGL / QtOpenGLWidgets / QtPrintSupport) are kept, otherwise the classic built-in browser and Microsoft login crash on startup. The single-file `MikanCL.exe` is about 366 MB.
+- **Docs and tutorials**: the tutorial centre is updated to revision 6 with the new version fields, expert mode and object editing.
+
+## v5.4.2 improvement: read the save first, range hints and per-version slots
+
+- **No more default preset**: opening a save or switching player fills health, absorption, hunger, exhaustion, XP, invulnerability, flying, difficulty, GameRules, position and items from the actual NBT; only fields you changed are submitted.
+- **Field range hints**: every input shows min / max and a vanilla note, with caps derived from the save's version (health 0-1024, hunger 0-20, XP progress 0-1, position ±30,000,000, ender chest 0-26).
+- **Legacy offhand and ender chest hints**: 1.8 and earlier have no offhand slot; 1.9-1.11 store it as -106; 1.12+ as 40; ender chest is 0-26. Unsupported slots are reported in the preview.
+- **More player fields**: absorption `AbsorptionAmount`, exhaustion `foodExhaustionLevel`, XP progress `XpP`, invulnerability `Invulnerable`, flying `Flying` / `Mayfly`; the world tab adds difficulty, hardcore and allow-commands.
+- **Nothing written when nothing changed**: an explicit "no changes detected" message replaces a pointless backup and write.
+- **Tutorial, docs and i18n** updated, with new strings registered in the `CreatorPage` translation context.
+
+## v5.4.1 fix: Save Creator edits now take effect
+
+- **Write target matched to the save version**: 1.12 and earlier write `level.dat → Player`; 1.13+ treats `playerdata/<UUID>.dat` as authoritative; 26.1+ is detected as `players/data/<UUID>.dat`. Every copy of the same player is updated together, so the panel no longer reports success while the game ignores the change.
+- **Read-back verification**: after each save the files are reloaded and health, XP, game mode, attributes, effects, time and weather are compared; failures list the exact fields instead of a bare "success".
+- **Version shown per save**: the world list and panel header show the Minecraft version (from `Version.Name`, then an exact `DataVersion` map, with pre-`DataVersion` worlds labelled as 1.8.x legacy Anvil).
+- **Per-version field formats**: 1.8 writes both `Health` and `HealF` and uses an integer `Dimension`; 1.20.5+ effects use `active_effects` with string `id`; 1.21+ attributes use `attributes` / `id` / `base` / `modifiers` with named operations; 1.20.5+ enchantment components store `levels` as an `{id: level}` map.
+- **Items scanned from the save's own version**: reads `assets/<ns>/items/*.json` (1.21.2+), `models/item/*.json` (1.13–1.21.1) and `.lang` (1.12-) from that version's jar.
+- **Weather and difficulty actually apply**: weather rewrites `rainTime` / `thunderTime` / `clearWeatherTime`; 26.1+ difficulty goes to `difficulty_settings`.
+- **Startup crash fixed**: `name 'extra_jvm' is not defined` no longer appears.
 
 ## New in v5.4.0: Save Creator (cross-era deep save editing)
 
