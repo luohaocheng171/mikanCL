@@ -1,8 +1,35 @@
-# MikanCL v5.4.3 — Notes de version
+# MikanCL v5.4.5 — Notes de version
 
 [中文](RELEASE.md) · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · **Français** · [日本語](RELEASE.ja.md)
 
 Date de publication : 2026-11-15
+
+## v5.4.5 — nouveautés : centre de sauvegardes, hauteur personnalisée, hub LAN, éditeur de datapacks
+
+- **Centre de sauvegardes (3 interfaces)** : index unifié des trois types de sauvegardes (avant lancement, Creator, réparation), le monde étant identifié par le dossier racine du zip. Une limite par monde (1–200) supprime automatiquement la plus ancienne sauvegarde de ce monde ; suppression individuelle ou globale, ouverture du dossier, nettoyage à la demande.
+- **Hauteur personnalisable** : `TerrainGen.java` passe en source v7 — coefficient de relief (0,1–5), niveau de la mer Y, Y min/max du monde, histogramme des hauteurs et plage de surface observée. Les appels 5 et 10 arguments restent compatibles.
+- **Hub LAN natif (Terracotta conservé)** : hébergement d'un `server.jar` sans interface (EULA à accepter explicitement, aucun téléchargement automatique), puis lancement de plusieurs clients depuis la même fenêtre avec connexion automatique à 127.0.0.1, noms hors-ligne distincts et journaux séparés. Aucune carte réseau virtuelle n'est nécessaire sur une même machine.
+- **Vue « dieu » via RCON** : liste des joueurs, commandes arbitraires, op / ban / kick / liste blanche ; sur 1.13+, échantillonnage des coordonnées, de l'inventaire et de la vitesse via `/data get entity`. La détection de vol n'est qu'une indication heuristique. Audit des régions inclus.
+- **Éditeur visuel de datapacks** : lecture des recettes JSON des mondes / jars de mods / jars de version, édition en grille 3×3 des recettes et des poids de butin, génération d'un zip directement dans `datapacks/`.
+- **Optimisation runtime, limites expliquées** : Windows en mode utilisateur n'a pas de KSM ; un lanceur Python ne peut pas forcer deux JVM à partager les mêmes pages physiques, et l'injection de mod à chaud est impossible (Instrumentation ne réécrit que les corps de méthodes). À la place : profils mémoire JVM (CDS/AppCDS, déduplication des chaînes G1, répartition du tas) et file « appliquer et redémarrer » pour les mods.
+- **Imports paresseux Python 3.15** : développement et validation en 3.15.2 ; `lazy.py` active optionnellement PEP 810 sur 3.15 et reste sans effet sur les versions antérieures. Sources toujours compatibles 3.10+.
+
+### Build et vérification
+
+- **Artefact** : `dist/MikanCL.exe`, 369,6 Mo, PyInstaller onefile ; `FileVersion` / `ProductVersion` Windows = **5.4.5** ; inclut le bundle Electron autonome de 149,4 Mo. Reconstruit le 2026-11-15 à 17:50 avec Python 3.15.2 + PyInstaller 6.22.3 (6 min 13 s). L'ancien exe de `dist` portait en réalité la version **5.4.3** (et non 5.4.4) ; il est conservé sous `dist/MikanCL-5.4.3.exe`.
+- **Validation** : 118 fichiers `.py` compilent sans erreur sur 3.15.2 ; `node --check app.js` passe ; les 274 appels `call()` du frontend résolvent tous vers des méthodes de `shell.py` ; `TerrainGen.java` source v7 compile et s'exécute avec 5 / 10 / 15 arguments ; la version est cohérente à 7 endroits ; les API Terracotta sont inchangées.
+- **Test d'interface** : PySide6 6.12.0 est disponible sur 3.15.2. Les trois nouvelles pages Qt ont été construites, affichées, rafraîchies et leurs threads joints sous `QT_QPA_PLATFORM=offscreen`, sans exception. pywebview et Electron partagent `app.js` : les trois interfaces sont couvertes.
+- **Gestion de versions** : commit `e441637` (v5.4.4 `eb7d0a7`, base `7bc2b48`), arbre de travail propre ; les artefacts de build sont ignorés.
+- **Non testé de bout en bout** : aucun `server.jar` disponible ; la vue « dieu » RCON et le multi-lancement sont vérifiés au niveau protocole / widget / câblage uniquement. Biomes et structures restent des approximations haute fidélité ; le terrain réel est généré par le jeu à partir de la graine.
+
+## v5.4.4 — nouveautés : réparation de sauvegardes, biomes / structures, ergonomie du panneau
+
+- **Réparation des sauvegardes (les trois interfaces)** : le nouveau `save_repair.py` diagnostique les mondes corrompus — validation de chaque chunk Anvil, lecture de la graine depuis `level.dat` / `level.dat_old`, rapport complet. Chaque réparation commence par une sauvegarde ZIP intégrale, automatiquement élaguée selon la limite configurable.
+- **Le jeu régénère lui-même le terrain** : seules les entrées d'index des chunks corrompus sont effacées, Minecraft recrée donc terrain, biomes et structures à partir de la graine d'origine ; les chunks intacts ne sont pas touchés. « Recréer avec la même graine » crée un nouveau monde avec graine, règles et spawn identiques mais sans fichiers de région, puis migre les données joueur / progrès / statistiques / tableaux de score intacts.
+- **Bruit de Perlin complété** : le générateur Java passe en source version 6 avec une portée définie par l'utilisateur (centre X/Z + rayon), 19 couleurs de biomes et le placement des structures selon la grille de régions de MC (villages, temples, monuments océaniques, avant-postes, manoirs, forteresses). Approximation haute fidélité : le vrai terrain reste généré par le jeu avec la même graine.
+- **Onglet Tableau de score** ajouté à l'interface Web / Electron (chargement asynchrone paresseux) ; nombre maximal de sauvegardes configurable, les archives du panneau ne s'accumulent plus sans fin.
+- **Explication de chaque champ** : infobulles sur toutes les valeurs, listes, cases et en-têtes de tableaux, plus une fenêtre « Aide des champs » dans l'interface classique. Cinq préréglages d'effets avec application groupée à tous les joueurs (sauvegarde forcée, transaction et vérification par relecture pour chacun).
+- Toutes les nouveautés utilisent des imports paresseux et des threads d'arrière-plan ; le projet est désormais sous git avec un `.gitignore`.
 
 ## v5.4.3 — nouveautés : champs des versions récentes et édition complète des valeurs / objets
 
