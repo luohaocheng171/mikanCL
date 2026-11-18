@@ -1,4 +1,4 @@
-# MikanCL v5.5.1 使用手册
+# MikanCL v5.5.4 使用手册
 
 [文档索引](#文档索引) · [中文发布说明](RELEASE.md)
 
@@ -280,7 +280,8 @@ v5.2.0 把经典版的版本设置完整搬到了美化版，单独开了一个�
 
 ### Java 中心：不用自己找 Java
 
-- **12 家发行版**：Adoptium Temurin、Microsoft OpenJDK、Azul Zulu、Amazon Corretto、Alibaba Dragonwell、Tencent Kona、BellSoft Liberica、IBM Semeru、SAP SapMachine、GraalVM、清华 TUNA、华为云。国内网络可以优先选 TUNA 或华为云。
+- **15 家发行版**：Adoptium Temurin、Microsoft OpenJDK、Azul Zulu、Amazon Corretto、Alibaba Dragonwell、Tencent Kona、BellSoft Liberica、IBM Semeru、SAP SapMachine、GraalVM、清华 TUNA、华为云，以及 v5.5.3 新增的 **Azul Zulu 归档（Java 6/7）**、**Red Hat Build of OpenJDK**、**Oracle 归档（Java 5/6）**。国内网络可以优先选 TUNA 或华为云。
+- **远古 Java 也有直链**：Azul CDN 上仍保留 Java 6 / 7 的 Windows x64 构建，启动器逐个 HEAD 校验后才列出来（实测 `7.0.352` / `7.0.262` / `7.0.242` / `6.0.119`），Alpha / Beta / Infdev 终于能一键装 Java 7。Red Hat 与 Oracle 归档必须登录账号（Red Hat 会 302 到 Keycloak），启动器只提供官网入口，装好后在「已检测的 Java」里手动指定，不伪造直链。
 - **JRE / JDK**：只玩游戏选轻量 JRE，要开发或跑服务端选完整 JDK。
 - **安装方式**：ZIP 便携版会自动解压到 Java 目录，并把 `bin` 写入用户 PATH；也可以选官方安装程序（EXE 或 MSI，按发行版提供），走系统向导安装。
 - **下载**：大文件多线程分段下载，支持暂停、取消和断点续传，任务统一进下载中心。
@@ -309,6 +310,7 @@ v5.2.0 把经典版的版本设置完整搬到了美化版，单独开了一个�
 - **存档转换**：完整转换器，支持 Classic / Indev / Alpha / McRegion → Anvil → 目标版本，多线程、可取消、有日志和方块 ID 重映射。
 - **截图图库**：按实例读取截图，点击预览，批量打包 zip、打开或删除。
 - **崩溃报告**：汇总归档日志，预览、复制摘要、打开目录、删除。
+- **远古版本急救**：一键检查 Java / `resources` / OpenAL；1.5.2 及更早提供三条路线——「在线下载」社区维护的 resources.zip、「Betacraft 代理」参数（按版本分流端口 11703/11705/11707）、「LegacyFix」本地 jar 自动注入 `-javaagent`（修音效 / 皮肤 / 多人游戏，离线可用）；也可手动导入 resources。
 - **世界种子**：输入种子，调用本机 Java 运行内嵌地形生成器（与原版相同的 ImprovedNoise / 气候噪声参数），经典版用 WebGL 渲染 3D 体素地形，美化版生成高度图；尺寸可选，结果会保存到本地。
 - **NBT 编辑器**：纯 Python 手写 NBT 读写，支持 13 种标签、自动识别 gzip、写回时保留原标签类型；树形查看 `level.dat` / `playerdata`，双击改叶子值、右键增删标签、根节点保护、未保存提醒，首次保存自动生成 `.bak`。
 - **创世神面板**：状态 / 背包 / 能力 / 世界 / 工具五个子页，直接编辑 `level.dat`、`playerdata`、成就、`ops.json` 与 region 区块；支持扫描物品 ID、自由设置数量 / 附魔 / 属性与 Raw NBT，按坐标放方块、填充区域、生成或清除实体，详见下方单独一节。
@@ -326,6 +328,7 @@ v5.2.0 把经典版的版本设置完整搬到了美化版，单独开了一个�
 - **GameRules**：12 条基础开关常驻（含 randomTickSpeed），其余按 `DataVersion` 生成，覆盖 1.14 幻翼 / 灾厄巡逻 / 流浪商人到 1.21.2 的伤害类型与出生点区块半径，共 44 条；整型规则直接填刻数或数值，不再只有开关。
 - **全部数值**：「全部玩家数值 / 全部世界数值」两个折叠网格一次列出 `level.dat` 与玩家数据里的所有标量，按字段分组、支持关键字过滤、只提交改动项；`RandomSeed`、`LastPlayed` 等 64 位长整型全程字符串传输，不会在前端丢精度。
 - **工具**：勾选任意已有成就条目完成、编辑服务端 `ops.json`（0-4 级）、全局方块替换、旧格式转换入口、查看与恢复备份；可指定维度与坐标写方块、填充区域（单次上限 262144 格，1.12- 忽略方块属性并给出提示），按坐标生成 1–256 个实体（支持散布半径与自定义 NBT）或按范围清除实体，统一经过 token 校验、世界锁、强制备份与事务回滚。
+- **存档内生物数值（5.5.3 新增）**：选维度「扫描生物」后直接列出存档里已保存的生物，可改血量 / 最大生命 / 攻击伤害 / 移动速度 / 护甲；村民与流浪商人还能逐条改交易收购数量、使用上限、特殊价格，或填倍率批量打折（0.5 = 半价）。只改数值，实体 ID / UUID / 交易物品与条目结构不动；按 UUID 匹配、只重压改过的区块，预览只读、写入前强制备份并事务回滚。属性写法按存档版本切换：1.8–1.20 用 `Attributes/Name/Base`、1.21+ 用 `attributes/id/base`、1.12- 保留 `generic.maxHealth` 驼峰。
 
 **数值范围直接写在面板上**：每个输入框下方都会显示该字段的最小值、最大值与原版说明（例如生命 0-1024 点、饥饿 0-20、经验进度 0-1、坐标 ±30,000,000、末影箱 0-26），并且上限按存档所属版本计算，不是写死一套默认值。
 
@@ -415,6 +418,70 @@ v5.2.0 把经典版的版本设置完整搬到了美化版，单独开了一个�
 
 ---
 
+## 开发者接口（v5.5.4 新增）
+
+先在「设置 → API 网关」开启服务：只监听 `127.0.0.1`，随机 token，关闭界面自动停止。开启后网关会把 `port` / `token` 写到 `data/api_gateway.json`，命令行与脚本可以自动发现。所有请求都带 `X-Mikan-Token`；**不要把端口映射到公网**。
+
+### 1. 对话式接口 `mikan://chat`
+
+```
+POST http://127.0.0.1:<port>/chat
+{"text":"帮我把 1.20 版本的存档里所有附魔拉满到 255，然后启动游戏",
+ "version":"1.20.1", "world":"", "execute":false}
+```
+
+返回 `plan`（`nbe_enchant_apply` → `launch` 两步，含中文说明与风险等级）、`token` 与 `reply`。**默认只出计划、绝不执行**；确认时带同一个 token、`execute:true`，并补上 `world`（存档路径）才会依次调用。token 一次性、5 分钟过期、绑定原始文本。也支持 `mikan://chat?text=...` 的 URI（Windows 可在界面里注册 `HKCU\Software\Classes\mikan`，只写当前用户、需手动点击）。识别不了的句子返回候选接口，不会乱执行。解析器是确定性规则，中英文关键词都支持，不联网、不调大模型。
+
+### 2. Webhook / 事件监听
+
+配置 `callback_url`（界面或 `webhook_set(url, enabled, events, secret)`），事件发生时 POST JSON：
+
+```
+{"event":"download_success","version":"1.20.1","mod_count":240}
+{"event":"game_crash","reason":"UnsupportedClassVersionError","solution":"Java 版本不匹配"}
+{"event":"player_join","player_name":"Mikan","x":120,"y":64,"z":-300}
+```
+
+请求带 `X-Mikan-Event` 与 `X-Mikan-Signature: sha256=<HMAC>`；支持 `webhook_test()` 发测试事件、界面查看最近投递结果。事件类型还有 `install_finished` / `launch_start` / `launch_exit` / `player_leave` / `job_failed`。默认关闭、不发任何外部请求，地址永远由用户自己填。
+
+### 3. WebSocket 长连接
+
+`ws://127.0.0.1:<port>/ws?token=<token>`（标准 RFC 6455，纯标准库实现，无第三方依赖）。连上以后：
+
+- 发 `{"method":"api_list","args":[],"id":"1"}` 得到 JSON-RPC 响应，可调用反射出来的全部公开接口；
+- 发 `{"subscribe":["*"]}` 订阅事件，事件帧形如 `{"push":"event","data":{...}}`；
+- `{"ping":1}` 回 `{"pong":1}`，close / ping / pong 帧都按协议处理。
+
+适合 Discord / QQ 机器人保持长连接：群里说「启动服务器」，机器人直接通过 WS 调 `launch`。
+
+### 4. 游戏联动（插件 / 扩展可读）
+
+- `game_player_state(world, player)` 从 `playerdata/*.dat` 或 `level.dat` 读血量、最大生命、攻击、坐标、维度、经验（**离线快照**）；
+- `game_scan_anomalies(world)` 扫描超阈值的玩家属性，**只报告不自动处置**；
+- `game_rcon_command` / `game_teleport` / `game_kick` / `game_list_players` 走 Minecraft 服务端标准 RCON，需要服务端开启 RCON 并填 host / port / password。
+
+**如实说明**：启动器不读取游戏进程内存、不注入客户端，单机游戏里的实时血量与瞬移拿不到；能读的是存档 NBT，能实时操作的是开了 RCON 的服务端。没配密码时会明确报错，不会假装成功。
+
+### 5. 命令行 `mikan-cli`
+
+```
+python mikan_cli.py status
+python mikan_cli.py install 1.20.1 --loader fabric --mods sodium,iris --wait
+python mikan_cli.py launch 1.20.1
+python mikan_cli.py api list -q seed
+python mikan_cli.py api call java_scan --args '[false]'
+python mikan_cli.py chat "把 1.20 存档里所有附魔拉满到 255，然后启动游戏"
+python mikan_cli.py chat "..." --world <存档路径> --execute --yes
+python mikan_cli.py events tail --limit 20
+python mikan_cli.py events webhook https://example.com/hook --enable
+python mikan_cli.py game players | scan | tp | kick | list | caps
+python mikan_cli.py uri "mikan://chat?text=启动%201.20.1"
+```
+
+成功 `exit 0`、接口失败 `1`、参数 / 连接错误 `2`；`--json` 输出结构化结果，`--gateway` / `--token` 可显式指定，缺省读 `data/api_gateway.json`。对话式命令同样默认只出计划，执行必须再加 `--yes`。教程中心有五语言的完整分步版。
+
+---
+
 ## NBT 极限数值引擎（v5.4.6 增补）
 
 - **为什么能突破游戏上限**：很多数值上限来自 NBT 标签的**位宽**而非游戏规则——`TAG_Byte` 8 位（有符号 ±127 / 无符号 0~255）、`TAG_Short` 16 位（±32767）、`TAG_Int` 32 位（±2³¹）、`TAG_Long` 64 位（±2⁶³）。聊天里提到的「老版本 32767 附魔极限」正是 short 的上限。新增 `nbt_extreme.py`，用两种手段突破：**类型提升**（把附魔 `lvl` 从 short 改写成 int/long，就能写 32767 以上）与**无符号位模式**（byte 字段写 0~255，写出等价的负位模式）。写前一律留 `.mikancl-bak` 备份，超限默认拒绝以防损坏存档（可选回绕）。
@@ -456,6 +523,56 @@ v5.2.0 把经典版的版本设置完整搬到了美化版，单独开了一个�
 - **侧边栏图标补齐**：三套界面此前落到通用齿轮的入口（备份中心、局域网中控、数据包编辑、NBT 工作室、配方工坊、数值调校、API 浏览器等）都有了各自专属图标。
 - **精简打包**：清理死代码与 Electron 语言包（裁掉 53 个用不到的 pak，只留中英文），依赖齐全后用阿里云源重打包。`dist/MikanCL.exe` 内含经典版 / 美化版 / Electron 独立版三套框架。
 - **顺带修掉一个老 bug**：`cfg.max_backups` 在精简配置对象下缺失导致 Web API 与 Qt 创世神页首次加载失败，已加兜底。
+
+## v5.5.4 这一版改了什么
+
+- **依赖冲突 / 依赖补全检测彻底删除**：预检、健康度、模组管理、Mod 关系图、第三方依赖扫描、教程与前端提示里的全部残留代码与文案已移除。启动器不再猜测「Mod 和 Mod 是否兼容」——之前会因为元数据格式、Forge/Fabric 混装、缺失依赖误判而误报甚至拦住启动，现在只做文件级的启用 / 禁用 / 删除 / 排序，兼容性以游戏实际运行结果为准。崩溃提示也改成「检查 mods 文件夹是否与版本 / 加载器匹配」，不再暗示是冲突。
+- **三端 i18n 补齐**：美化版与 Electron 共用的前端词典从约 20 条扩到**四种语言各 152 条**高质量译文（导航、设置、按钮、状态、卡片标题、开发者接口文案），并新增 **DOM 文本节点自动翻译**：文本节点记住中文原文，切换语言时按原文重译，五语言之间可来回切，不碰 `data-act` / 接口参数 / 输入框值；`T()` 同时支持 `{0}` 占位符。Qt 经典版重跑翻译抽取（**1437 条字符串 / 26 个上下文**），复用前端词典补齐高频译文后英文 719 / 日 587 / 俄 595 / 法 595 条，五套 `.qm` 全部重编译、0 条 unfinished，未覆盖条目按既有策略回退中文。
+- **教程中心重写为全功能详细指南**：中 / 英 / 俄 / 法 / 日**各 14 篇**分步指南（含新增的 `13_api_and_cli.md` 五语言版），覆盖从 Java、版本与 Mod、账号皮肤、备份存档，到创世神面板、远古版本急救、联机、外观设置，以及本版新增的全部开发者接口；删除已下线功能的旧说明，`WIKI_VERSION` 提升到 7 让老安装自动刷新。
+- **API 网关变成五条通道**：原本只有 `127.0.0.1` 的 HTTP JSON-RPC，本版新增 **对话式 `mikan://chat`**、**Webhook 事件推送**、**WebSocket 长连接**、**游戏联动接口** 与 **`mikan-cli` 命令行**；`/schema` 的 OpenAPI 里也列出了这些通道。详见下一章「开发者接口」。
+- **事件源落地**：下载 / 安装任务完成、游戏崩溃、玩家登入 / 离开服务端、启动与退出都会进事件历史；Webhook 默认关闭、地址由用户自填，投递带 HMAC-SHA256 签名。
+- **远古音效一键下载**：远古版本急救的「音效资源」多了「在线下载」，直接拉 **Old School Minecraft 社区维护的 `resources.zip`**（`https://os-mc.net/files/resources.zip`，约 29.2 MB，包内是 `resources/` 目录，启动器自动剥壳导入 `<游戏目录>/resources`，不是 resourcepacks）。实测链接 `HTTP 200`、`application/zip`、`Content-Length 29229004`，可以直连；本机测试线路约 25 KB/s，慢但能下——所以下载做了**断点续传 + 最多 4 次重试**，进度在下载中心可见、可取消，中途断了不会从头再来。
+- **LegacyFix 内置注入（Betacraft 官方组件）**：急救页新增「LegacyFix 修复组件（≤1.5.2）」，一键下载 jar 存到 `data/libs/`，**sha1 与大小都校验**（当前 `legacyfix-2.0-20260502.jar`，997,159 字节，已确认 `Premain-Class: uk.betacraft.legacyfix.LegacyFixAgent`）。开启「自动注入」后，启动 **1.5.2 及更早（含 Alpha / Beta / Infdev）** 的实例会自动在 `-cp` 之前加 `-javaagent:<jar>`；只对 Java 8+ 生效，避免老 Java 加载失败。它修音效、皮肤与多人游戏，**不依赖任何外部代理服务**。
+- **版本不写死**：jar 地址优先从 Betacraft 的版本 JSON 里读 `uk.betacraft.legacyfix` 依赖（`files.betacraft.uk/.../jsons/b1.7.3.json`），对方升级构建时启动器不用改代码；取不到才回落到内置固定地址。
+- **三条音效路线并存**：① 在线下载 / 手动导入 resources（本地文件，最稳）；② Betacraft 代理参数（依赖第三方转发，对方挂了会失效）；③ LegacyFix Agent（本地 jar，离线可用）。急救页会把三者状态一起列出来，缺什么补什么。
+- **仍未做**：Betacraft 自己的资源 CDN 直链实测全部 404（`resources.betacraft.uk/<2>/<sha1>` 及多种变体），所以没有实现"从 Betacraft 索引批量拉资源"；os-mc 的线路偏慢，也没有做国内镜像（没有第二个公开源可对等校验）。
+
+### 本版校验
+
+- **新增回归**：`test_legacy_support.py` 增加 4 项（LegacyFix 状态识别、sha1 不符拒绝、非 zip 拒绝、元数据离线时回落内置地址）；用结构相同的本地 `resources.zip` 跑通了「下载 → 剥壳 → 导入 → 音效就位」全链路。
+- **全套测试**：**24 个测试文件、282 项全部通过**（新增 `test_api_extensions.py` 24 项：对话式计划 / 确认 / URI、Webhook 签名、HTTP `/chat` `/events`、WebSocket 双向调用与事件推送、存档玩家 NBT 与 RCON 边界、CLI 退出码、协议唤起、WebApi 层）；QtWebEngine 离屏冒烟、`node --check app.js`、`compileall` 通过。
+- **产物**：`dist/MikanCL.exe`，`FileVersion` / `ProductVersion` 均为 **5.5.4**。
+
+## v5.5.3 这一版改了什么
+
+- **存档内生物数值编辑（新）**：创世神 →「工具」页新增「生物数值（存档内生物）」。选好维度点「扫描生物」，直接列出存档里已保存的生物（僵尸 / 村民 / 铁傀儡……），可改 **血量、最大生命、攻击伤害、移动速度、护甲**；村民与流浪商人还能逐条改**交易收购数量、使用上限、特殊价格**，或填一个倍率批量打折（0.5 = 半价）。只改数值：实体 ID、UUID、交易物品 ID 与条目结构一律不动；按 UUID 精确匹配，只重新压缩真正改过的区块。
+- **属性写法跟着存档版本走**：1.8–1.20 写 `Attributes / Name / Base`，1.21+ 自动切成 `attributes / id / base`，1.12 及更早的 `generic.maxHealth` 驼峰命名原样保留，不会出现「改了没生效」。
+- **安全边界不变**：预览只读，写入前强制整包备份、失败按事务回滚；坏区块跳过不中断；一次扫描默认只扫最近玩过的 24 个 region（约 2.4 万区块），结果被截断会明确提示。
+- **Java 6 / 7 归档直连**：Java 中心新增「Azul Zulu 归档（Java 6/7）」，从 Azul CDN 取远古构建并逐个 HEAD 校验，实测可用 JDK `7.0.352` / `7.0.262` / `7.0.242` / `6.0.119`——Alpha / Beta / Infdev 与 1.5.2 及更早版本终于有「点一下就能装」的 Java 7。
+- **Red Hat / Oracle 只做跳转**：实测 Red Hat 的 Windows zip 直链会 302 到 Keycloak 登录，Oracle 归档同样要账号，所以启动器给出官网入口与「装好后手动指定 java.exe」的说明，不伪造「点击即下载」。龙芯 LoongArch 只对国产化设备有意义，本版未加。
+- **Betacraft 老版本音效代理（可选）**：远古版本急救新增一行开关。开启后，1.5.2 及更早版本的本次启动会自动追加 `-Dhttp.proxyHost=betacraft.uk`、按版本分流的端口（Infdev/Alpha 11703、Beta 1.3–1.8.1 11705、1.0–1.5.2 11707）与 `-Djava.util.Arrays.useLegacyMergeSort=true`，由第三方代理转发旧版资源请求；不想依赖外部服务时仍可「导入 resources」本地兜底。Betacraft 的资源 CDN 直链实测已 404，因此没有做自动下载。
+
+### 本版校验
+
+- **新增回归**：`test_creator_mobs.py`（9 项：扫描 / 非生物过滤 / 改血量与攻击 / 改交易价格 / 1.12 驼峰 / 1.21 小写 / 服务层预览+备份+回读）；`test_creator_web_api.py` 追加 WebApi 生物全链路；`test_legacy_support.py` 追加 Betacraft 端口与 Java 归档回归。
+- **全套测试**：**23 个测试文件、253 项全部通过**；QtWebEngine 离屏冒烟新增 mob-card 用例；`node --check app.js`、`compileall` 通过。
+- **产物**：`dist/MikanCL.exe`，`FileVersion` / `ProductVersion` 均为 **5.5.3**。
+
+## v5.5.2 这一版改了什么
+
+- **存档抢救改为「迁移可用文件」**：不再对损坏存档做暴力修补。新增流程：选损坏存档 →「检查可用文件」逐文件判定能否解析（坏 `.dat` 直接标红）→ 选一个全新存档当容器 → 只把可用文件导进去，损坏的自动跳过；可选把原种子写进新存档（保证游戏重生成的地形与原世界一致），迁移前自动整包备份目标存档。入口在「工具箱 → 存档抢救 · 迁移到全新存档」。
+- **创世神物品搜索三件套**：① 按游戏内实际用途分类（工具 / 战斗 / 护甲 / 食物 / 材料 / 红石 / 药水 / 刷怪蛋 / 非常规（仅指令创造）/ 方块 / 杂项），可切「全部」；② 每行显示**真实物品贴图**（从版本 jar 提取，玩家认图不认英文名）；③ 物品清单本就按存档目标版本从 jar 动态枚举，不用预设表，所以老版本没有的、新版本删掉的都不会错。
+- **未识别的可改数据进「杂项」**：分类器没命中任何规则、但确实能写入的物品/数据不会被丢弃，统一归到「杂项」，避免「没见过就查不到」。
+- **附魔全版本覆盖**：附魔表补到最新正式版与测试版（含突刺 `lunge`、风爆 `wind_burst`、致密 `density`、破甲 `breach` 等）；`enchantments_for_version()` 返回该版本可用项并标注 `supported`，版本不足的仍**显示**但提示「该版本尚无此附魔，可能需要 Mod 支持」；`enchantment_all()` 供「全部显示」。
+- **NBT 数值上限提高 + 更多参数**：原版软上限降级为「建议值」，写入放宽到标签类型硬上限（Byte ±127 / Short ±32767 / Int ±2³¹ / Long ±2⁶³），仍按标签类型校验不写坏文件；新增大批可调参数（出生点与朝向、天气计时、世界边界四项、难度锁定、允许命令、极限模式、游戏模式、世界名、上次游玩时间、随机刻速度、火焰蔓延等）。
+- **数值调校并入 NBT 系**：「数值调校」成为创世神面板的子页（与独立页面共用同一份 HTML 与写入逻辑），在创世神里改存档不必再跳页。
+- **配方工坊物品改为从游戏内枚举**：不再依赖预设物品表，改为扫描本地版本 jar 的 `blockstates / models/item / textures` 得到全部物品，附 `source` 标记；没有本地 jar 才回退内置表，避免老版本缺项、新版本删项导致失败。
+
+### 本版校验
+
+- **新增回归**：`test_download_robust.py`、`test_item_enum.py`、`test_world_convert.py` 等；QtWebEngine 离屏冒烟验证新子页与笔刷。
+- **全套测试**：**19 个测试文件全部通过**；`node --check app.js`、`compileall` 通过。
+- **产物**：`dist/MikanCL.exe`，`FileVersion` / `ProductVersion` 均为 **5.5.2**。
 
 ## v5.5.1 这一版改了什么
 
@@ -685,7 +802,8 @@ v5.4.5 实测：Python 3.15.2 + PyInstaller 6.22.3，耗时 6 分 13 秒，产�
 
 ```text
 MikanCL/
-├─ run.py                  源码入口
+├─ run.py                  源码入口（支持 --cli 与 mikan:// 唤起）
+├─ mikan_cli.py            mikan-cli 命令行入口（v5.5.4）
 ├─ build_exe.py            PyInstaller 打包脚本
 ├─ requirements.txt        PySide6 / pywebview / pythonnet
 ├─ assets/                 图标与图片
@@ -715,6 +833,14 @@ MikanCL/
 │  ├─ nbt_build.py         建筑生成（结构文件 / 结构方块 / /place）+ 41 项深层控制（v5.4.6 增补二）
 │  ├─ item_icons.py        物品贴图提取 / 占位图标 / Mod 命名空间（v5.4.6）
 │  ├─ api_gateway.py       全功能接口反射 / OpenAPI / 本机 JSON-RPC（v5.4.6）
+│  ├─ chat_api.py          mikan://chat 对话式计划 / 确认执行（v5.5.4）
+│  ├─ events.py            事件总线 / Webhook HMAC 签名（v5.5.4）
+│  ├─ ws_gateway.py        WebSocket 长连接 / 事件推送（v5.5.4）
+│  ├─ game_link.py         存档玩家 NBT / RCON 联动（v5.5.4）
+│  ├─ creator_mobs.py      存档内生物数值编辑（v5.5.3）
+│  ├─ legacy_fix.py        远古音效 / OpenAL / LegacyFix（v5.5.4）
+│  ├─ betacraft.py         Betacraft 代理参数（v5.5.3）
+│  ├─ omniarchive.py       Omniarchive 远古归档（v5.5.2）
 │  ├─ ui/                  经典版 Qt 页面（含 async_job 与七个新增页面）
 │  ├─ ui_web/              美化版后端与前端
 │  │  ├─ shell.py          WebApi

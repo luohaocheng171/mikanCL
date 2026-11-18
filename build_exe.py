@@ -90,6 +90,7 @@ DATA_DIRS = (
 # （webview 自带 PyInstaller 钩子，会自动收集 lib/js，这里只补隐藏导入）
 HIDDEN_IMPORTS = (
     "mc_launcher.world_convert",
+    "mikan_cli",  # MikanCL.exe --cli <command> 走同一套 CLI
     "webview.platforms.edgechromium",
     "webview.platforms.winforms",
     "clr",

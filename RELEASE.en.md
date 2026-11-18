@@ -1,8 +1,37 @@
-# MikanCL v5.5.1 Release Notes
+# MikanCL v5.5.4 Release Notes
 
 [中文](RELEASE.md) · **English** · [Русский](RELEASE.ru.md) · [Français](RELEASE.fr.md) · [日本語](RELEASE.ja.md)
 
-Release date: 2026-11-18
+Release date: 2026-11-19
+
+## v5.5.4: developer API expansion, i18n & full guides, legacy sounds & LegacyFix
+
+- **Developer interfaces (main change)**: the API gateway now exposes five channels — (1) conversational `mikan://chat` (`POST /chat` returns a plan and a token by default; only `execute=true` with that one-time 5-minute token actually calls `nbe_*` / `launch`; URI form and optional HKCU protocol registration supported), (2) Webhooks (user-supplied `callback_url`, events like `download_success` / `game_crash` / `player_join`, HMAC-SHA256 signature, off by default), (3) WebSocket (`ws://127.0.0.1:<port>/ws?token=...`, the same JSON-RPC plus `{"subscribe":["*"]}` event push), (4) game-link APIs (read health / position / attributes from save NBT, scan anomalies, RCON teleport / kick / player list — **no process-memory access; live actions require a server with RCON**), and (5) `mikan-cli` (`install / launch / api / chat / events / game / uri`, exit codes 0/1/2, auto-discovery via `data/api_gateway.json`). The API browser in Settings gained four cards to configure and try all of them.
+- **Dependency conflict detection removed**: all traces in preflight, health checks, Mod management, the Mod graph, third-party dependency scanning, guides and UI copy are gone. Metadata quirks or mixed loaders no longer produce false alarms or block launching; the crash hint now simply asks you to check whether mods match the version / loader. The five-language agreement text was updated too (`AGREEMENT_VERSION` 1.11).
+- **i18n across all three frontends**: the shared Web/Electron dictionary now has **152 entries per language** (English / Russian / French / Japanese). A DOM text-node translator remembers the original Chinese on each node, so switching language repaints immediately and all five languages can be switched back and forth without touching `data-act` values, API parameters or input values; `T()` also supports `{0}` placeholders. Qt Classic re-extracted **1437 strings / 26 contexts** and reuses the same dictionary: 719 English / 587 Japanese / 595 Russian / 595 French translations, all five `.qm` rebuilt with 0 unfinished; uncovered strings fall back to Chinese as before.
+- **Guides rewritten**: **14 step-by-step articles in each of the five languages**, including a five-language `13_api_and_cli.md` covering every new developer interface. Obsolete guides for removed features are gone, and `WIKI_VERSION=7` forces existing installs to refresh.
+- **One-click legacy sounds**: the legacy rescue card can now download Old School Minecraft's `resources.zip` (~29.2 MB, verified `HTTP 200` / `application/zip`) and strips its `resources/` wrapper into `<game>/resources`. The download supports **resume plus up to 4 retries**, progress and cancel, so a slow link (measured ~25 KB/s here) does not restart from zero.
+- **Built-in LegacyFix**: download Betacraft's LegacyFix jar into `data/libs` with sha1 and size verification (`2.0-20260502`, 997,159 bytes, `Premain-Class` confirmed). With auto-inject enabled, instances at **1.5.2 or older (including Alpha / Beta / Infdev)** get `-javaagent:<jar>`; it only applies on Java 8+ and fixes sounds, skins and multiplayer without relying on any external proxy.
+- **No hard-coded version**: the jar URL is resolved from Betacraft's version JSON (`uk.betacraft.legacyfix` dependency) and falls back to a built-in address only when offline.
+- **Three routes coexist**: online download / Betacraft proxy / LegacyFix agent. Betacraft's own asset CDN still returns 404 for direct links, so no index-based batch download was added.
+
+### Build & verification
+
+- **Binary**: `dist/MikanCL.exe`, **366.7 MB**, `FileVersion` / `ProductVersion` = **5.5.4**, all three frontends embedded; `MikanCL.exe --cli version` was verified (exit code 0).
+- **Tests**: 4 new cases in `test_legacy_support.py` (status, sha1 mismatch, non-zip, offline fallback) plus an end-to-end download→unwrap→import run; **24 new cases in `test_api_extensions.py`** (chat plan / confirm / URI, Webhook signature, HTTP `/chat` `/events`, WebSocket RPC + event push, save player NBT & RCON boundaries, CLI exit codes, protocol invocation, WebApi layer). Full suite: **24 test files, 282 cases, all green**.
+- **Also verified**: `node --check app.js`, QtWebEngine offscreen smoke (new `i18n-dev-panel` probe), `compileall`, and ruff (F821 / F811 / E9) all pass.
+
+## v5.5.3: In-world mob value editing, Java 6/7 archive, Betacraft sound proxy
+
+- **Edit mobs inside a save (new)**: Creator → Tools → "Mob values". Pick a dimension, scan, then edit health, max health, attack damage, movement speed and armor; villagers and wandering traders additionally expose per-trade buy counts, max uses and special price, plus a bulk price multiplier (0.5 = half price). Only numbers change — entity IDs, UUIDs, trade item IDs and recipe structure stay untouched; entities are matched by UUID and only touched chunks are recompressed.
+- **Version-correct attributes**: 1.8–1.20 write `Attributes/Name/Base`, 1.21+ switch to `attributes/id/base`, and 1.12-and-earlier camelCase `generic.maxHealth` is preserved as-is. Preview is read-only, writes force a full world backup with transaction rollback, and broken chunks are skipped.
+- **Java 6/7 archive (direct download)**: the Java Center gains "Azul Zulu archive (Java 6/7)", pulling legacy builds from the Azul CDN with per-file HEAD verification (`7.0.352`, `7.0.262`, `7.0.242`, `6.0.119` confirmed). Red Hat Build of OpenJDK and Oracle archives require an account login (Red Hat redirects to Keycloak), so the launcher only links out instead of faking a direct download. LoongArch builds are not included.
+- **Betacraft legacy sound proxy (optional toggle)**: for 1.5.2 and older, the launcher appends `-Dhttp.proxyHost=betacraft.uk` with the per-version port (Infdev/Alpha 11703, Beta 1.3–1.8.1 11705, 1.0–1.5.2 11707) and `-Djava.util.Arrays.useLegacyMergeSort=true`; the local "import resources" fallback remains. Betacraft's asset CDN direct links now return 404, so no automatic asset download was added.
+
+### Build & verification
+
+- **Binary**: `dist/MikanCL.exe`, `FileVersion` / `ProductVersion` both **5.5.3**, all three frontends embedded.
+- **Tests**: new `test_creator_mobs.py` (9 cases) plus a WebApi end-to-end mob flow; the full suite passes, `node --check` and `compileall` pass.
 
 ## Addendum: NBT extreme-value engine (beyond in-game numeric limits)
 
@@ -30,6 +59,19 @@ Release date: 2026-11-18
 - **Fixed the spurious "no dropped file path" error**: the window-level `drop` listener never checked whether `dataTransfer.types` contained `Files`, so dragging an item icon (`text/plain`) in the recipe workshop and releasing over empty space wrongly triggered the file-import warning. All three drag listeners now confirm it is really a file drop before acting.
 - **Items are now fetched from installed versions each time**: the recipe workshop item palette no longer relies only on the built-in 270 item IDs — every load reads real textures from local version jars / resource packs / mod jars and augments the static dictionary with vanilla items it does not contain (including newly added ones), exposing `dynamic_added` / `from_version_jar`. Switching version refetches.
 - **Importing a crafting pack shows only current-version worlds by default**: the target-world dropdown now defaults to worlds whose `level.dat` version matches the selected game version, so same-named worlds ("New World") from different versions are no longer ambiguous; a "current version only" toggle switches back to all worlds. Same checkbox in the Qt build.
+
+## v5.5.2: save rescue by migration, item categories with icons, full enchantment list, higher NBT limits
+
+- **Save rescue is now "migrate usable files"**: pick the broken save, check each file for readability, pick a fresh save as the container, and import only usable files (broken ones skipped). Optionally copy the original seed; the target is fully backed up first.
+- **Creator item search**: grouped by real in-game use (tools/combat/armor/food/materials/redstone/potions/spawn eggs/command-only/blocks/misc, plus "all") with real item icons per row. The item list is enumerated from the target version's jar, never a preset table; anything unrecognised but editable lands in Misc.
+- **Full enchantment coverage**: up to the latest release and snapshot (lunge, wind_burst, density, breach…); enchantments not in the selected version are still shown with a "may need a mod" note.
+- **Higher NBT numeric limits + more parameters**: original caps become suggestions, writes extended to the tag-type hard limits; new parameters for spawn angle, weather timers, world border, difficulty lock, allow-commands, random tick speed, etc.
+- **Tuning merged into a Creator sub-tab**; **recipe workshop now enumerates items from the game jar**.
+
+### Build & verification
+
+- **Executable**: `dist/MikanCL.exe`, `FileVersion` / `ProductVersion` = **5.5.2**, all three front ends embedded.
+- **Tests**: all 19 test files pass; `node --check` and `compileall` pass.
 
 ## v5.5.1: download-timeout false error fixed, Java mirror, tools merged into Creator
 

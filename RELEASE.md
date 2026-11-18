@@ -1,8 +1,50 @@
-# MikanCL v5.5.1 发布说明
+# MikanCL v5.5.4 发布说明
 
 **中文** · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · [Français](RELEASE.fr.md) · [日本語](RELEASE.ja.md)
 
-发布日期：2026-11-18
+发布日期：2026-11-19
+
+## v5.5.4：开发者接口大扩展、i18n 与全功能教程、远古音效与 LegacyFix
+
+- **开发者接口大扩展（本批重点）**：API 网关从单一 HTTP JSON-RPC 扩成五条通道——① 对话式 `mikan://chat`（`POST /chat` 默认只返回计划与 token，带 token 且 `execute=true` 才按计划调用 `nbe_*` / `launch`，支持 `mikan://chat?text=...` URI 与可选的 HKCU 协议注册）；② Webhook（`callback_url` 用户自填，事件 `download_success` / `game_crash` / `player_join` 等，带 HMAC-SHA256 签名，默认关闭）；③ WebSocket（`ws://127.0.0.1:<port>/ws?token=...`，同一套 JSON-RPC + `{"subscribe":["*"]}` 事件推送）；④ 游戏联动（存档 NBT 读血量 / 坐标、属性异常扫描、RCON 传送 / 踢人 / 在线列表，**明确不读进程内存、实时操作需服务端 RCON**）；⑤ `mikan-cli`（`install / launch / api / chat / events / game / uri`，退出码 0/1/2，自动发现 `data/api_gateway.json`）；「设置 → API 浏览器」新增四张卡片可直接配置与试跑。
+- **依赖冲突检测彻底删除**：预检、健康度、模组管理、Mod 关系图、第三方依赖扫描、教程与前端文案里的残留全部移除；不再因元数据格式或混装加载器误报，也不再把「没冲突却兼容」拦在启动前。崩溃提示改为「检查 mods 文件夹是否与版本 / 加载器匹配」；五语言协议文案同步更新，`AGREEMENT_VERSION` 升到 1.11。
+- **三端 i18n 补齐**：美化版 / Electron 共用前端词典四语言各 152 条，新增 DOM 文本节点自动翻译（记住原文、五语言可来回切换，不碰接口参数与控件值）；Qt 经典版重跑抽取（1437 条 / 26 上下文）并复用同一套词典，英 719 / 日 587 / 俄 595 / 法 595 条译文，五套 `.qm` 全部重编译。
+- **教程中心重写**：中 / 英 / 俄 / 法 / 日各 14 篇分步指南（含 `13_api_and_cli.md`），覆盖全部功能与新增开发者接口，删除已下线功能旧文，`WIKI_VERSION=7` 让老安装自动刷新。
+- **音效一键下载**：急救页「在线下载」直接拉 Old School Minecraft 的 `resources.zip`（约 29.2 MB，实测 `HTTP 200` / `application/zip`），自动剥掉包内 `resources/` 外壳导入游戏目录；下载带**断点续传 + 4 次重试**、进度与取消，线路慢（本机约 25 KB/s）也不会一断就从头开始。
+- **LegacyFix 官方组件内置**：一键下载 Betacraft 的 LegacyFix jar 到 `data/libs`，校验 sha1 与大小（`2.0-20260502`，997,159 字节，`Premain-Class` 已确认）；开启「自动注入」后，≤1.5.2（含 Alpha / Beta / Infdev）启动时自动加 `-javaagent:<jar>`，只对 Java 8+ 生效，修音效 / 皮肤 / 多人游戏且**不依赖外部代理**。
+- **地址不写死**：优先从 Betacraft 版本 JSON 解析 `uk.betacraft.legacyfix` 依赖，取不到才回落到内置固定地址。
+- **三条路线并存**：在线下载 / Betacraft 代理 / LegacyFix Agent；Betacraft 自己的资源 CDN 直链实测 404，故未做索引批量拉取。
+
+### 本版产物与校验
+
+- **可执行文件**：`dist/MikanCL.exe`，**366.7 MB**，`FileVersion` / `ProductVersion` 均为 **5.5.4**，内含三套框架；`MikanCL.exe --cli version` 实测通过（退出码 0）。
+- **测试**：`test_legacy_support.py` 新增 4 项（状态识别 / sha1 校验 / 非 zip 拒绝 / 离线回落），并用同结构本地 zip 跑通下载→剥壳→导入；新增 `test_api_extensions.py` **24 项**（对话式计划 / 确认 / URI、Webhook 签名、HTTP `/chat` `/events`、WebSocket 双向调用与事件推送、存档玩家 NBT 与 RCON 边界、CLI 退出码、协议唤起、WebApi 层）；全套 **24 个测试文件、282 项全部通过**。
+- **其它校验**：`node --check app.js`、QtWebEngine 离屏冒烟（新增 `i18n-dev-panel` 用例）、`compileall`、ruff（F821 / F811 / E9）全部通过。
+
+## v5.5.3：存档内生物数值编辑、Java 6/7 归档、Betacraft 音效代理
+
+- **存档内生物数值编辑（新）**：创世神 →「工具」→「生物数值（存档内生物）」，选维度扫描后可直接改血量 / 最大生命 / 攻击伤害 / 移动速度 / 护甲；村民与流浪商人可逐条改交易收购数量、使用上限、特殊价格，或按倍率批量打折。只改数值，实体 ID / UUID / 交易物品与条目结构不动；按 UUID 匹配，只重压改过的区块。
+- **按版本写属性**：1.8–1.20 用 `Attributes/Name/Base`，1.21+ 自动切 `attributes/id/base`，1.12 及更早的 `generic.maxHealth` 保持原样。
+- **Java 6/7 归档直连**：新增「Azul Zulu 归档（Java 6/7）」，从 Azul CDN 取构建并 HEAD 校验（7.0.352 / 7.0.262 / 7.0.242 / 6.0.119 实测可用）。Red Hat 与 Oracle 归档需账号登录，只提供官网跳转，不伪造直链；龙芯 LoongArch 本版未加。
+- **Betacraft 音效代理（可选开关）**：为 1.5.2 及更早版本追加 `-Dhttp.proxyHost=betacraft.uk` 与按版本分流的端口（11703 / 11705 / 11707），并带 `useLegacyMergeSort`；仍保留本地导入 resources 的兜底。其资源 CDN 直链实测 404，故未做自动下载。
+
+### 本版产物与校验
+
+- **可执行文件**：`dist/MikanCL.exe`，`FileVersion` / `ProductVersion` 均为 **5.5.3**，内含三套框架。
+- **测试**：新增 `test_creator_mobs.py` 等回归，全套 **23 个测试文件、253 项全部通过**；`node --check` 与 `compileall` 通过。
+
+## v5.5.2：存档抢救改为迁移、物品分类与贴图、附魔全版本、数值上限提高
+
+- **存档抢救改为「迁移可用文件」**：选损坏存档 → 逐文件检查能否解析 → 选一个全新存档当容器 → 只导入可用文件，损坏的自动跳过；可选同步原种子，迁移前自动备份目标存档。
+- **创世神物品搜索**：按工具/战斗/护甲/食物/材料/红石/药水/刷怪蛋/非常规/方块/杂项分类（可切全部），每行显示真实贴图；物品清单按目标版本从 jar 动态枚举，不用预设表。未识别的可改数据统一进「杂项」。
+- **附魔全版本**：补到最新正式版与测试版（突刺 lunge、风爆 wind_burst 等）；版本不支持的仍显示并提示可能需要 Mod。
+- **NBT 数值上限提高 + 更多参数**：软上限降级为建议值，写入放宽到标签类型硬上限；新增出生点朝向、天气计时、世界边界、难度锁定、允许命令、随机刻速度等参数。
+- **数值调校并入创世神子页**；**配方工坊物品改为从游戏内 jar 枚举**。
+
+### 本版产物与校验
+
+- **可执行文件**：`dist/MikanCL.exe`，`FileVersion` / `ProductVersion` 均为 **5.5.2**，内含三套框架。
+- **测试**：19 个测试文件全部通过；`node --check` 与 `compileall` 通过。
 
 ## v5.5.1：下载超时误报修复、Java 国内镜像、美化版工具并入创世神
 
