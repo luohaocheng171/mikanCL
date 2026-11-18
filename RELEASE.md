@@ -1,8 +1,36 @@
-# MikanCL v5.4.6 发布说明
+# MikanCL v5.5.1 发布说明
 
 **中文** · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · [Français](RELEASE.fr.md) · [日本語](RELEASE.ja.md)
 
-发布日期：2026-11-15
+发布日期：2026-11-18
+
+## v5.5.1：下载超时误报修复、Java 国内镜像、美化版工具并入创世神
+
+- **分段下载超时误报（重要）**：多线程分段下载时，若连接刚建立就超时，分段文件还没创建就执行 `stat()`，把网络超时误报成 `[WinError 2] 系统找不到指定的文件 …part0`（Java 中心下载 msi 时最常见的报错）。现改为存在性判断兜底，超时会正常重试或回退单流。
+- **Java 下载国内加速**：Temurin 的 GitHub 直链在国内常读超时。zip 与 msi / exe 安装程序现在都会自动改写为清华 TUNA 镜像并优先尝试，失败再回退 GitHub 原链；Temurin 的 msi 在镜像上同样有同步。
+- **美化版工具并入创世神**：NBT 工作室的生物数值 / 掉落物 / 极限数值 / NBT 树 / 数据字典并入「创世神面板」新增的「快捷修改」「NBT 文件」子页，存档与版本上下文自动同步；建筑生成并入工具页并补上此前缺失的「写入结构文件到存档」；皮肤工坊补齐加亮 / 加深 / 直线 / 矩形 / 椭圆 / 喷枪与镜像对称。
+- **侧边栏收敛**：「NBT 工作室」移出导航，旧入口自动跳到创世神的 NBT 子页。
+- **自检修复的真 bug**：`page_nbt_studio.py` 深层控制写入漏导入 `Qt`，点击写入必 `NameError`；另清理 `page_home.py` 缺失的 `Callable` 导入、`page_content.py` 重复导入、`java.py` 影子导入。
+
+### 本版产物与校验
+
+- **可执行文件**：`dist/MikanCL.exe` 重新打包，`FileVersion` / `ProductVersion` 均为 **5.5.1**，内含经典版 / 美化版 / Electron 独立版三套框架。
+- **测试**：新增 `test_download_robust.py`（5 项）+ QtWebEngine 离屏冒烟，全套 18 个测试文件全部通过；`node --check` 与 `compileall` 通过。
+
+## v5.5.0：存档转换大修、数值规则校正、移除冲突检测、打包精简
+
+- **存档转换大修**：修复 Classic 2009 方块映射的严重错误——21~36 号布料此前被错映射成花 / 矿物，35~49 又被折叠成白羊毛。现按官方 Wiki 把 16 种布料逐一映射为羊毛 ID 35 + 对应颜色 metadata，37~49 保持原 ID，流动水 / 岩浆归一为静止形态；`1.10.2` 的 DataVersion 从 510 修正为 512。新增 `test_world_convert.py` 8 项回归全绿。
+- **创世神数值规则校正（对照 MC Wiki）**：实体属性 NBT 键名的 snake_case 切换点由错误的 `1.21.5` 更正为 **1.21（24w21a，DataVersion 3953）**，这是 1.21~1.21.4 存档改血量上限「没生效」的根因。写入后回读校验从「只比条数」升级为逐项核对属性 ID / Base 与药水效果 ID / 等级；修饰符 Operation 整数统一为 `add_value` 等字符串；未知属性与越界值不再静默跳过，而是明确警告。界面补充 Health 与 max_health 钳制关系说明、逐属性官方范围（生命 1~1024、护甲 0~30、击退抗性 -2~1、体型 0.0625~16 等）；39 种药水效果中文译名全覆盖。
+- **移除 Mod 冲突 / 依赖检测**：按反馈下线 Mod 冲突检测、Mod 关系网与第三方依赖补全。相关入口从三套界面、命令面板、设置开关、启动预检健康度与文档一并移除；`config.py` 新增强制关闭列表，旧配置里开着也不会再生效。Mod 安装 / 启用 / 停用与加载器安装保持原样。删除三个已无调用的模块文件，`content.py` / `dependencies.py` 的死代码同步清理。
+- **Web / 美化版补齐多版本启动**：主页新增「多选启动」与「停止游戏」；批量启动补上启动前预检、上限从硬编码 10 放宽到可配置 32；新增运行会话注册表，让运行中的游戏能被结束。
+- **侧边栏图标补齐**：三套界面此前落到通用齿轮的入口（备份中心、局域网中控、数据包编辑、NBT 工作室、配方工坊、数值调校、API 浏览器等）都有了各自专属图标。
+- **Bug 修复**：`cfg.max_backups` 在精简配置对象下缺失，导致 Web API 与 Qt 创世神页首次加载失败；已加缺省兜底。
+
+### 本版产物与校验
+
+- **可执行文件**：`dist/MikanCL.exe` 已重新打包，360.5 MB（内含 144.8 MB Electron 独立版包，裁剪 53 个语言 pak），Windows 版本资源 `FileVersion` / `ProductVersion` 均为 **5.5.0**。三套框架资源（经典版 PySide6/QtWebEngine、美化版 WebView2 前端、Electron 独立版 zip）经归档查看器确认全部嵌入。
+- **回归测试**：17 个测试文件全部通过，含新增的 `test_world_convert.py` / `test_attribute_rules.py` / `test_web_feature_changes.py` 与 Qt 离屏 UI 冒烟测试；`node --check app.js` 通过；全部 Python 文件编译零失败。
+- **已知边界**：为控制体积排除了 `PySide6.QtSvg`，经典版 exe 里的 SVG 占位图标会退化成物品 ID 色块，美化版 / 独立版由浏览器渲染 SVG 不受影响；PyInstaller 的 PySide6 钩子仍会收齐 Qt 运行时 DLL，未强行裁剪以保护 QtWebEngine 依赖。
 
 ## 增补：NBT 极限数值引擎（突破游戏数值上限）
 

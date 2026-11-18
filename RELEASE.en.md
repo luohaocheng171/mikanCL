@@ -1,8 +1,8 @@
-# MikanCL v5.4.6 Release Notes
+# MikanCL v5.5.1 Release Notes
 
 [中文](RELEASE.md) · **English** · [Русский](RELEASE.ru.md) · [Français](RELEASE.fr.md) · [日本語](RELEASE.ja.md)
 
-Release date: 2026-11-15
+Release date: 2026-11-18
 
 ## Addendum: NBT extreme-value engine (beyond in-game numeric limits)
 
@@ -30,6 +30,33 @@ Release date: 2026-11-15
 - **Fixed the spurious "no dropped file path" error**: the window-level `drop` listener never checked whether `dataTransfer.types` contained `Files`, so dragging an item icon (`text/plain`) in the recipe workshop and releasing over empty space wrongly triggered the file-import warning. All three drag listeners now confirm it is really a file drop before acting.
 - **Items are now fetched from installed versions each time**: the recipe workshop item palette no longer relies only on the built-in 270 item IDs — every load reads real textures from local version jars / resource packs / mod jars and augments the static dictionary with vanilla items it does not contain (including newly added ones), exposing `dynamic_added` / `from_version_jar`. Switching version refetches.
 - **Importing a crafting pack shows only current-version worlds by default**: the target-world dropdown now defaults to worlds whose `level.dat` version matches the selected game version, so same-named worlds ("New World") from different versions are no longer ambiguous; a "current version only" toggle switches back to all worlds. Same checkbox in the Qt build.
+
+## v5.5.1: download-timeout false error fixed, Java mirror, tools merged into Creator
+
+- **Segmented-download timeout false error (important)**: when a connection timed out before the part file was created, the code called `stat()` on it and reported a network timeout as `[WinError 2] system cannot find the file ...part0` (the common error when downloading msi in Java Center). Now guarded by an existence check; timeouts retry or fall back to single-stream properly.
+- **Faster Java downloads in China**: Temurin GitHub links often time out. zip and msi/exe installers are now rewritten to the Tsinghua TUNA mirror and tried first, falling back to GitHub.
+- **Web tools merged into Creator**: NBT studio's mob attributes / loot / extreme values / NBT tree / data dictionary now live in two new Creator sub-tabs ("Quick edit", "NBT files") sharing the same world context; building generation moved into the tools tab with the previously missing "write structure file" button; skin studio gained lighten/darken/line/rect/ellipse/spray brushes and mirror symmetry.
+- **Navigation cleanup**: "NBT Studio" removed from the sidebar; old links redirect to Creator's NBT tab.
+- **Real bugs fixed by self-check**: `page_nbt_studio.py` deep-control write used `Qt.UserRole` without importing `Qt` (guaranteed NameError); plus removed a missing `Callable` import and duplicate/shadowed imports.
+
+### Build & verification
+
+- **Executable**: `dist/MikanCL.exe` rebuilt; `FileVersion` / `ProductVersion` are **5.5.1**, embedding all three front ends.
+- **Tests**: new `test_download_robust.py` (5 cases) plus QtWebEngine offscreen smoke; all 18 test files pass; `node --check` and `compileall` pass.
+
+## v5.5.0: save conversion fix, numeric-rule corrections, detection removal, leaner build
+
+- **Save conversion overhaul**: Classic 2009 block IDs 21-36 (wool colors) were wrongly mapped to flowers/ores and 35-49 collapsed into white wool. They now map per minecraft.wiki to wool ID 35 + correct color metadata; 37-49 stay as-is; flowing water/lava normalize to still. `1.10.2` DataVersion corrected 510 -> 512. 8 new regression tests pass.
+- **Creator numeric rules corrected (per MC Wiki)**: entity attribute NBT snake_case threshold fixed from the wrong `1.21.5` to **1.21 (24w21a, DV 3953)** - the root cause of max-health edits "not working" on 1.21-1.21.4. Write-back verification now checks attribute IDs/bases and effect IDs/levels item by item; modifier operations normalized to strings; unknown attributes and out-of-range values warn explicitly. UI adds Health/max_health coupling hints, per-attribute official ranges and full Chinese names for all 39 effects.
+- **Mod conflict / dependency detection removed**: per feedback, mod conflict detection, the mod graph and third-party dependency completion are gone from all three UIs, command palette, settings toggles, launch preflight and docs; `config.py` force-disables them even for old configs. Mod install/enable/disable and loader installs are untouched. Three now-unused modules deleted and dead code in `content.py` / `dependencies.py` cleaned up.
+- **Web multi-version launch parity**: home page gains "Batch launch" and "Stop game"; batch launch now runs preflight checks and its cap was raised from a hard-coded 10 to a configurable 32; a session registry lets running games be stopped.
+- **Sidebar icons completed**: entries that fell back to the generic gear (backups, LAN hub, datapack editor, NBT studio, recipe workshop, tuning, API browser) now have distinct icons.
+- **Bug fix**: missing `cfg.max_backups` on lean config objects broke first load of the Web API and Qt creator page; a default fallback was added.
+
+### Build & verification
+
+- **Executable**: `dist/MikanCL.exe` rebuilt at 360.5 MB (includes a 144.8 MB Electron bundle with 53 locale packs trimmed); Windows `FileVersion` / `ProductVersion` are **5.5.0**. All three front ends (Qt/QtWebEngine, WebView2 web assets, Electron zip) verified embedded via archive viewer.
+- **Tests**: all 17 test files pass, including new save-conversion, attribute-rule and feature-removal regression tests plus the Qt offscreen UI smoke test; `node --check app.js` and full Python compile pass.
 
 ## v5.4.6: full NBT editor, drag-and-drop recipe workshop, tuning, unified API gateway
 

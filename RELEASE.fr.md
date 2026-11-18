@@ -1,8 +1,8 @@
-# MikanCL v5.4.6 — Notes de version
+# MikanCL v5.5.1 — Notes de version
 
 [中文](RELEASE.md) · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · **Français** · [日本語](RELEASE.ja.md)
 
-Date de publication : 2026-11-15
+Date de publication : 2026-11-18
 
 ## Complément : moteur de valeurs NBT extrêmes (au-delà des limites numériques du jeu)
 
@@ -30,6 +30,33 @@ Date de publication : 2026-11-15
 - **Correction de la fausse alerte « aucun chemin de fichier déposé »** : l'écouteur `drop` au niveau de la fenêtre ne vérifiait pas si `dataTransfer.types` contenait `Files` ; glisser une icône (`text/plain`) dans l'atelier de recettes et relâcher dans le vide déclenchait donc à tort l'avertissement d'import de fichier. Les trois écouteurs vérifient désormais qu'il s'agit bien d'un dépôt de fichier.
 - **Les objets sont désormais récupérés à chaque fois depuis les versions installées** : la palette ne se limite plus aux 270 identifiants intégrés — chaque chargement lit les vraies textures des jars de version / resource packs / jars de mods locaux et complète le dictionnaire statique avec les objets vanilla absents (y compris les nouveaux), via `dynamic_added` / `from_version_jar`. Changer de version relance la récupération.
 - **Importer un pack d'artisanat n'affiche par défaut que les mondes de la version courante** : la liste des mondes cibles ne montre par défaut que ceux dont le `level.dat` correspond à la version sélectionnée, pour distinguer les mondes homonymes (« Nouveau monde ») de versions différentes ; une case « version courante uniquement » réaffiche tout. Même case côté Qt.
+
+## v5.5.1 : fausse erreur de delai corrigee, miroir Java, outils fusionnes dans le Createur
+
+- **Fausse erreur de delai (important)** : si la connexion expirait avant la creation du fichier de segment, le code appelait `stat()` dessus et rapportait un delai reseau comme `[WinError 2] fichier introuvable ...part0` (l'erreur vue en telechargeant un msi dans le centre Java). Desormais protege par un test d'existence ; le delai reessaie ou bascule en flux unique.
+- **Telechargements Java plus rapides en Chine** : les liens GitHub de Temurin expirent souvent. Les zip et installateurs msi/exe sont reecrits vers le miroir Tsinghua TUNA et essayes en premier, puis GitHub en repli.
+- **Outils web fusionnes dans le Createur** : attributs de creatures / butin / valeurs extremes / arbre NBT / dictionnaire du studio NBT passent dans deux nouveaux sous-onglets du Createur (« Edition rapide », « Fichiers NBT ») partageant le meme contexte de monde ; la generation de batiments rejoint l'onglet outils avec le bouton « ecrire le fichier de structure » auparavant absent ; l'atelier de skins gagne 6 pinceaux (eclaircir/assombrir/ligne/rectangle/ellipse/aero) et la symetrie miroir.
+- **Navigation simplifiee** : « Studio NBT » retire de la barre laterale ; les anciens liens redirigent vers l'onglet NBT du Createur.
+- **Vrais bugs corriges** : `page_nbt_studio.py` utilisait `Qt.UserRole` sans importer `Qt` (NameError garanti) ; plus un import `Callable` manquant et des imports dupliques.
+
+### Build et verification
+
+- **Executable** : `dist/MikanCL.exe` reconstruit ; `FileVersion` / `ProductVersion` = **5.5.1**, les trois interfaces incluses.
+- **Tests** : nouveau `test_download_robust.py` (5 cas) + test hors ecran QtWebEngine ; les 18 fichiers de tests passent ; `node --check` et `compileall` OK.
+
+## v5.5.0 : correction des conversions de sauvegarde et des règles numériques, retrait de la détection, build allégé
+
+- **Refonte de la conversion des sauvegardes** : les ID de blocs Classic 2009 21-36 (layeaux colorés) étaient à tort convertis en fleurs/minerais et 35-49 réduits en laine blanche. Désormais mapping conforme au wiki officiel : laine ID 35 + métadonnées de couleur ; 37-49 conservés ; eau/lave coulantes normalisées. DataVersion du `1.10.2` corrigé 510 -> 512. 8 nouveaux tests de régression verts.
+- **Règles numériques du Createur corrigées (selon MC Wiki)** : le seuil snake_case des attributs NBT passe de `1.21.5` (erroné) a **1.21 (24w21a, DV 3953)** — cause des modifications de points de vie "sans effet" en 1.21-1.21.4. La vérification apres ecriture controle désormais chaque ID/valeur d'attribut et d'effet ; les operations de modificateur sont normalisees ; les valeurs inconnues ou hors limites avertissent explicitement. L'interface ajoute les plages officielles par attribut et les noms chinois des 39 effets.
+- **Retrait de la detection de conflits/dependances Mod** : sur demande, la detection de conflits, le graphe de mods et la completion de dependances tierces sont retires des trois interfaces, de la palette de commandes, des reglages, du pre-demarrage et de la documentation ; `config.py` les desactive meme dans les anciennes configurations. Installation/activation des mods et des loaders inchangées. Trois modules inutilises supprimes et code mort nettoye.
+- **Parite web du lancement multi-version** : la page d'accueil ajoute "Lancement multiple" et "Arreter le jeu" ; le lancement groupé execute desormais le pre-controle et sa limite passe de 10 a 32 configurable ; un registre de sessions permet d'arreter les jeux en cours.
+- **Icones de la barre laterale completees** : les entrees qui retombaient sur l'icone generique (sauvegardes, LAN, datapacks, studio NBT, atelier de recettes, reglages, API) ont chacune leur icone.
+- **Correction de bug** : `cfg.max_backups` absent sur les configurations legeres faisait echouer le premier chargement de l'API Web et de la page Createur Qt ; un valeur par defaut a ete ajoutee.
+
+### Build et verification
+
+- **Executable** : `dist/MikanCL.exe` reconstruit a 360,5 Mo (incluant un bundle Electron de 144,8 Mo avec 53 packs de langue retires) ; `FileVersion` / `ProductVersion` = **5.5.0**. Les trois interfaces sont verifiees comme etant bien incluses.
+- **Tests** : les 17 fichiers de tests passent, y compris les nouveaux tests de conversion, de regles numeriques et de retrait de fonctionnalites, ainsi que le test Qt hors ecran ; `node --check app.js` et la compilation Python complete passent.
 
 ## v5.4.6 — nouveautés : éditeur NBT complet, atelier de recettes par glisser-déposer, réglages numériques, passerelle API unifiée
 
