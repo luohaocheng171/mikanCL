@@ -1,8 +1,107 @@
-# MikanCL v5.5.4 — Notes de version
+# MikanCL v5.5.9 — notes de version
 
 [中文](RELEASE.md) · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · **Français** · [日本語](RELEASE.ja.md)
 
-Date de publication : 2026-11-19
+Date : 2026-11-20
+
+## v5.5.9 — l'aperçu du bruit est calibré par version
+
+- **Cinq paliers au lieu de deux** : il n'existait que « classique / moderne », si bien qu'une même graine donnait presque la même image en 1.14 et 1.20. L'aperçu suit désormais les quatre réécritures vanilla : **Beta (bruit 0–127) → 1.2–1.6 (Anvil) → 1.7–1.12 (ImprovedNoise classique) → 1.13–1.17 (version océan : fosses plus profondes, montagnes plus hautes) → 1.18+ (climat multi-bruit)**. Changer de version efface l'ancienne carte.
+- **Fini l'étirement min-max par image** : c'était la cause du problème. Chaque colonne donne maintenant un **Y réel** : eau à Y=63 (64 en Beta), sable uniquement à 2 blocs du rivage, terre colorée par altitude, éclairage nord-ouest calculé sur les hauteurs voisines.
+- **Calibré sur une vraie sauvegarde** : 1.14.4 locale (529 chunks) — médiane 67 / p90 72 / p99 97 / minimum 41 ; l'aperçu du même palier donne 67 / 78 / 94 / 42. Les pics 1.18+ atteignent Y≈170.
+- **Corrections de faux terrain** : les fonds marins ne suivent plus le relief ; les basses terres intérieures ne passent plus sous la mer et ne deviennent plus du sable ; les octaves trop fines sont retirées selon la précision ; les rivières sont plus rares et plus larges (longueur d'onde 2200 blocs).
+- **Palette unique** avec le rendu de sauvegarde ; le calque de biomes gagne « rivière ».
+- **API** : `noise_era_for_version()`, `NOISE_ERAS`, `version_height_limits()` avec `era` / `era_label` / `noise_label` ; paramètre `era` dans les générateurs ; `world_map_preview` renvoie `era`.
+- **Versions** : application **5.5.9**, `WIKI_VERSION` 11 → **12** (nouveau `17_noise_model.md` en cinq langues).
+
+### Build et vérifications
+
+- **Binaire** : `dist/MikanCL.exe` reconstruit avec Python 3.13.14 + PyInstaller 6.22.3, onefile, ressource de version `5.5.9`.
+- **Tests** : nouveau `tests/test_v559_calibration.py` **17 tests** ; suite complète **31 fichiers / 396 tests** au vert ; cas smoke `seed-noise-era`.
+- **Autres** : `node --check`, `py_compile`, `compileall` ; capture QtWebEngine de la page 1.14.4.
+
+[中文](RELEASE.md) · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · **Français** · [日本語](RELEASE.ja.md)
+
+Date : 2026-11-20
+
+## v5.5.8 — carte réalignée, les sauvegardes du jeu s'affichent aussi ici
+
+- **Les points ne dérivent plus** : la carte utilisait `object-fit: contain`, l'image était donc letterboxée alors que les points étaient positionnés sur toute la carte. Image et points partagent maintenant un même « cadre », dimensionné selon le ratio réel de l'image et recalculé au redimensionnement — écart ≤ 0,004 % en test automatisé.
+- **« Générer avec le jeu » produit désormais une carte** : ce chemin ne renvoyait qu'un chemin de sauvegarde. Après la génération, le lanceur lit les `region/*.mca` de cette sauvegarde, décode heightmap et biomes de chaque chunk, dessine le terrain et marque les structures réellement présentes (villages, mines abandonnées, épaves, ruines sous-marines, forteresses…).
+  - Le gris foncé signifie « pas encore généré par le jeu » : rien n'est inventé.
+  - L'eau est colorée selon la profondeur, la terre par paliers d'altitude (plage / plaines / hauteurs / neige) avec un éclairage nord-ouest, donc le relief se lit même à plat.
+  - Un second calque de biomes facilite la lecture des rivières et des côtes.
+- **Rendre n'importe quelle sauvegarde** : « Rendre une sauvegarde… » liste les mondes de `saves/` (nombre de region, date de modification). Rendu strictement en lecture seule.
+- **Nouveau module** : `mc_launcher/world_render.py` — Python pur + bibliothèque standard : parsing Anvil region, dépaquetage du flux 9 bits continu, les trois stockages de biomes (1.13/1.14 2D, 1.15–1.17 3D, 1.18+ palettes de sections), extraction de `Structures.Starts` et écriture PNG manuelle. Aucune bibliothèque graphique.
+  - **Alignement des hauteurs 1.18+** : la heightmap peut stocker des valeurs absolues ou un décalage depuis la hauteur minimale ; le module s'ancre sur la section non vide la plus haute et tranche tout seul — la carte n'est jamais décalée de 64 blocs.
+  - 2048 chunks maximum par rendu (les plus proches du centre), la troncature est signalée.
+  - Mesure : sauvegarde 1.14.4 réelle de 529 chunks rendue en 512 px en ~3 s.
+- **API** : nouvelles `seed_world_map` et `seed_saves` ; `seed_world_generate` renvoie un champ `map`.
+- **Contrat et wiki** : `AGREEMENT_VERSION` 1.14 → **1.15** (clause de rendu en lecture seule, sans envoi, en cinq langues) ; `WIKI_VERSION` 10 → **11** (nouveau `16_save_map.md` en cinq langues) ; version **5.5.8**.
+
+### Build et vérifications
+
+- **Binaire** : version **non empaquetée**, les changements sont dans les sources.
+- **Tests** : nouveau `test_v558_world_render.py` **14 tests** ; suite complète **30 fichiers / 379 tests** au vert.
+- **Vérification UI** : QtWebEngine avec une vraie sauvegarde — le cadre égale la boîte `<img>` et chaque point correspond à `seedPct()` à 0,004 % près ; cas smoke `seed-save-map` ajouté.
+- **Autres** : `node --check app.js`, `py_compile`, `compileall` OK.
+
+## v5.5.7 : correction du plantage de génération de monde, mise à jour via un programme Go intégré (avec retour arrière)
+
+- **Correction de « générer un monde avec le vrai serveur »** : le plantage `'JavaInfo' object has no attribute 'get'` venait du choix de Java, qui ne lisait que des dictionnaires alors que l'interface transmet des objets `JavaInfo`. Les deux formes sont acceptées (les chemins invalides sont ignorés) : les versions comme 1.14.4 peuvent de nouveau démarrer un serveur et générer un monde.
+- **Nouveau moteur de mise à jour (Go)** : `tools/updater/main.go` est compilé en `mcu.exe` (~1,8 Mo), intégré au lanceur et extrait dans un dossier temporaire à l'usage.
+  - **Téléchargement** : liste des versions depuis GitHub Releases, exe téléchargé dans le dossier temporaire (`%TEMP%/mikancl-update-*`) ; le lanceur en cours n'est jamais modifié.
+  - **Remplacement** : le programme attend la fermeture du lanceur, sauvegarde l'ancien exe (`MikanCL.exe.old-<horodatage>`), installe le nouveau, redémarre, supprime le dossier temporaire puis s'auto-supprime (suppression directe → renommage → suppression au redémarrage).
+  - **Retour arrière** : « Revenir à une version » liste toutes les versions avec exe, de la plus récente à la plus ancienne, marquées « mise à jour / actuelle / retour » ; un clic pour rétrograder, un clic pour remettre à jour.
+  - **Sécurité en cas d'échec** : la sauvegarde est restaurée si le remplacement échoue ; l'ancien script batch reste en secours si le programme intégré est absent.
+  - **Journal** : `data/updates/updater.log`.
+- **Compilation** : `python build_updater.py` trouve Go (ou télécharge une version portable avec `--download`, miroir Aliyun) ; `.tools/go` est ignoré par git.
+- **Accord, guides et documentation** : `AGREEMENT_VERSION` **1.14**, `WIKI_VERSION` **10** (`15_self_update.md` en cinq langues, plus `14_power_tools.md` en japonais / russe / français), version **5.5.7**.
+
+### Build et vérifications
+
+- **Exécutable** : version **non empaquetée**, les changements sont dans les sources.
+- **Tests** : `test_v557_update.py` **24 cas** ; suite complète **29 fichiers / 364 tests OK**.
+- **Essai réel** : le vrai `mcu.exe` a réalisé sauvegarde → remplacement → nettoyage → auto-renommage dans un dossier temporaire ; jsdom a validé « Vérifier les mises à jour » / « Revenir à une version » sans erreur JS.
+## v5.5.6 : éditeur avancé (NBT + configs, multi-onglets, pré-modification, diff côte à côte, sauvegarde auto)
+
+- **Nouvelle page Éditeur avancé** (barre latérale et boîte à outils) : NBT et fichiers texte au même endroit.
+  - **NBT** : `level.dat`, `playerdata/*.dat`, `.nbt` / `.schematic` sont affichés en SNBT et réécrits en NBT typé ; `1b` / `1s` / `1L` / `1.0f` / `1.0d` et `[B;…]` / `[I;…]` / `[L;…]` conservent leur type exact.
+  - **Texte** : `json` / `mcmeta` / `txt` / `ini` / `cfg` / `properties` / `yml` / `yaml` / `toml` / `log` / `mcfunction`, avec détection UTF-8 / BOM / GB18030 / UTF-16 et conservation de l'encodage, du BOM et des fins de ligne. Les fichiers binaires sont refusés.
+- **Mode pré-modification** : l'ouverture ne remplit qu'un tampon mémoire ; un point orange signale les changements non enregistrés et rien n'est écrit avant « Enregistrer » (ou `Ctrl+S`). « Abandonner » recharge depuis le disque.
+- **Comparaison en un clic** : original (disque) à gauche, tampon à droite, lignes supprimées/modifiées en rouge, ajoutées/modifiées en vert, blocs identiques repliés, défilement synchronisé, avec statistiques `+ / - / ~`.
+- **Onglets et vue partagée** : ouvrez plusieurs fichiers (un onglet chacun, tampons conservés) et affichez-en deux côte à côte.
+- **Sauvegardes automatiques** : avant chaque écriture, l'original est copié dans `data/editor_backups/<hash du chemin>/` ; la rétention suit le réglage « nombre max de sauvegardes » (0 = ne jamais supprimer). La liste permet de restaurer, après sauvegarde de la version courante.
+- **Validation** : une erreur SNBT bloque l'écriture avec ligne/colonne ; une erreur JSON bloque par défaut (forçage après confirmation) ; au-delà de 4 Mo, lecture seule.
+- **Emplacements courants** : accès direct à `options.txt`, aux `level.dat` des sauvegardes, aux JSON de version, aux configs serveur et mods.
+- **Accord et guides** : `AGREEMENT_VERSION` **1.13**, `WIKI_VERSION=9` avec `14_advanced_editor.md` en cinq langues, version **5.5.6**.
+
+### Build et vérifications
+
+- **Exécutable** : version **non empaquetée**, les changements sont dans les sources.
+- **Tests** : `test_v556_editor.py` **24 cas** ; suite complète **28 fichiers / 340 tests OK**.
+- **Test d'interface** : jsdom a chargé le vrai frontend (ouvrir → éditer → comparer → enregistrer → vue partagée → arborescence → sauvegardes → fermer), sans erreur JS.
+
+## v5.5.5 : générateur de plans, anti-grief, conversion de cœur de serveur et correctifs
+
+[中文](RELEASE.md) · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · **Français** · [日本語](RELEASE.ja.md)
+
+Date de publication : 2026-11-20
+
+## v5.5.5 : générateur de plans, anti-grief, conversion de cœur de serveur et correctifs
+
+- **Correction du lancement des versions antiques** : b1.8.1 / a1.2.6 sous Java 17 plantaient avec `ClassCastException` faute du chargeur de classes passerelle et des `--add-opens` de LegacyFix ; le JSON d'Infdev codait une classe principale absente du jar (`ClassNotFoundException`) ; `shell._launch_now` référençait une variable `log` non définie, masquant la cause en `name 'log' is not defined` tout montrant « terminé ». Le jar LegacyFix entre désormais dans le classpath avec le chargeur passerelle et les ouvertures de modules (ignorées sur Java 8), la classe principale devient `uk.betacraft.legacyfix.LegacyFixLauncher` (détecte `MinecraftApplet`) et les plantages sont marqués échec et archivés.
+- **Générateur de plans / import de structures** : importez `.nbt` / `.schematic`, choisissez X/Y/Z, prévisualisez en lecture seule puis écrivez les blocs dans les régions de la sauvegarde — sans jeu ni mod. Sauvegarde complète avant écriture, seuls les chunks existants sont modifiés, limite 200 000 blocs, plus un mode « démolir ».
+- **Système anti-grief** : analyse les attributs NBT, les enchantements sur-nivelés (ex. 32767) et les commandes fréquentes via RCON ; alerte Webhook ; bannissement en un clic (snapshot d'abord) et restauration d'inventaire (sauvegarde courante d'abord). Rapport seul par défaut.
+- **Convertisseur de cœur de serveur (migration en un clic)** : aperçu en lecture seule et retrait des clés NBT Bukkit / Spigot / Paper de `level.dat` et des joueurs vers un format compatible vanilla / Fabric / Forge. NBT typé préservant les types, sauvegarde complète avant conversion, plan de déploiement généré.
+- **Correctifs d'ergonomie** : rayon de génération des graines en champ numérique libre ; objets du Créateur sans mention « candidat » ni limite d'affichage (tout est listé), objets de recette toujours énumérés depuis les jars de versions installés ; sauvegardes acceptent **0 = ne jamais supprimer** ; versions de loaders groupées **stable / bêta / antique** sans troncature à 140 lignes ; le centre Java signale les sources GitHub lentes et renvoie vers les miroirs TUNA / Huawei intégrés ; correction de l'objet `Candidate` cassant la sérialisation JSON WebView.
+- **Convention et tutoriels** : `AGREEMENT_VERSION` 1.11 → **1.12** (nouveaux avertissements, zh/en), `WIKI_VERSION` 7 → **8** avec `14_power_tools.md` (zh/en), version de l'application **5.5.5**.
+
+### Binaire et vérification
+
+- **Binaire** : aucun exe empaqueté cette fois ; changements dans les sources, empaquetage ultérieur.
+- **Tests** : nouveau `test_v555_features.py` **18 cas** ; suite complète **27 fichiers, 316 cas, tous verts** (sous réserve de l'auto-vérification).
+- **Autres** : `py_compile` sur tous les fichiers modifiés, `node --check app.js`, test d'import : tout passe.
 
 ## v5.5.4 : API développeur, i18n et guides complets, sons legacy et LegacyFix
 
@@ -15,10 +114,16 @@ Date de publication : 2026-11-19
 - **Version non figée** : l'URL du jar est lue dans le JSON de version de Betacraft (`uk.betacraft.legacyfix`), avec repli sur une adresse interne hors ligne.
 - **Trois pistes coexistent** : téléchargement en ligne / proxy Betacraft / agent LegacyFix. Le CDN d'assets de Betacraft renvoie toujours 404, donc pas de téléchargement par index.
 
+- **Omniarchive dans la liste des versions** : « Jeux » affiche par défaut « Toutes les sources » et fusionne les Infdev / Alpha / Beta d'Omniarchive dans la section « Anciennes versions ». Un sélecteur propose Mojang officiel / Omniarchive / tout ; les entrées d'archive portent l'étiquette « Omni 归档 » et l'installation (liste et fiche) passe par l'installateur d'archive.
+- **Mondes générés par le jeu** : le bouton principal télécharge le jar serveur officiel, écrit `level-seed` et un `level-type` adapté à la version, lance le serveur jusqu'à la préparation des chunks de naissance, l'arrête puis copie la vraie sauvegarde dans `saves/`. Sans jar récupérable (notamment les archives anciennes), le message demande de placer `server.jar` manuellement ; la carte de bruit Java devient « aperçu du terrain uniquement (pas une génération par le jeu) ».
+- **Java 6/7 et lancement legacy** : `probe_java` lit le second champ de `1.6` / `1.7` au lieu de tout transformer en 8 ; Alpha / Beta / Infdev privilégient Java 7 (repli vers 8 avec avertissement). `_launch_now` attend 4 secondes pour détecter une sortie prématurée : la tâche échoue avec des conseils LWJGL / Java au lieu d'afficher « lancé » ; lancement groupé et interface classique suivent la même règle, et `no lwjgl in java.library.path` est couvert.
+- **Créateur** : la liste des sauvegardes parcourt tous les répertoires de jeu enregistrés (origine affichée) ; plafonds de 120 objets, 80/160 icônes, 120/300 de l'atelier de recettes et repli par similarité supprimés. Chaque objet reçoit au moins une icône de remplacement, les URI de données sont citées et le cache d'icônes dépend de la version. La dernière version réellement lancée est mémorisée dans `default_version_id`.
+- **Correction du lancement des versions antiques (vrais échecs, plus de faux succès)** : analyse des journaux de b1.8.1 / a1.2.6 / Infdev, trois pannes réelles corrigées — ① avec Java 17 + LegacyFix, l'option `-Djava.system.class.loader=uk.betacraft.legacyfix.patch.URLClassLoaderBridge` et les `--add-opens` pour `java.nio` / `java.net` / `java.awt` / `sun.net.www.protocol.http` / `https` manquaient, donc launchwrapper 1.5 levait `ClassCastException: AppClassLoader cannot be cast to URLClassLoader` ; ② le JSON d'Infdev codait en dur la classe principale `net.minecraft.client.Minecraft`, alors que le jar ne contient que `MinecraftApplet`, d'où `ClassNotFoundException` inévitable ; ③ `shell._launch_now` référençait une variable `log` non définie, levant `NameError` qui masquait la vraie cause en `name 'log' is not defined` alors que la tâche affichait « terminé ». Désormais, quand LegacyFix est actif, le jar est ajouté au classpath, le chargeur de classes passerelle et les ouvertures de modules sont fournis, et la classe principale devient `uk.betacraft.legacyfix.LegacyFixLauncher` (détecte `MinecraftApplet`, accepte aussi `-DmainClass` / `-DappletClass`) ; Java 8 ignore ces options de modules. La branche d'échec appelle désormais `on_log(...)` et archive le journal de plantage, avec des conseils actionnables pour « classe introuvable » / « chargeur de classes incompatible ».
+
 ### Binaire et vérification
 
 - **Binaire** : `dist/MikanCL.exe`, **366,7 Mo**, `FileVersion` / `ProductVersion` = **5.5.4**, trois interfaces intégrées ; `MikanCL.exe --cli version` vérifié (code de sortie 0).
-- **Tests** : 4 nouveaux cas dans `test_legacy_support.py` (état, sha1 incorrect, non-zip, repli hors ligne) + parcours complet téléchargement→déballage→import ; **24 nouveaux cas dans `test_api_extensions.py`** (plan / confirmation / URI du chat, signature Webhook, HTTP `/chat` `/events`, WebSocket RPC + diffusion d'événements, NBT joueur et limites RCON, codes de sortie CLI, appel par protocole, couche WebApi). Suite complète : **24 fichiers de tests, 282 cas, tous verts**.
+- **Tests** : 4 nouveaux cas dans `test_legacy_support.py` (état, sha1 incorrect, non-zip, repli hors ligne) + parcours complet téléchargement→déballage→import ; **24 nouveaux cas dans `test_api_extensions.py` et 10 dans `test_launcher_fixes.py`** (plan / confirmation / URI du chat, signature Webhook, HTTP `/chat` `/events`, WebSocket RPC + diffusion d'événements, NBT joueur et limites RCON, codes de sortie CLI, appel par protocole, couche WebApi) ; nouveau `test_legacyfix_launch.py` avec **6 cas** (chargeur passerelle / add-opens / classe principale LegacyFixLauncher / branche Java 8 / classe d'origine conservée si désactivé / conseils de plantage). Suite complète : **26 fichiers de tests, 298 cas, tous verts**.
 - **Vérifications complémentaires** : `node --check app.js`, test de fumée QtWebEngine hors écran (nouveau cas `i18n-dev-panel`), `compileall` et ruff (F821 / F811 / E9) passent.
 
 ## v5.5.3 : édition des valeurs des créatures, archive Java 6/7, proxy audio Betacraft

@@ -1,8 +1,107 @@
-# MikanCL v5.5.4 发布说明
+# MikanCL v5.5.9 发布说明
 
 **中文** · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · [Français](RELEASE.fr.md) · [日本語](RELEASE.ja.md)
 
-发布日期：2026-11-19
+发布日期：2026-11-20
+
+## v5.5.9：噪声预览按版本校准，地形终于像原版
+
+- **预览噪声改成按版本分五档**：以前只有「经典 / 新版」两档，同一个种子在 1.14 和 1.20 上画出来几乎一样。现在按原版四次地形大改切分——**Beta（0–127 老噪声）→ 1.2–1.6（Anvil）→ 1.7–1.12（经典 ImprovedNoise）→ 1.13–1.17（海洋版，海沟更深、山更高）→ 1.18+（多噪声气候：大陆性 / 侵蚀度 / 奇异度）**。换版本会清空上一版的地图，避免拿 1.14 的图当 1.20 看。
+- **不再做整图 min-max 拉伸**：这是「不像原版」的根因——以前把每张图压到自己的最亮最暗之间，海平面只是装饰。现在每列直接算**真实方块 Y**：水面固定在 Y=63（Beta 为 64），沙滩只在紧挨水面 2 格内出现，陆地按离海平面多高分带（草原绿 → 丘陵棕 → 岩石灰 → 雪线白），光照按西北向高差算，平地也能看出起伏。
+- **用真实存档校准**：以本机 1.14.4 存档（529 区块）为基准，实测中位数 67 / p90 72 / p99 97 / 最低 41；预览同档位做到中位数 67 / p90 78 / p99 94 / 最低 42，平原高度、海洋占比、山地比例都落在同一量级。1.18+ 最高峰到 Y≈170，与游戏里的雪顶山脉相当。
+- **一并修掉几个「假地形」**：
+  - 海底跟着陆地一起起伏，把深海拉到 y≈4 甚至 y=1 —— 现在海底单独压平；
+  - 内陆低地被细节噪声挖穿，整片变成沙滩色 —— 现在陆地列不会低于海平面，沙滩只贴水；
+  - 缩小半径时高频倍频产生雪花噪点 —— 按像素代表的方块数自动裁倍频（一个像素至少覆盖 2.5 个波长）；
+  - 河道过密过细 —— 河流噪声波长拉到 2200 格、阈值收窄，河网稀疏可见。
+- **配色统一**：预览与「渲染已有存档」共用同一套色板与光照公式，两张图放在一起不再有色差；群系图新增「河流」，温湿度噪声频率提高，色块大小接近原版。
+- **接口**：新增 `noise_era_for_version()` / `NOISE_ERAS` / `version_height_limits()` 返回 `era` / `era_label` / `noise_label`；`generate_world_map_java()` 与 `generate_heightmap_java()` 支持 `era` 参数（缺省值仍按旧 `mode` 推断，老调用不受影响）；`world_map_preview` 结果里多了 `era` / `era_label`。
+- **版本**：应用 **5.5.9**，`WIKI_VERSION` 11 → **12**（五语言新增 `17_noise_model.md`，讲清五档噪声、真实 Y 与校准程度）。协议版本不变（本次不涉及数据处理方式）。
+
+### 构建与校验
+
+- **可执行文件**：`dist/MikanCL.exe` 已用 Python 3.13.14 + PyInstaller 6.22.3 重新打包，单文件，版本资源 `5.5.9`。
+- **测试**：新增 `tests/test_v559_calibration.py` **17 项**（五档版本映射、限高/文案、源码契约、真实出图的高度区间、平原中位数、Beta 限高 127、水陆占比、**同种子不同版本必须不同图**、同版本可复现、PNG 合法、内嵌源码可编译）；前端冒烟新增 `seed-noise-era`（徽标/提示/限高文案带版本噪声、换版本清空旧图）；全套 **31 个测试文件、396 项全部通过**。
+- **其它校验**：`node --check app.js`、`py_compile` / `compileall` 通过；QtWebEngine 离屏截图确认 1.14.4 页面的徽标、限高文案与地图显示正常。
+
+**中文** · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · [Français](RELEASE.fr.md) · [日本語](RELEASE.ja.md)
+
+发布日期：2026-11-20
+
+## v5.5.8：修地图错位，游戏本体存档也能直接渲染
+
+- **修掉地图与建筑点错位**：种子世界页的地图图片此前用 `object-fit: contain` 塞进卡片，左右被拉出空白带；而建筑圆点按整张卡片百分比定位，于是点全跑到图外。现在图片与圆点共用同一个「图片框」，框的尺寸按图片真实比例计算并随窗口自适应，圆点与地形**逐像素对齐**（离屏实测偏差 0.004% 以内）。
+- **「用游戏本体生成世界」现在会出图**：以前这条路只给存档路径，面板空着。现在世界生成完立即读取该存档的 `region/*.mca`，解析每个区块的高度图与群系，直接画出地形，并在图上标出**存档里真实存在的结构**（村庄、废弃矿井、沉船、海底废墟、要塞…）。
+  - 深灰色区域 = 游戏还没生成过的区块，用来一眼看出世界只长到哪，不做任何填充伪造。
+  - 水域按水深上色，陆地按海拔分段（沙滩 / 草原 / 高地 / 雪线）并加西北向光照，平地上也能看出起伏。
+  - 群系图层单独一张图，河网与海岸线最清楚。
+- **渲染任意已有存档**：新增「渲染已有存档…」，列出所有游戏目录 `saves/` 下的世界（region 数量 + 最近修改时间），选中即出图；全程只读，不动存档一个字节。
+- **新的渲染模块**：新增 `mc_launcher/world_render.py`，纯 Python + 标准库实现 Anvil region 解析、9 bit 连续位流解包、群系三套存法（1.13/1.14 二维、1.15–1.17 三维、1.18+ section palette）、结构 `Structures.Starts` 提取与 PNG 手写编码，不引任何图像库。
+  - **1.18+ 高度对齐**：高度图可能存绝对高度，也可能存相对最低层的偏移，模块用区块里最高的非空段做锚点自动判定，避免整张图上下错 64 格。
+  - 单次上限 2048 个区块（从中心向外），超出会截断并在提示里标注，界面不会卡死。
+  - 实测：真实 1.14.4 存档 529 个区块，512 px 出图约 3 秒。
+- **接口**：新增 `seed_world_map`（渲染指定存档）与 `seed_saves`（列出可渲染存档），`seed_world_generate` 的返回里多了 `map` 字段；三套界面共用同一批 RPC。
+- **协议与教程**：`AGREEMENT_VERSION` 1.14 → **1.15**（五语言补充「地图渲染只读存档、不上传」条款）；`WIKI_VERSION` 10 → **11**（五语言新增 `16_save_map.md`，讲清两种地图来源、两个图层与常见问题）；应用版本 **5.5.8**。
+
+### 构建与校验
+
+- **可执行文件**：本版**未打包 exe**，改动已落在源码，待下次统一打包。
+- **测试**：新增 `test_v558_world_render.py` **15 项**（位流跨 long 边界、真实 1.14 布局 36 long、群系变体配色、结构别名、顶层段锚点、合成存档端到端出图与像素校验、1.18 相对高度、缺 level.dat / 空 region 报错、RPC 存在性）；全套 **30 个测试文件、379 项全部通过**。
+- **界面验证**：QtWebEngine 加载真实前端渲染存档地图并截图；脚本实测图片框与 `<img>` 尺寸完全一致，每个圆点中心与 `seedPct()` 期望值的偏差 ≤ 0.004%。冒烟用例新增 `seed-save-map`，覆盖存档来源标签、圆点数量、名称 / 颜色取自后端、动作注册。
+- **其它校验**：`node --check app.js`、`py_compile` / `compileall` 全部通过。
+
+## v5.5.7：修世界生成崩溃，启动器更新改为内置 Go 更新器（支持回档）
+
+- **修复「用游戏本体生成世界」报错**：`'JavaInfo' object has no attribute 'get'` 已解决——选 Java 时界面传的是 `JavaInfo` 对象、旧代码按字典读，现在两种都兼容，并会跳过路径已失效的候选；1.14.4 这类老版本可以正常拉服务端生成世界。
+- **更新器重写（Go）**：新增 `tools/updater/main.go`，编译成约 1.8 MB 的 `mcu.exe` 打包进启动器，用的时候解压到临时目录运行。
+  - 下载：从 GitHub Releases 取版本列表，把 exe 下到**系统临时目录**（`%TEMP%/mikancl-update-*`），全程不动正在运行的启动器。
+  - 替换：更新器等待启动器退出 → 备份旧 exe（`MikanCL.exe.old-<时间>`）→ 换上新 exe → 重启启动器 → 删临时目录 → 自毁（直接删 / 改名待删 / 重启后删三级兜底）。
+  - **版本回档**：设置里「版本回档」列出所有带 exe 的历史版本，按版本号倒序并标注「可更新 / 当前版本 / 可回档」，点一下即可降级，再点「更新」就能升回来。
+  - **失败安全**：替换失败自动把备份还原，不会留下打不开的启动器；旧路径（bat）保留为兜底，内置更新器缺失时自动降级。
+  - **日志**：`data/updates/updater.log` 记录等待进程、备份、替换、自毁每一步。
+- **构建**：新增 `python build_updater.py`，自动寻找 Go（也可 `--download` 拉便携版，默认阿里云镜像）；项目内 `.tools/go` 已加入 `.gitignore`。
+- **协议、教程与文档**：`AGREEMENT_VERSION` **1.14**（补更新/回档的第三方来源与回滚免责条款，中英），`WIKI_VERSION` **10**（五语言新增 `15_self_update.md`，并补齐日 / 俄 / 法的 `14_power_tools.md`），应用版本 **5.5.7**。
+
+### 构建与校验
+
+- **可执行文件**：本版**未打包**，改动在源码树里，下次统一打包。
+- **测试**：新增 `test_v557_update.py` **24 项**；全套 **29 个测试文件、364 项全部通过**。
+- **实机验证**：真实 `mcu.exe` 在临时目录完成备份—替换—清理—改名待删全流程；jsdom 加载真实前端验证「检查更新 / 版本回档」列表渲染与按钮，无 JS 报错。
+
+## v5.5.6：高级编辑器（NBT + 配置多标签、预修改、并排对比、自动备份）
+
+- **高级编辑器上线**：左侧导航与工具箱各有一个入口，把 NBT 与文本配置放进同一个编辑器。
+  - **NBT**：`level.dat`、`playerdata/*.dat`、`.nbt` / `.schematic` 自动转成 SNBT 文本，写回使用 typed NBT，标签类型（`1b` / `1s` / `1L` / `1.0f` / `1.0d`，数组 `[B;…]` / `[I;…]` / `[L;…]`）原样保留，不会把 Byte 改成 Int、把 Long 改坏。
+  - **文本**：`json` / `mcmeta` / `txt` / `ini` / `cfg` / `properties` / `yml` / `yaml` / `toml` / `log` / `mcfunction` 等，自动识别 UTF-8 / UTF-8 BOM / GB18030 / UTF-16，写回保持原编码、BOM 与换行符；二进制文件直接拒绝。
+- **预修改模式**：打开只进缓冲区，磁盘不动；橙点代表未保存，`Ctrl+S` / 「保存」才落盘，可随时「放弃修改」回到磁盘版本。
+- **一键对比**：原始（磁盘）与已修改（缓冲区）左右并排，红 / 绿高亮删除与新增行，相同行折叠为「⋯ N 行相同内容」，两侧滚动同步，附 `+ / - / ~` 统计。
+- **多标签 + 分屏**：一次多选打开多个文件，切换标签保留缓冲区；「分屏」左右同时编辑两个文件。
+- **自动备份**：保存前把原文件复制到 `data/editor_backups/<路径哈希>/`，保留份数跟随「自动备份数量上限」（0 = 永不删除）；「历史备份」可列出并恢复，恢复前也会先备份当前内容。
+- **保存校验**：SNBT 语法错误带行列号并阻止写入；JSON 语法错误默认阻止，二次确认后可强制写入；超过 4 MB 只读。
+- **常用位置**：一键跳到 `options.txt`、各存档 `level.dat`、版本 JSON、服务端配置与 Mod 配置。
+- **协议与教程**：`AGREEMENT_VERSION` **1.13**（新增高级编辑器数据安全条款），`WIKI_VERSION=9` 新增 `14_advanced_editor.md`（五语言），应用版本 **5.5.6**。
+
+### 本版产物与校验
+
+- **可执行文件**：本版**未打包 exe**，改动已落在源码，待下次统一打包。
+- **测试**：新增 `test_v556_editor.py` **24 项**（SNBT 类型往返、gzip / 根名保持、编码与换行、JSON 校验、diff 折叠、备份保留与恢复、路径穿越防护、RPC）；全套 **28 个测试文件、340 项全部通过**。
+- **界面冒烟**：jsdom 加载真实前端，走通打开 → 编辑 → 对比 → 保存 → 分屏 → 目录树 → 备份 → 关闭标签，无 JS 报错。
+- **其它校验**：`node --check app.js`、`py_compile`、`compileall` 全部通过。
+
+## v5.5.5：蓝图建筑、反熊防御、服务器核心转换与一批体验修复
+
+- **远古版本真启动失败修复**：b1.8.1 / a1.2.6 在 Java 17 下缺 LegacyFix 的 `-Djava.system.class.loader=...URLClassLoaderBridge` 与 `java.nio` / `java.net` / `java.awt` / `sun.net.www.protocol.http` / `https` 的 `--add-opens`，launchwrapper 1.5 抛 `ClassCastException`；Infdev 版本 JSON 主类写成 `net.minecraft.client.Minecraft`，jar 里只有 `MinecraftApplet`，抛 `ClassNotFoundException`；`shell._launch_now` 的 `if log:` 未定义变量抛 `NameError` 把原因盖成 `name 'log' is not defined` 且显示「已完成」。现在组件 jar 入 classpath、补齐桥接与模块开放（Java 8 不加），主类统一为 `uk.betacraft.legacyfix.LegacyFixLauncher`（自动探测入口），崩溃分支改正 `on_log(...)` 并归档日志，提示可操作。
+- **蓝图 / 建筑生成器（结构导入器）**：工具箱新增，导入 `.nbt` / `.schematic`，选 X/Y/Z 坐标即可只读预览范围与方块统计，再写入存档 Region 区块，无需进游戏或装 Mod。写入前强制整包备份到 `data/backups/blueprint/`，只改已生成区块、坏文件跳过、单次上限 20 万方块；另提供「拆除」把范围清空为空气。基于 typed NBT 与 `creator_region.set_blocks`，按存档年代适配 legacy/flattened/components。
+- **反熊防御系统**：`anticheat` 综合存档 NBT 属性（超血 / 超攻 / 超移速）、超限附魔（如 32767 级）与命令日志高频刷指令扫描；通过事件总线发 Webhook 报警；一键封禁（先自动建立玩家快照，再 RCON kick + ban）、回滚快照（回滚前再备份当前状态）。默认只报告不自动处置。
+- **服务器核心转换器（一键移民）**：`server_migrate` 只读预览并剥离 `level.dat` 与 playerdata 里的 Bukkit / Spigot / Paper 特有 NBT 键，转成原版 / Fabric / Forge 兼容格式；typed NBT 精确保留类型（Long / Byte 不会变 int），转换前整包备份，生成部署清单。
+- **一批体验修复**：种子页「范围半径」改可自定义数值（64~16384）；创世神物品去掉「候选」说法与 120 显示上限、默认全部列出，配方物品一律从本机已有版本 jar 枚举（`craft_items` 默认上限提到 10000）；自动备份份数支持 **0 = 永不删除**（config / 各 prune 分支 / 前后端一致）；加载器版本按**正式版 / 测试版 / 远古版** `optgroup` 分类展示且不再截断到 140 条；Java 中心对 GitHub 慢速源标注提示、引导切内置清华 / 华为镜像；修复种子服务端 jar 返回的 `Candidate` 对象导致 WebView `json.dumps` 崩溃（`Object of type Candidate is not JSON serializable`）。
+- **协议与教程**：`AGREEMENT_VERSION` 1.11 → **1.12**（补充蓝图 / 核心转换 / 反熊免责，中英双语），`WIKI_VERSION` 7 → **8** 新增 `14_power_tools.md`（中英双语，其余语言随刷新），应用版本 **5.5.5**。
+
+### 本版产物与校验
+
+- **可执行文件**：本版**未打包 exe**，改动已落在源码，待下次统一打包。
+- **测试**：新增 `test_v555_features.py` **18 项**（Candidate 序列化、备份 0、加载器分类、蓝图解析与年代判断、反熊启发式、核心转换类型保留、前端文案）；全套 **27 个测试文件、316 项全部通过**（以自检结果为准）。
+- **其它校验**：`py_compile` 全改动文件、`node --check app.js`、import 冒烟全部通过。
 
 ## v5.5.4：开发者接口大扩展、i18n 与全功能教程、远古音效与 LegacyFix
 
@@ -15,10 +114,16 @@
 - **地址不写死**：优先从 Betacraft 版本 JSON 解析 `uk.betacraft.legacyfix` 依赖，取不到才回落到内置固定地址。
 - **三条路线并存**：在线下载 / Betacraft 代理 / LegacyFix Agent；Betacraft 自己的资源 CDN 直链实测 404，故未做索引批量拉取。
 
+- **远古归档并入版本列表**：下载中心「游戏版本」默认显示「全部来源」，把 Omniarchive 的 Infdev / Alpha / Beta 并进「旧版本」分区；可切「Mojang 官方 / Omniarchive / 全部」。归档条目带「Omni 归档」标签，列表与详情弹窗的安装都走归档安装链路。
+- **种子世界改用游戏本体**：主按钮拉取该版本官方 server.jar，写 `level-seed` 与按版本选择的 `level-type`，启动服务端等出生区块生成后 `stop`，再把真实存档复制进 `saves/`；拿不到 server.jar 的版本（尤其远古归档）明确提示手动放入，旧的 Java 噪声图降级为「仅地形预览（非游戏生成）」。
+- **Java 6/7 与老版本启动**：`probe_java` 正确解析 `1.6` / `1.7` 第二段版本号，不再一律报 8；Alpha / Beta / Infdev 优先 Java 7（无则回退 8 并提示）。`_launch_now` 加 4 秒早退检测，进程秒退时任务失败并给 LWJGL / Java 修复建议，不再显示「启动成功」；批量启动与经典版同规则，崩溃提示补 `no lwjgl in java.library.path`。
+- **创世神收口**：扫描所有已注册游戏目录的 `saves/`；去掉物品 120 条、图标 80/160 条、配方工坊 120/300 条上限与搜索不到时的「相似度候选」兜底；每个物品都有占位图标，data URI 加引号并按版本失效缓存。上次真正启动成功的版本写入 `default_version_id`，下次启动自动选中。
+- **远古版本启动修复（真失败，不再是假成功）**：排查 b1.8.1 / a1.2.6 / Infdev 启动日志，确认并修掉三类真实故障——① Java 17 + LegacyFix 缺 `-Djava.system.class.loader=uk.betacraft.legacyfix.patch.URLClassLoaderBridge` 与 `java.nio` / `java.net` / `java.awt` / `sun.net.www.protocol.http` / `https` 的 `--add-opens`，launchwrapper 1.5 抛 `ClassCastException`；② Infdev 的 JSON 主类写成 `net.minecraft.client.Minecraft`，jar 里其实只有 `MinecraftApplet`，必然 `ClassNotFoundException`；③ `shell._launch_now` 用了未定义 `log` 变量抛 `NameError`，把原因盖成 `name 'log' is not defined` 且任务显示「已完成」。现在 LegacyFix 启用时会把组件 jar 加进 classpath、补齐桥接类加载器与模块开放，主类统一交给 `uk.betacraft.legacyfix.LegacyFixLauncher`（自动探测 `MinecraftApplet` 等入口，也支持 `-DmainClass` / `-DappletClass`），Java 8 不加模块参数；崩溃分支改正 `on_log(...)` 并归档崩溃日志，「找不到主类 / 类加载器不兼容」给出可操作提示。
+
 ### 本版产物与校验
 
 - **可执行文件**：`dist/MikanCL.exe`，**366.7 MB**，`FileVersion` / `ProductVersion` 均为 **5.5.4**，内含三套框架；`MikanCL.exe --cli version` 实测通过（退出码 0）。
-- **测试**：`test_legacy_support.py` 新增 4 项（状态识别 / sha1 校验 / 非 zip 拒绝 / 离线回落），并用同结构本地 zip 跑通下载→剥壳→导入；新增 `test_api_extensions.py` **24 项**（对话式计划 / 确认 / URI、Webhook 签名、HTTP `/chat` `/events`、WebSocket 双向调用与事件推送、存档玩家 NBT 与 RCON 边界、CLI 退出码、协议唤起、WebApi 层）；全套 **24 个测试文件、282 项全部通过**。
+- **测试**：`test_legacy_support.py` 新增 4 项（状态识别 / sha1 校验 / 非 zip 拒绝 / 离线回落），并用同结构本地 zip 跑通下载→剥壳→导入；新增 `test_api_extensions.py` **24 项**（对话式计划 / 确认 / URI、Webhook 签名、HTTP `/chat` `/events`、WebSocket 双向调用与事件推送、存档玩家 NBT 与 RCON 边界、CLI 退出码、协议唤起、WebApi 层）；新增 `test_legacyfix_launch.py` **6 项**（桥接类加载器 / add-opens / LegacyFixLauncher 主类 / Java 8 分支 / 关闭时保留原主类 / 崩溃提示）；全套 **26 个测试文件、298 项全部通过**。
 - **其它校验**：`node --check app.js`、QtWebEngine 离屏冒烟（新增 `i18n-dev-panel` 用例）、`compileall`、ruff（F821 / F811 / E9）全部通过。
 
 ## v5.5.3：存档内生物数值编辑、Java 6/7 归档、Betacraft 音效代理

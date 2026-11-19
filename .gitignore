@@ -55,3 +55,6 @@ desktop.ini
 
 # --- 本项目工作文档（非源码，按需放通） ---
 code_health_audit.md
+
+# --- 本地 Go 工具链（编译更新器用，不入库） ---
+.tools/
