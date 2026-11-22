@@ -1,5 +1,6 @@
 """顶层启动脚本：python run.py"""
 
+import os
 import sys
 
 from mc_launcher.main import main
@@ -18,6 +19,10 @@ if __name__ == "__main__":
         import mikan_cli
 
         raise SystemExit(mikan_cli.main(sys.argv[2:]))
+    # 多窗口多开：带这个参数启动的进程跳过单实例保护，允许同时打开多个启动器窗口。
+    # 只影响「是否占用单实例锁」，不改配置 / 数据目录，账号与实例仍是同一份。
+    if any(str(a).lower() in ("--multi-window", "--multiwindow") for a in sys.argv[1:]):
+        os.environ["MIKAN_MULTI_WINDOW"] = "1"
     # mikan:// 协议唤起：只暂存指令，UI 起来后生成计划，绝不自动执行
     for argument in sys.argv[1:]:
         if str(argument).lower().startswith("mikan://"):

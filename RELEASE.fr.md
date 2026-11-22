@@ -1,8 +1,36 @@
-# MikanCL v5.5.9 — notes de version
+# MikanCL v5.6.0 — notes de version
 
 [中文](RELEASE.md) · [English](RELEASE.en.md) · [Русский](RELEASE.ru.md) · **Français** · [日本語](RELEASE.ja.md)
 
 Date : 2026-11-20
+
+## v5.6.0 — la carte d'une sauvegarde se zoome, se dessine par étapes et se cherche jusqu'à trouver
+
+- **Une carte réellement manipulable** : la carte de la page « monde par seed » n'est plus une image figée — **molette / ± / double-clic pour zoomer**, **glisser pour déplacer**, **saisir X / Z pour y aller**. La barre affiche « 529 / 529 chunks · 640 blocs de champ · 1,3 bloc/px » et la barre d'état donne les coordonnées monde sous le curseur.
+- **Continuer le rendu à tout moment** : l'ouverture décode 512 chunks autour du point d'apparition, puis « Continuer le rendu +512 chunks » progresse **du centre vers l'extérieur**, avec arrêt et reprise libres. Les chunks décodés restent en session : zoomer et se déplacer ne relisent jamais le disque.
+  - **Deux noirs distincts** : bleuté = le chunk existe mais n'est pas encore rendu (le rendu le remplit), gris foncé = le jeu ne l'a jamais généré. Plus besoin de deviner.
+- **Triangles pour les structures, cercles pour les biomes** : les structures sont des triangles, les biomes des cercles placés au centroïde de chaque zone de biome dominant (les chunks voisins de même biome fusionnent). Survol : biome, nombre de chunks, coordonnées ; un clic sur un marqueur ou une ligne de liste y amène la carte. La recherche filtre structures et biomes par nom chinois, id anglais ou coordonnées.
+- **Choisir une cible et rendre jusqu'à ce qu'elle apparaisse** : le panneau « Chercher une cible » liste les structures / biomes de la version courante ; « Chercher et rendre » décode en comparant puis amène la vue sur la trouvaille. « Suivant » continue vers l'extérieur depuis ce point. Si la sauvegarde est épuisée, un « introuvable » explicite s'affiche ; une passe est plafonnée à 4096 chunks et peut être relancée.
+- **Les cibles suivent la version** : le nouveau `world_catalog.py` déduit ce qui existe réellement par version (table « depuis ») — 1.12 ne propose ni chambres d'épreuve ni cités antiques, Beta 1.8 seulement villages / mines / forteresses / temples. Les structures déjà présentes dans la sauvegarde s'ajoutent à la liste.
+- **Importer une sauvegarde existante** : « Rendre une sauvegarde… » liste `saves/` et permet de **choisir n'importe quel dossier** ; tout est en lecture seule.
+- **Choisir de conserver ou non le monde de test** : la génération demande d'abord **enregistrer dans saves/** ou **aperçu seulement**. L'aperçu reste dans `data/seed_preview`, n'encombre pas la liste des sauvegardes et se supprime d'un clic ; il reste accessible après redémarrage.
+- **Nouveaux modules / API** : `mc_launcher/save_map.py`, `mc_launcher/world_catalog.py` ; nouvelles méthodes `save_map_open` / `save_map_view` / `save_map_expand` / `save_map_find` / `save_map_catalog` / `save_map_discard` ; `keep_world` pour `seed_world_generate`, `target_root` pour `generate_world`.
+- **Versions** : application **5.6.0** ; accord inchangé (aucun nouvel envoi ni collecte de données).
+
+### Complément v5.6.0 : spectateur 3D — cartes carrées, minerais en transparence et eau translucide
+
+- **Une carte carrée bloc par bloc** : la nouvelle page « Spectateur 3D » (`voxel_view.py`) décode réellement la palette et les BlockStates de chaque chunk (format compact 1.16+ et ancien flux de bits continu) et n'émet que les faces touchant l'air, dessinées en cubes complets. Une zone carrée centrée sur X / Z, alignée sur les chunks 16×16 (192 blocs de côté par défaut, max 512), montre grottes, puits et cavités. Dalles, barrières, améthyste et tapis utilisent leur vraie forme.
+- **Minerais seulement (rayon X)** : le mode `ores` filtre par palette les sections sans minerai, puis chaque minerai devient un cube complet ; le panneau de catégories liste les blocs présents et un clic isole un type. C'est la sensation de « rayon X des minerais » conservée dans cette version.
+- **Eau translucide (fond visible)** : eau / eau courante alpha≈118, lave / lave coulante alpha≈196. Le front-end dessine les faces de fluide en un second passage — terrain opaque d'abord, puis mélange avec écriture de profondeur désactivée — pour que sable, algues et épaves apparaissent sous la surface. Les anciens `flowing_water` / `flowing_lava` (1.12 et avant) sont reconnus. L'élimination des faces tient compte des fluides.
+- **Textures officielles** : un atlas est construit depuis le jar de la version / les packs de ressources pour WebGL, avec repli sur une table de couleurs moyennes intégrée.
+- **API** : `world_3d` / `world_3d_voxels` sont exposés dans le groupe de la passerelle « Monde 3D / rayon X » ; `world_3d_voxels` renvoie des faces compactes en base64 (8 octets chacune) avec `palette` / `opacity` / `shapes` / `counts`. Voir README « Interfaces développeur → Monde 3D / rayon X ».
+- **Docs / tutoriels** : le centre de tutoriels de chaque langue gagne « Spectateur 3D : cartes carrées, minerais en transparence et eau translucide » ; le README gagne la section API ; la version des tutoriels intégrés passe à 13.
+- **Périmètre conservé** : rendu unique — pas de tuiles dynamiques, ni de rafraîchissement / reprise, ni de décimation automatique ; mode et finesse choisis explicitement.
+
+### Compilation et vérifications
+
+- **Tests** : nouveau `tests/test_v560_save_map.py` — **21 cas** (analyse de version / filtrage du catalogue, index de session, décodage incrémental sans doublon, bornes et couverture de la vue, différence de couches, couleur des chunks en attente, fusion des biomes, trouvé → suivant → épuisé / plafond, passerelle WebApi, suppression limitée à l'aperçu). Des tests de régression sur la transparence de l'eau 3D ont été ajoutés ; le smoke test hors écran met à jour `seed-save-map` et ajoute `seed-save-session` ; **525 tests passent** (un module GUI nécessite PySide6 et est ignoré sans Qt).
+- **Autres** : `node --check app.js` et `compileall` passent ; une vraie sauvegarde 1.14.4 (529 chunks) rendue sur 640 blocs montre relief, rivières, littoral et profondeurs corrects, les zones bleutées non rendues se distinguant nettement du gris foncé non généré.
 
 ## v5.5.9 — l'aperçu du bruit est calibré par version
 

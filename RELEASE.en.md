@@ -1,8 +1,36 @@
-# MikanCL v5.5.9 release notes
+# MikanCL v5.6.0 release notes
 
 [中文](RELEASE.md) · **English** · [Русский](RELEASE.ru.md) · [Français](RELEASE.fr.md) · [日本語](RELEASE.ja.md)
 
 Released: 2026-11-20
+
+## v5.6.0 — the save map zooms, renders progressively, and can search until it finds
+
+- **A map you can actually operate**: the seed-world map is no longer one fixed picture — **wheel / ± / double-click to zoom**, **drag to pan**, **type X / Z to jump**. The toolbar shows "529 / 529 chunks · 640 blocks across · 1.3 blocks/px" live, and the status bar reports the world coordinate under the cursor.
+- **Continue rendering any time**: opening a save decodes 512 chunks around spawn first; "Continue rendering +512 chunks" pushes outward **from the centre**, and you can stop or resume whenever you like. Decoded chunks stay in the session, so panning and zooming never re-read the disk.
+  - **Two kinds of dark**: bluish = the chunk exists but has not been decoded yet (rendering fills it in), dark grey = the game never generated it. No guessing whether it is "not rendered" or "no terrain".
+- **Triangles for structures, circles for biomes**: structure markers became triangles, biome markers are outlined circles placed at the centroid of each dominant-biome patch (adjacent chunks with the same biome merge into one). Hover shows the biome, chunk count and coordinates; clicking a marker or a list row jumps there. The search box filters both structures and biomes by Chinese name, English id or coordinates.
+- **Pick a target and render until it appears**: the sidebar "Find target" lists structures / biomes for the current version; "Find and render" decodes while comparing, then flies the viewport to the hit. "Next" continues outward from that hit. If the entire save is exhausted you get an explicit "not found"; one pass is capped at 4096 chunks and can be repeated.
+- **Targets follow the version**: new `world_catalog.py` derives what actually exists per version from a "since" table — 1.12 never offers trial chambers or ancient cities, Beta 1.8 only villages / mineshafts / strongholds / temples. Structures already present in the save are added to the list.
+- **Import an existing save and keep rendering**: "Render existing save…" lists `saves/` and also lets you **pick any folder**; everything is read-only.
+- **Choose whether the test world is kept**: "Generate with the real game" now asks **save to saves/** or **preview only**. Preview worlds live in `data/seed_preview`, stay out of the save list, and can be deleted with one click; they are still listed under "Render existing save" after a restart.
+- **New modules / RPCs**: `mc_launcher/save_map.py`, `mc_launcher/world_catalog.py`; new `save_map_open` / `save_map_view` / `save_map_expand` / `save_map_find` / `save_map_catalog` / `save_map_discard`; `seed_world_generate` gained `keep_world`, `generate_world` gained `target_root`.
+- **Versions**: app **5.6.0**; agreement unchanged (no new data is uploaded or collected).
+
+### v5.6.0 addendum: 3D spectator — square maps, X-ray ores and translucent water
+
+- **A square map built block by block**: the new "3D spectator" page (`voxel_view.py`) truly decodes each chunk's palette and BlockStates (1.16+ compact layout plus the legacy continuous bit stream) and emits only faces touching air, drawn as full cubes. A X/Z-centred, 16×16-chunk-aligned square region (192 blocks by default, max 512) shows caves, shafts and underground cavities. Slabs, fences, amethyst and carpets use their real hitbox shapes, not one big cube.
+- **Ores only (X-ray)**: `mode="ores"` first filters out sections with no ore via the palette, then gives every ore block a full cube; the block-category panel lists what is present and clicking one isolates it. This is the "ore X-ray" feel kept in this version.
+- **Translucent water (see the seabed)**: water / flowing water at alpha=118, lava / flowing lava at alpha=196. The front end draws fluid faces in a separate pass — opaque terrain first, then blending with `depthMask` off — so sand, kelp and shipwrecks show through the surface. Legacy `flowing_water` / `flowing_lava` (1.12 and earlier) are recognised too. Face culling is fluid-aware: fluids emit faces against air / another fluid and cull against themselves or solids, while solids keep faces against fluids.
+- **Official textures**: an atlas is built from the version's game jar / resource packs for WebGL sampling, with a built-in average-colour table as fallback.
+- **APIs**: `world_3d` / `world_3d_voxels` are reflected into the gateway group "3D world / X-ray"; `world_3d_voxels` returns base64 compact faces (8 bytes each) plus `palette` / `opacity` / `shapes` / `counts`. See README "Developer interfaces → 3D world / X-ray".
+- **Docs / tutorials**: every language of the in-app tutorial centre gains "3D spectator: square maps, X-ray ores and translucent water"; README gains the API section; the built-in tutorial version stamp is now 13.
+- **Scope kept**: one-shot rendering — no dynamic tiles, refresh/resume, or automatic decimation; render mode and detail are chosen explicitly.
+
+### Build & verification
+
+- **Tests**: new `tests/test_v560_save_map.py` with **21 cases** (version parsing / catalog filtering, session index, incremental decoding without duplicates, viewport bounds and coverage, layer differences, pending-chunk colour, biome patch merging, find → next → exhausted / capped, the WebApi bridge, discard restricted to preview worlds); 3D voxel fluid-transparency / see-through regressions were added; the offscreen frontend smoke updated `seed-save-map` and added `seed-save-session`; **525 cases pass** (one PySide6 GUI-only module is skipped without Qt).
+- **Other checks**: `node --check app.js` and `compileall` pass; a real local 1.14.4 save (529 chunks) rendered at 640 blocks across shows correct terrain, rivers, coastline and deep-ocean banding, with bluish pending areas clearly separated from dark grey ungenerated areas.
 
 ## v5.5.9 — the noise preview is now calibrated per version
 
